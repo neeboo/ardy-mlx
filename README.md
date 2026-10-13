@@ -24,15 +24,8 @@ That gives alignment a deterministic input (same embedding + same seed) and keep
 5. Measured performance (time per chunk / per clip, on both CPU and Metal)
 6. (Optional) Text encoder: Core ML, or reuse the existing MLX Llama implementation
 
-## Ownership (one writer per file at a time)
-| Area | Who | File scope |
-|---|---|---|
-| A. Weight conversion / model forward / numerical alignment | **DeepSeek** | `src/ardy_mlx/model/**`, `src/ardy_mlx/io/**`, `scripts/ardy_{convert,align,inspect}.py`, `tests/test_model_*.py`, `tests/test_io_*.py`, `README.md`, `docs/status-deepseek.md` |
-| B. Sampler / autoregressive loop / generation CLI | **Claude Code** | `src/ardy_mlx/sampling/**`, `scripts/ardy_generate.py`, `tests/test_sampling_*.py`, `tests/test_generate_*.py`, `docs/status-claude.md` |
-| C. Frozen area | **Human** | `LICENSE`, `NOTICE`, `pyproject.toml`, `.gitignore`, `docs/decisions/**` (agents write proposals only), `docs/motion-contract.md` |
-
 Work order: [`docs/brief-claude-sampling.md`](docs/brief-claude-sampling.md).
-Interface first: the two sides depend on each other only through `docs/motion-contract.md` (the motion contract) and the constants exported by `src/ardy_mlx/io/`; A changing the contract = a contract change.
+Interface first: the dependency goes only through `docs/motion-contract.md` (the motion contract) and the constants exported by `src/ardy_mlx/io/`; changing the contract is a contract change.
 
 ## Environment
 A repo-local `.venv` (see `docs/decisions/0001-python-environment.md`); both agents and the human all use `./.venv/bin/python`.

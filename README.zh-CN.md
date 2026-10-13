@@ -24,15 +24,8 @@ English: [README.md](README.md)
 5. 性能实测（每块/每段耗时，CPU 与 Metal 两端）
 6. （可选）文本编码器：Core ML 或复用 MLX 已有的 Llama 实现
 
-## 分工（一份文件同一时间只有一个写手）
-| 归属 | 谁 | 文件范围 |
-|---|---|---|
-| A. 权重转换 / 模型前向 / 数值对齐 | **DeepSeek** | `src/ardy_mlx/model/**`、`src/ardy_mlx/io/**`、`scripts/ardy_{convert,align,inspect}.py`、`tests/test_model_*.py`、`tests/test_io_*.py`、`README.md`、`docs/status-deepseek.md` |
-| B. 采样器 / 自回归循环 / 生成 CLI | **Claude Code** | `src/ardy_mlx/sampling/**`、`scripts/ardy_generate.py`、`tests/test_sampling_*.py`、`tests/test_generate_*.py`、`docs/status-claude.md` |
-| C. 冻结区 | **人类** | `LICENSE`、`NOTICE`、`pyproject.toml`、`.gitignore`、`docs/decisions/**`（agent 只写提案）、`docs/motion-contract.md` |
-
 工单：[`docs/brief-claude-sampling.md`](docs/brief-claude-sampling.md)。
-接口优先：两边只通过 `docs/motion-contract.md`（数据契约）与 `src/ardy_mlx/io/` 导出的常量互相依赖；A 改契约＝契约变更。
+接口优先：只通过 `docs/motion-contract.md`（数据契约）与 `src/ardy_mlx/io/` 导出的常量互相依赖；改契约＝契约变更。
 
 ## 环境
 仓库内 `.venv`（见 `docs/decisions/0001-python-environment.md`），两个 agent 与人类统一用 `./.venv/bin/python`。
