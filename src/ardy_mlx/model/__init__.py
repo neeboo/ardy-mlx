@@ -9,6 +9,9 @@ Layout
 ``motion_rep``
     Feature block slicing, normalisation statistics, and the global-root ->
     local-root conversion.
+``skeleton``
+    ``CoreSkeleton27`` (joint names / hierarchy / rest offsets) plus the forward
+    kinematics that yields the contract's ``posed_joints``.
 ``fsq``
     **Stage A**: ``FSQVAETransformer`` -- the motion tokenizer (encode/decode).
 ``backbone``
@@ -36,8 +39,9 @@ absolute residues (float32 on both sides, different hardware):
 * tokenizer ``encode -> decode`` round trip: ``<= 7.0e-06``
 * denoiser single step (all 10 DDIM steps): ``<= 5.4e-05``
 * whole 40-frame clip (``frames (T, 330)``): ``<= 3.9e-05``
-* whole 80-frame clip, two windows (``frames (T, 330)``): see
-  ``artifacts/golden-run-4s/RUN-RECORD.md``
+* whole 80-frame clip, two windows (``frames (T, 330)``): ``<= 3.6e-05``
+* ``posed_joints (T, 27, 3)`` via :mod:`ardy_mlx.model.skeleton` FK: ``<= 5.2e-06``
+  (the pre-FK placeholder it replaced was ``0.132`` / ``0.236`` off the golden npz)
 
 The sampling side (B, ``ardy_mlx.sampling``) talks to this package through
 :func:`ardy_mlx.model.ardy.make_step_fn`, which returns the
@@ -55,10 +59,13 @@ __all__ = [
     "Diffusion",
     "FSQVAETransformer",
     "MotionRep",
+    "Skeleton",
     "Stats",
     "TransformerEncoderBlock",
     "WeightStore",
+    "core_skeleton",
     "make_step_fn",
+    "posed_joints_from_features",
 ]
 
 
@@ -94,6 +101,14 @@ def __getattr__(name: str):
         from .motion_rep import MotionRep, Stats
 
         return {"MotionRep": MotionRep, "Stats": Stats}[name]
+    if name in ("Skeleton", "core_skeleton"):
+        from .skeleton import Skeleton, core_skeleton
+
+        return {"Skeleton": Skeleton, "core_skeleton": core_skeleton}[name]
+    if name == "posed_joints_from_features":
+        from .skeleton import posed_joints_from_features
+
+        return posed_joints_from_features
     if name == "TransformerEncoderBlock":
         from .backbone import TransformerEncoderBlock
 

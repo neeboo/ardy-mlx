@@ -249,13 +249,21 @@ def test_L4_all_twenty_denoiser_steps_align(report4):
 
 def test_L4_final_clip_and_per_window_chunks_align(report4):
     for name, st in report4["final"].items():
-        if isinstance(st, dict) and "max_abs" in st:
-            assert st["max_abs"] <= TOL, (name, st)
+        if not isinstance(st, dict) or "max_abs" not in st:
+            continue
+        if name in align.DIAGNOSTIC_KEYS:
+            # pre-FK placeholder / broken-hierarchy FK control: must be large
+            assert st["max_abs"] > TOL, (name, st)
+            continue
+        assert st["max_abs"] <= TOL, (name, st)
     assert report4["final"]["frames"]["shape"] == [1, 80, 330]
     assert len(report4["chunks"]) == 2
     for chunk in report4["chunks"]:
-        for key in ("frames", "root_positions_vs_npz", "heading_vs_npz"):
+        for key in ("frames", "root_positions_vs_npz", "heading_vs_npz", "posed_joints_vs_npz"):
             assert chunk[key]["max_abs"] <= TOL, (chunk["window"], key, chunk[key])
+    # 0004 ruling 4, multi-window: the FK chain reproduces the golden joints
+    assert report4["final"]["posed_joints_vs_npz"]["max_abs"] <= 1e-5
+    assert report4["final"]["posed_joints_placeholder_vs_npz"]["max_abs"] > 0.2
 
 
 def test_L4_chunked_decode_is_required_not_optional(report4):

@@ -1,6 +1,7 @@
 # 状态 · DeepSeek（A：权重转换 / 模型前向 / 数值对齐）
 
-- **当前轮次**：A 侧第 3 轮（第二次参考运行 + **多窗口整段对齐** + `make_step_fn` 接缝）。起于 HEAD `7dde062`。
+- **当前轮次**：A 侧第 4 轮（收尾：`posed_joints` 骨架 FK + 最终端到端验收 + 文档收口）。起于 HEAD `4f03545`。
+  第 3 轮的记录保留在 §1–§11；**A 侧最终状态见 §12**。
 - **本轮授权**：`docs/decisions/0003-alignment-baseline.md` 裁定 4，用户明确"直接搞完，不要等我"——
   **第二次（也是最后一次）参考运行**已用掉：`--duration 4.0`（80 帧 = 2 个自回归窗口），其余参数与第 1 次完全一致。
   除这一次外那台机器仍按只读对待。
@@ -239,7 +240,7 @@ step callable。**只读 B 的文件确认签名，未改动 B 的任何文件**
    默认走 A 的路径」，所以**发布路径不受此差异影响**（它本轮 80 帧对齐 3.543e-05）；
    受影响的只有「B 的独立循环能否拿金标准当端到端判据」。
 
-## 8. 测试
+## 8. 测试（第 3 轮计数；第 4 轮见 §12.3）
 
 A 名下 **82 个测试：81 passed + 1 xfailed**（本轮新增 26 个）。那 1 个 xfail 是**有意登记**的
 已知接口差异（B 的窗口几何），`strict=False`：B 改好后会 XPASS 提醒更新提案，不会误报成回归。
@@ -300,3 +301,198 @@ $ git ls-files | grep -E '\.safetensors$|golden-run[^/]*/(raw|out)/'   # 期望�
 （`artifacts/weight-manifest.json`、`weight-verify.json`）、对齐报告
 （`artifacts/align-report.json`）、运行记录与仪器化（`RUN-RECORD.md`、`run.sh`、
 `sitecustomize.py`、`run.log`、`gpu_samples.txt`、`mem_samples.txt`）。
+
+---
+
+# 12. 第 4 轮（收尾）· `posed_joints` 骨架 FK + 最终端到端验收
+
+起于 HEAD `4f03545`。本轮**没有再跑参考实现**（`0005` 已裁定不买第三次运行），
+所有数字都来自已有的两次金标准 + 本机 MLX。
+
+## 12.1 `posed_joints` 的骨架 FK（`0004` 裁定 4 落地）
+
+**问题**：`posed_joints` 之前是占位（`local_joints_positions` + `root_pos`），与金标准差 **0.132**。
+**根因**：契约要的是 `inverse()` 的世界关节位置（`ardy_motionrep.py:259-264`），
+它需要骨架的**父子关系 + 静息姿态**，而这两样都**不在 checkpoint 里**——在参考的源码里。
+
+**做法**（新文件 `src/ardy_mlx/model/skeleton.py`，纯 A 侧）：
+
+1. 从参考源码逐字转录 `CoreSkeleton27`：关节名/父子关系（`skeleton/definitions.py:348-381`，27 关节，根 `Hips`）
+   与静息姿态 `neutral_joints`（`ardy/assets/skeletons/cskel27/joints.p`，27×3，写成 Python 字面量，
+   **不落任何 `.npy`**——入库审计对它零容忍）。
+2. 逐行移植 `skeleton/kinematics.py:87-171` 的 `batch_rigid_transform`
+   （`rel_j = neutral_j − neutral_parent(j)`、`T_j = [[R_j, rel_j],[0,0,0,1]]`、`G_j = G_parent @ T_j`，
+   根取 `G_root = T_root`；`posed_joints = G[..., :3, 3] + root_positions`，
+   `global_rot_mats = G[..., :3, :3]`；支持任意前导 batch 维）。
+3. 移植 `geometry.cont6d_to_matrix` 与 `transforms.global_rots_to_local_rots`，
+   于是 `frames (T,330) → posed_joints (T,27,3)` 这条链与参考 `inverse()` 完全一致。
+
+**对齐数字（对 `artifacts/golden-run{,-4s}/out/*.npz` 的 `posed_joints`）**
+
+| 比较 | 2.0 s / 40 帧 | 4.0 s / 80 帧 |
+|---|---|---|
+| FK(金标准自己的 `local_rot_mats`+`root_positions`) | **2.4e-07** | **1.2e-07** |
+| 从**金标准特征向量**走的完整链 | **3.0e-07** | **4.8e-07** |
+| **出货路径**（我们自己的 `frames`）→ FK | **5.178e-06** | **4.813e-06** |
+| 同链的 `global_rot_mats` vs npz | 1.0e-06 | 8.9e-07 |
+| **占位实现（补前）** | **0.132** | **0.236** |
+| 负对照：父子关系拍平 | **6.508e-01** | **6.546e-01** |
+
+- 占位是 **0.132**（正是 `0004` 裁定 4 记录的数）；补后 5.18e-06 / 4.81e-06，
+  与 `frames` 自身残差（1.87e-05 / 3.54e-05）同量级，而 `posed_joints` 的量级是 1.68。
+- 负对照（错误的父子关系）→ 0.65，**是残差的 12.5 万倍**：这条比较确实能红。
+- 三项都进了 `scripts/ardy_align.py`（L3/L4 的 `posed_joints_vs_npz`、
+  `posed_joints_placeholder_vs_npz`、`posed_joints_flat_hierarchy_vs_npz`），
+  后两项登记为**诊断项**（`DIAGNOSTIC_KEYS`，按设计必须"大"，不参与通过/失败判定）。
+- 单测：`tests/test_model_skeleton.py`（15 个，无需 checkpoint）；金标准对齐测试在缺数据时
+  **显式 skip 并说明原因**。
+
+**仍未接上（B 侧，我按要求没有动 B 的文件）**：`scripts/ardy_generate.py` 的
+`_common_outputs` 仍用 `synthesize_posed_joints(frames, layout)`，sidecar 仍写
+`extra.posed_joints_source = "local_joints_positions (root-local) + root_pos; real FK not implemented"`。
+接法（一行）与文案已写进 `docs/motion-contract.md` §11 的 N14；**接上之前，CLI 落盘的 `posed_joints`
+不是契约值**（2.0 s 差 0.132 / 4.0 s 差 0.236）。
+
+## 12.2 最终端到端验收（结论钉死）
+
+### (1) CLI 多窗口复现金标准（4.0 s / 80 帧 / 2 窗口，A 的 `ArdyBatch`）
+
+以 `0004` 裁定 5 的标准路径跑 B 自己的 `scripts/ardy_generate.py --backend mlx`
+（未改其任何文件），并把参考自己的 `x_T`（`randn_0/1.npy`，每窗口一份）注入：
+
+| 比较 | max_abs | 参考 \|max\| |
+|---|---|---|
+| **`frames (1,80,330)`** | **3.543e-05** | 1.682 |
+| `motion_normalized` | 7.619e-05 | 2.115 |
+| root 块 vs npz `root_positions` | 4.709e-06 | 0.960 |
+| heading vs npz | 1.866e-06 | 1.001 |
+| **`posed_joints`（FK）vs npz** | **4.813e-06** | 1.682 |
+| npz 里实际落盘的 `posed_joints`（仍是 B 的占位） | 2.363e-01 | 1.682 |
+
+与 `0005` 的 3.543e-05 **逐位同值**（同一条路径、同一份注入噪声）。
+
+### (2) 单窗口回归（2.0 s / 40 帧 / 1 窗口）
+
+| 比较 | max_abs | 参考 \|max\| |
+|---|---|---|
+| **`frames (1,40,330)`** | **1.869e-05** | 1.679 |
+| `motion_normalized` | 3.931e-05 | 2.115 |
+| root / heading vs npz | 5.141e-06 / 2.991e-06 | 0.960 / 1.001 |
+| `posed_joints`（FK）vs npz | 5.178e-06 | 1.679 |
+
+与第 2/3 轮记录**逐位同值**，无回归。
+
+### (3) 两条验收都固化进了 `scripts/ardy_align.py --cli-acceptance`
+
+复跑命令（一条命令给出上面两张表）：
+
+```sh
+./.venv/bin/python scripts/ardy_align.py --levels L1 L2 L3 L4 --cli-acceptance \
+    --controls --negative-control --repeats 20 --json artifacts/align-report.json
+```
+
+**过程中查实两处 B 侧接线问题**（A 只报告、不改 B 的文件；细节见契约 §11 的 N16）：
+
+1. CLI 的 `--history-frames` 默认是 `None`，落到模型是 `crop_history_length=None`，
+   会同时关掉裁剪、`first_heading_angle` 刷新与分块解码 → 与金标准 **4.42e-02**（容差的 44 倍）。
+   **必须显式 `--history-frames 160`**（= 参考 batch 默认）才能复现 1.869e-05 / 3.543e-05。
+   建议 B 把默认值改成 `PRESETS[...].default_history_frames`。
+2. `--noise-file` 在 ≥2 窗口时**注入不进去且完全静默**：判据
+   `injected.shape[1:] == shape[1:]` 忽略了 batch 轴（`(W,1,10,148)` vs `(1,10,148)`），
+   于是每个窗口都回落到 MLX RNG（实测整段错 **4.42**，无警告）。
+   单窗口文件是好的。本轮多窗口注入用"进程内替换 `mx.random.normal`"完成（与第 3 轮同一手法）。
+
+### (4) 全量测试
+
+```
+$ ./.venv/bin/python -m pytest -q
+199 passed, 1 xfailed in 36.13s
+```
+
+- 第 3 轮是 **180 passed + 1 xfailed**；本轮 **+19**（15 个骨架单测/对齐 + 4 个 CLI 端到端验收），
+  **没有任何测试被删或改弱**；两个既有测试因新增诊断项各加了三行（诊断项必须"大"，其余仍 ≤ 1e-3）。
+- 那 1 个 xfail 仍是**有意登记**的 B 侧窗口几何差异（`strict=False`，B 改好后会 XPASS 提醒），保留。
+
+### (5) 性能复测（本机 M1 Max / 10 核，**整机被其它 agent 占用**）
+
+整段 80 帧 / 20 步 = 2 窗口 × 10 步 DDIM，注入参考 `x_T`；10 遍记录（`--bench-only`），
+**机器全程被其它 agent 占用，loadavg 13.5–20.9**，所以下面是**上界**而不是安静机器上的能力值：
+
+| 设备 | 80 帧/20 步 p50（记录里最低的一遍） | 同一路径全部 10 遍 p50 区间 | denoiser 单步(batch3) | 冷启动 | 峰值内存 |
+|---|---|---|---|---|---|
+| **Metal** | **527.1 ms**（p90 1045.3 ms，loadavg 16.95） | 527–977 ms | 10.9–27.0 ms | 0.12–0.38 s | **1010 MB** |
+| **CPU** | **1124.7 ms**（p90 1144.9 ms，loadavg 18.37） | 1125–3312 ms | 63.6–152.0 ms | 0.17–0.62 s | **947 MB** |
+
+- `benchmarks` 是每设备 p50 最低的那一遍，`benchmark_passes` 是全部 20 条记录（含每遍 loadavg）。
+- 若在对齐同一个进程里连跑 L1–L4 再测，峰值内存会记到 2.75/2.82 GB——那是对齐级别留下的分配，
+  不代表出货路径；上表的 1010/947 MB 来自只加载权重 ＋ 跑一段 80 帧的干净进程。
+- 新增的 FK 本身很便宜：80 帧 p50 **0.97–2.80 ms**（CPU/Metal），可以忽略。
+
+## 12.3 本轮改动清单（全部 A 侧）
+
+| 文件 | 改动 |
+|---|---|
+| `src/ardy_mlx/model/skeleton.py` | **新增**：CoreSkeleton27 定义 + FK + 6D/全局→局部 + `posed_joints_from_features` + 占位对照 |
+| `src/ardy_mlx/model/__init__.py` | 导出 `Skeleton` / `core_skeleton` / `posed_joints_from_features` |
+| `scripts/ardy_align.py` | L3/L4 增加 `posed_joints` 三类比较 + 诊断项机制；`--cli-acceptance`；benchmark 增加 80 帧/20 步与 FK；`benchmark_passes` |
+| `tests/test_model_skeleton.py` | **新增** 15 个（结构/FK/旋转转换/金标准对齐/占位对照） |
+| `tests/test_model_cli_acceptance.py` | **新增** 4 个（CLI 端到端 2 窗口/1 窗口/落盘现状） |
+| `tests/test_model_alignment.py`、`tests/test_model_multiwin.py` | 各自新增 1 个 + 3 个断言（诊断项必须大） |
+| `artifacts/align-report.json` | 重跑：L1–L4 + CLI 验收 + 11 条负对照 + 20 条性能记录 |
+| `README.md`、`README.zh-CN.md` | 由用户授权改写为"已完成" |
+| `docs/motion-contract.md` | 只加注记 §11（N14–N16），未改任何字段/维度/顺序 |
+
+**未触碰**（禁改清单）：`NOTICE`、`LICENSE`、`pyproject.toml`、根 `.gitignore`、
+`src/ardy_mlx/sampling/**`、`scripts/ardy_generate.py`、`tests/test_{sampling,generate}_*.py`、
+`docs/brief-claude-sampling.md`。
+
+## 12.4 A 侧最终状态：已完成的定义
+
+1. **权重转换**：`tokenizer` 204 + `denoiser` 224 = **428/428 张量逐字节一致**，
+   比对载荷 **765,013,216 B，差异 0**；denoiser 224/224 张量全部被前向用到
+   （`artifacts/weight-verify.json`、`weight-manifest.json`）。
+2. **三级对齐（单窗口）**：L1 tokenizer 往返 ≤7.0e-06、L2 denoiser 10 步 ≤5.4e-05、
+   L3 整段 `frames (1,40,330)` **1.869e-05**。
+3. **多窗口对齐**：窗口几何/token mask 与参考逐元素相同，重定心/平移/heading 刷新 ≤2.7e-06，
+   20 步逐步断言（raw 8.48e-05 / CFG 9.11e-05 / DDIM 1.66e-05），整段 **3.543e-05**。
+4. **`posed_joints` 真 FK**：出货路径 **5.18e-06 / 4.81e-06**（占位 0.132 / 0.236），
+   负对照 0.65；A 侧 API 与测试齐备（**B 侧 sidecar 未接**）。
+5. **CLI 端到端**：`--backend mlx`（A 的 `ArdyBatch`）+ `--history-frames 160` + 注入参考 `x_T`
+   → 2.0 s **1.869e-05**、4.0 s **3.543e-05**，可一键复跑（`--cli-acceptance`）。
+6. **`make_step_fn` 接缝**：B 的 `ArdySampler` 可直接调用；窗口几何差异已钉进 xfail + 提案。
+7. **测试**：**199 passed + 1 xfailed**（xfail = B 侧窗口几何差异，`strict=False`）。
+8. **性能**：见 §12.2(5)；本机共享，数值是上界。
+
+## 12.5 仍未验证 / 未接（保留为残留未知）
+
+1. **B 的 CLI/sidecar 未接 FK**：落盘 `posed_joints` 仍是占位；B 改一行即可（契约 N14）。
+2. **CLI 两个默认值/接线问题**（`--history-frames` 默认 `None`；`--noise-file` 多窗口静默失效），
+   决定权在 B（契约 N16）。
+3. **`--constraints` 路径**（`motion_mask`/`observed_motion` 非零、`future_token_mask` 非零）
+   两次参考运行都没跑，只有源码级复刻。
+4. **真正的历史截断**（>200 帧）没有金标准；覆盖来自纯算术单测 + `crop=4` 负对照（N13）。
+5. **seed / CUDA RNG 语义**未对齐：靠注入参考 `x_T` 绕开；MLX 侧按窗口 `mx.random.split`。
+6. **B 的独立循环（`ArdyAutoregressive`）不能用金标准判**：窗口框架不同（160 帧零种子 + 40 生成 = 50 token，
+   参考是 0 历史 + 40 生成 + 40 掩码未来 = 20 token），注入参考噪声后 **5.466**（金标准 |max| 1.682）。
+   出货路径不受影响（走 A 的 `ArdyBatch`）；已按 `0005` 的 lead 批准写成 xfail，**保留**。
+7. 模型卡 326 M vs 实测 191.3 M；训练数据 Bones Rigplay 1 与文本编码器链路的许可。
+8. §2.4 MotionBricks/Unity 转换：仍待定（`0002` 裁定 v1 不做）。
+9. 8B 文本编码器未移植：v1 只吃预计算 embedding（预计算的许可/可复现性仍是开放项）。
+
+## 12.6 纪律留痕（本轮）
+
+- **没有再跑参考实现**（`0005` 已裁定不买第三次运行）；本机之外未碰任何机器。
+- 未 push；未做长训练；未安装任何依赖；未使用任何合成输入（CGEvent/AX/osascript）。
+- `docs/motion-contract.md` 只**追加** §11 注记（N14–N16），未改字段/维度/顺序。
+- 权重派生数据**一律不入库**：本轮的 CLI 产物落在 `tempfile.mkdtemp()` 里、读完即删；
+  契约里的 `neutral_joints` 以 Python 字面量入库（不是 `.npy`）。审计见 §12.7。
+- 未触碰禁改清单（见 §12.3 末）。
+
+## 12.7 入库审计（本轮结束）
+
+```
+$ git ls-files | grep -E '\.(safetensors|npz|npy)$|golden-run[^/]*/(raw|out)/'
+（零命中）
+```
+
+结果：**零命中**。

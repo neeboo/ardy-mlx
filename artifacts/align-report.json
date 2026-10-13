@@ -216,6 +216,42 @@
             40,
             2
           ]
+        },
+        "posed_joints_vs_npz": {
+          "max_abs": 5.1781535148620605e-06,
+          "mean_abs": 7.959697496168959e-07,
+          "max_rel": 0.03698771112052788,
+          "reference_abs_max": 1.6791893243789673,
+          "reference_abs_mean": 0.3801369369029999,
+          "shape": [
+            40,
+            27,
+            3
+          ]
+        },
+        "posed_joints_placeholder_vs_npz": {
+          "max_abs": 0.13222278654575348,
+          "mean_abs": 0.015514214415043732,
+          "max_rel": 580.3469943701192,
+          "reference_abs_max": 1.6791893243789673,
+          "reference_abs_mean": 0.3801369369029999,
+          "shape": [
+            40,
+            27,
+            3
+          ]
+        },
+        "posed_joints_flat_hierarchy_vs_npz": {
+          "max_abs": 0.6507570743560791,
+          "mean_abs": 0.1141527139230338,
+          "max_rel": 1361.9292136434995,
+          "reference_abs_max": 1.6791893243789673,
+          "reference_abs_mean": 0.3801369369029999,
+          "shape": [
+            40,
+            27,
+            3
+          ]
         }
       }
     },
@@ -683,6 +719,42 @@
               2
             ]
           },
+          "posed_joints_vs_npz": {
+            "max_abs": 4.813075065612793e-06,
+            "mean_abs": 8.961971526545829e-07,
+            "max_rel": 0.01891998803631557,
+            "reference_abs_max": 1.6817655563354492,
+            "reference_abs_mean": 0.4060462415218353,
+            "shape": [
+              80,
+              27,
+              3
+            ]
+          },
+          "posed_joints_placeholder_vs_npz": {
+            "max_abs": 0.2362867663614452,
+            "mean_abs": 0.045561553382851436,
+            "max_rel": 597.6502493765586,
+            "reference_abs_max": 1.6817655563354492,
+            "reference_abs_mean": 0.4060462415218353,
+            "shape": [
+              80,
+              27,
+              3
+            ]
+          },
+          "posed_joints_flat_hierarchy_vs_npz": {
+            "max_abs": 0.6545857787132263,
+            "mean_abs": 0.11231505158697765,
+            "max_rel": 1357.9133079577389,
+            "reference_abs_max": 1.6817655563354492,
+            "reference_abs_mean": 0.4060462415218353,
+            "shape": [
+              80,
+              27,
+              3
+            ]
+          },
           "hybrid_translated": {
             "max_abs": 3.2335519790649414e-06,
             "mean_abs": 1.213323310219346e-07,
@@ -751,6 +823,30 @@
                 40,
                 2
               ]
+            },
+            "posed_joints_vs_npz": {
+              "max_abs": 2.0563602447509766e-06,
+              "mean_abs": 3.860077413264662e-07,
+              "max_rel": 0.010723192019950124,
+              "reference_abs_max": 1.6791894435882568,
+              "reference_abs_mean": 0.380136638879776,
+              "shape": [
+                40,
+                27,
+                3
+              ]
+            },
+            "posed_joints_placeholder_vs_npz": {
+              "max_abs": 0.13221995532512665,
+              "mean_abs": 0.015513621292910574,
+              "max_rel": 597.6502493765586,
+              "reference_abs_max": 1.6791894435882568,
+              "reference_abs_mean": 0.380136638879776,
+              "shape": [
+                40,
+                27,
+                3
+              ]
             }
           },
           {
@@ -787,6 +883,30 @@
               "shape": [
                 40,
                 2
+              ]
+            },
+            "posed_joints_vs_npz": {
+              "max_abs": 4.813075065612793e-06,
+              "mean_abs": 1.4063865639826995e-06,
+              "max_rel": 0.01891998803631557,
+              "reference_abs_max": 1.6817655563354492,
+              "reference_abs_mean": 0.43195590376853943,
+              "shape": [
+                40,
+                27,
+                3
+              ]
+            },
+            "posed_joints_placeholder_vs_npz": {
+              "max_abs": 0.2362867663614452,
+              "mean_abs": 0.0756094854727923,
+              "max_rel": 75.1423780939677,
+              "reference_abs_max": 1.6817655563354492,
+              "reference_abs_mean": 0.43195590376853943,
+              "shape": [
+                40,
+                27,
+                3
               ]
             }
           }
@@ -826,6 +946,8 @@
             "ddim": 1.659989356994629e-05
           },
           "frames_max_abs": 3.5431236028671265e-05,
+          "posed_joints_max_abs": 4.813075065612793e-06,
+          "posed_joints_placeholder_max_abs": 0.2362867663614452,
           "crop_history_length": 160,
           "ablation": {
             "center_index_offset": 0,
@@ -840,104 +962,1721 @@
     }
   },
   "mlx_load_seconds": {
-    "tokenizer": 0.010958292055875063,
-    "denoiser": 0.1173433749936521,
-    "total": 0.12830166704952717
+    "tokenizer": 0.015092749847099185,
+    "denoiser": 0.1796052500139922,
+    "total": 0.19469799986109138
+  },
+  "negative_control": {
+    "corruption": "x_T += 0.25",
+    "max_abs": 2.555518627166748,
+    "detected": true
+  },
+  "negative_controls_multi": [
+    {
+      "control": "clean baseline (identical to the port's default behaviour)",
+      "worst_max_abs": 3.5431236028671265e-05,
+      "tolerance": 0.001,
+      "detected": false,
+      "expect_detected": false,
+      "matches_expectation": true,
+      "kwargs": {}
+    },
+    {
+      "control": "x_T += 0.25 (wrong initial noise)",
+      "worst_max_abs": 1.7929099979810417,
+      "tolerance": 0.001,
+      "detected": true,
+      "expect_detected": true,
+      "matches_expectation": true,
+      "kwargs": {
+        "noise_offset": 0.25
+      }
+    },
+    {
+      "control": "recentre centre one token early (-4 frames)",
+      "worst_max_abs": 1.0125547051429749,
+      "tolerance": 0.001,
+      "detected": true,
+      "expect_detected": true,
+      "matches_expectation": true,
+      "kwargs": {
+        "ablation": {
+          "center_index_offset": -4,
+          "refresh_first_heading": true,
+          "future_token_mask_from_frames": false,
+          "autoregressive_decode": true
+        }
+      }
+    },
+    {
+      "control": "recentre centre two tokens early (-8 frames)",
+      "worst_max_abs": 1.0118072628974915,
+      "tolerance": 0.001,
+      "detected": true,
+      "expect_detected": true,
+      "matches_expectation": true,
+      "kwargs": {
+        "ablation": {
+          "center_index_offset": -8,
+          "refresh_first_heading": true,
+          "future_token_mask_from_frames": false,
+          "autoregressive_decode": true
+        }
+      }
+    },
+    {
+      "control": "recentre centre one token late (+4 frames; clamps to the reference centre)",
+      "worst_max_abs": 3.5431236028671265e-05,
+      "tolerance": 0.001,
+      "detected": false,
+      "expect_detected": false,
+      "matches_expectation": true,
+      "kwargs": {
+        "ablation": {
+          "center_index_offset": 4,
+          "refresh_first_heading": true,
+          "future_token_mask_from_frames": false,
+          "autoregressive_decode": true
+        }
+      }
+    },
+    {
+      "control": "stale first_heading_angle (refresh disabled)",
+      "worst_max_abs": 0.003264913335442543,
+      "tolerance": 0.001,
+      "detected": true,
+      "expect_detected": true,
+      "matches_expectation": true,
+      "kwargs": {
+        "ablation": {
+          "center_index_offset": 0,
+          "refresh_first_heading": false,
+          "future_token_mask_from_frames": false,
+          "autoregressive_decode": true
+        }
+      }
+    },
+    {
+      "control": "future_token_mask derived from future_mask",
+      "worst_max_abs": 1.3416984677314758,
+      "tolerance": 0.001,
+      "detected": true,
+      "expect_detected": true,
+      "matches_expectation": true,
+      "kwargs": {
+        "ablation": {
+          "center_index_offset": 0,
+          "refresh_first_heading": true,
+          "future_token_mask_from_frames": true,
+          "autoregressive_decode": true
+        }
+      }
+    },
+    {
+      "control": "crop_history_length = 4 (truncates the history to one token)",
+      "worst_max_abs": 1.0017061233520508,
+      "tolerance": 0.001,
+      "detected": true,
+      "expect_detected": true,
+      "matches_expectation": true,
+      "kwargs": {
+        "crop_history_length": 4
+      }
+    },
+    {
+      "control": "crop_history_length = 164 (one patch more; no truncation at 80 frames)",
+      "worst_max_abs": 3.5431236028671265e-05,
+      "tolerance": 0.001,
+      "detected": false,
+      "expect_detected": false,
+      "matches_expectation": true,
+      "kwargs": {
+        "crop_history_length": 164
+      }
+    },
+    {
+      "control": "crop_history_length = None (no cropping at all)",
+      "worst_max_abs": 0.04422786831855774,
+      "tolerance": 0.001,
+      "detected": true,
+      "expect_detected": true,
+      "matches_expectation": true,
+      "kwargs": {
+        "crop_history_length": null
+      }
+    },
+    {
+      "control": "whole-sequence decode instead of the chunked decode",
+      "worst_max_abs": 0.04428085684776306,
+      "tolerance": 0.001,
+      "detected": true,
+      "expect_detected": true,
+      "matches_expectation": true,
+      "kwargs": {
+        "ablation": {
+          "center_index_offset": 0,
+          "refresh_first_heading": true,
+          "future_token_mask_from_frames": false,
+          "autoregressive_decode": false
+        }
+      }
+    }
+  ],
+  "cli_acceptance": {
+    "2.0s/40f/1window": {
+      "exit_code": 0,
+      "windows": 1,
+      "rng_draws_injected": 1,
+      "num_frames": 40,
+      "frames": {
+        "max_abs": 1.8691724414487965e-05,
+        "mean_abs": 7.996013023222245e-07,
+        "max_rel": 0.10386488290969713,
+        "reference_abs_max": 1.6790938967486106,
+        "reference_abs_mean": 0.322963951950064,
+        "shape": [
+          1,
+          40,
+          330
+        ]
+      },
+      "motion_normalized": {
+        "max_abs": 3.931364271730908e-05,
+        "mean_abs": 1.9463032450749486e-06,
+        "max_rel": 0.24719783229710224,
+        "reference_abs_max": 2.1149206161499023,
+        "reference_abs_mean": 0.41577351093292236,
+        "shape": [
+          1,
+          40,
+          330
+        ]
+      },
+      "root_positions_vs_npz": {
+        "max_abs": 5.140900611877441e-06,
+        "mean_abs": 8.241273462772369e-07,
+        "max_rel": 0.001988597176881696,
+        "reference_abs_max": 0.9600245356559753,
+        "reference_abs_mean": 0.3351953625679016,
+        "shape": [
+          40,
+          3
+        ]
+      },
+      "heading_vs_npz": {
+        "max_abs": 2.991408109664917e-06,
+        "mean_abs": 1.0712363291531802e-06,
+        "max_rel": 0.0012304399361502591,
+        "reference_abs_max": 1.001177191734314,
+        "reference_abs_mean": 0.5080763697624207,
+        "shape": [
+          40,
+          2
+        ]
+      },
+      "sidecar": {
+        "num_frames": 40,
+        "crop_history_frames": 160,
+        "posed_joints_source": "local_joints_positions (root-local) + root_pos; real FK not implemented"
+      },
+      "posed_joints_vs_npz": {
+        "max_abs": 5.1781535148620605e-06,
+        "mean_abs": 7.959697496168959e-07,
+        "max_rel": 0.03698771112052788,
+        "reference_abs_max": 1.6791893243789673,
+        "reference_abs_mean": 0.3801369369029999,
+        "shape": [
+          40,
+          27,
+          3
+        ]
+      },
+      "posed_joints_placeholder_vs_npz": {
+        "max_abs": 0.13222278654575348,
+        "mean_abs": 0.015514214415043732,
+        "max_rel": 580.3469943701192,
+        "reference_abs_max": 1.6791893243789673,
+        "reference_abs_mean": 0.3801369369029999,
+        "shape": [
+          40,
+          27,
+          3
+        ]
+      },
+      "posed_joints_flat_hierarchy_vs_npz": {
+        "max_abs": 0.6507570743560791,
+        "mean_abs": 0.1141527139230338,
+        "max_rel": 1361.9292136434995,
+        "reference_abs_max": 1.6791893243789673,
+        "reference_abs_mean": 0.3801369369029999,
+        "shape": [
+          40,
+          27,
+          3
+        ]
+      }
+    },
+    "4.0s/80f/2windows": {
+      "exit_code": 0,
+      "windows": 2,
+      "rng_draws_injected": 2,
+      "num_frames": 80,
+      "frames": {
+        "max_abs": 3.542999229685234e-05,
+        "mean_abs": 9.61208353887954e-07,
+        "max_rel": 0.6477969773220168,
+        "reference_abs_max": 1.6819917702694618,
+        "reference_abs_mean": 0.3221364580091284,
+        "shape": [
+          1,
+          80,
+          330
+        ]
+      },
+      "motion_normalized": {
+        "max_abs": 7.619448663816197e-05,
+        "mean_abs": 2.462110537271336e-06,
+        "max_rel": 1.1024238844020722,
+        "reference_abs_max": 2.1149203777313232,
+        "reference_abs_mean": 0.4106679856777191,
+        "shape": [
+          1,
+          80,
+          330
+        ]
+      },
+      "root_positions_vs_npz": {
+        "max_abs": 4.708766937255859e-06,
+        "mean_abs": 9.104668909761434e-07,
+        "max_rel": 0.005023251559266188,
+        "reference_abs_max": 0.9603489637374878,
+        "reference_abs_mean": 0.3666013181209564,
+        "shape": [
+          80,
+          3
+        ]
+      },
+      "heading_vs_npz": {
+        "max_abs": 1.866370439529419e-06,
+        "mean_abs": 5.580222932621837e-07,
+        "max_rel": 0.000612718837407215,
+        "reference_abs_max": 1.001267910003662,
+        "reference_abs_mean": 0.5145594477653503,
+        "shape": [
+          80,
+          2
+        ]
+      },
+      "sidecar": {
+        "num_frames": 80,
+        "crop_history_frames": 160,
+        "posed_joints_source": "local_joints_positions (root-local) + root_pos; real FK not implemented"
+      },
+      "posed_joints_vs_npz": {
+        "max_abs": 4.813075065612793e-06,
+        "mean_abs": 8.961971526545829e-07,
+        "max_rel": 0.01891998803631557,
+        "reference_abs_max": 1.6817655563354492,
+        "reference_abs_mean": 0.4060462415218353,
+        "shape": [
+          80,
+          27,
+          3
+        ]
+      },
+      "posed_joints_placeholder_vs_npz": {
+        "max_abs": 0.2362867663614452,
+        "mean_abs": 0.045561553382851436,
+        "max_rel": 597.6502493765586,
+        "reference_abs_max": 1.6817655563354492,
+        "reference_abs_mean": 0.4060462415218353,
+        "shape": [
+          80,
+          27,
+          3
+        ]
+      },
+      "posed_joints_flat_hierarchy_vs_npz": {
+        "max_abs": 0.6545857787132263,
+        "mean_abs": 0.11231505158697765,
+        "max_rel": 1357.9133079577389,
+        "reference_abs_max": 1.6817655563354492,
+        "reference_abs_mean": 0.4060462415218353,
+        "shape": [
+          80,
+          27,
+          3
+        ]
+      }
+    }
   },
   "benchmarks": [
     {
+      "pass": "bench-9",
       "device": "cpu",
       "repeats": 20,
       "loadavg": [
-        6.64990234375,
-        8.5615234375,
-        9.32861328125
+        18.3671875,
+        14.38916015625,
+        11.67822265625
       ],
       "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
       "cold_start_s": {
-        "tokenizer_load": 0.010427000001072884,
-        "denoiser_load": 0.11989345797337592,
-        "total": 0.1303204579744488
+        "tokenizer_load": 0.019499125191941857,
+        "denoiser_load": 0.19655024982057512,
+        "total": 0.21604937501251698
       },
       "timings": {
         "tokenizer_encode": {
-          "p50_s": 0.008038208121433854,
-          "p90_s": 0.0081539589446038,
-          "min_s": 0.007679709000512958,
-          "max_s": 0.008356917183846235,
+          "p50_s": 0.00990304199513048,
+          "p90_s": 0.01123145897872746,
+          "min_s": 0.008594041923061013,
+          "max_s": 0.011480208020657301,
           "n": 20
         },
         "tokenizer_decode": {
-          "p50_s": 0.008130875532515347,
-          "p90_s": 0.008539875037968159,
-          "min_s": 0.00766075006686151,
-          "max_s": 0.009687667014077306,
+          "p50_s": 0.009355332935228944,
+          "p90_s": 0.01016854215413332,
+          "min_s": 0.008587000193074346,
+          "max_s": 0.010717042023316026,
           "n": 20
         },
         "denoiser_step_batch3": {
-          "p50_s": 0.05940641602501273,
-          "p90_s": 0.061169750057160854,
-          "min_s": 0.057346042012795806,
-          "max_s": 0.0868084579706192,
+          "p50_s": 0.06362475058995187,
+          "p90_s": 0.06822266685776412,
+          "min_s": 0.05907795811071992,
+          "max_s": 0.07090641697868705,
           "n": 20
         },
         "full_clip_40f_10steps": {
-          "p50_s": 0.6028280409518629,
-          "p90_s": 0.607717749895528,
-          "min_s": 0.5985118749085814,
-          "max_s": 0.607717749895528,
+          "p50_s": 0.598401749972254,
+          "p90_s": 0.6064935410395265,
+          "min_s": 0.5935876669827849,
+          "max_s": 0.6064935410395265,
           "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 1.1247435419354588,
+          "p90_s": 1.1449281668756157,
+          "min_s": 1.1099790839944035,
+          "max_s": 1.1449281668756157,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0009660209761932492,
+          "p90_s": 0.0010753339156508446,
+          "min_s": 0.0007995839696377516,
+          "max_s": 0.0011270411778241396,
+          "n": 20
         }
       },
-      "peak_memory_bytes": 2751470526,
-      "active_memory_bytes": 2746963251
+      "peak_memory_bytes": 947184232,
+      "active_memory_bytes": 939225555
     },
     {
+      "pass": "bench-9",
       "device": "gpu",
       "repeats": 20,
       "loadavg": [
-        6.4375,
-        8.4853515625,
-        9.29736328125
+        16.95166015625,
+        14.2451171875,
+        11.671875
       ],
       "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
       "cold_start_s": {
-        "tokenizer_load": 0.008748666848987341,
-        "denoiser_load": 0.10609729099087417,
-        "total": 0.11484595783986151
+        "tokenizer_load": 0.009674167027696967,
+        "denoiser_load": 0.11361520807258785,
+        "total": 0.12328937510028481
       },
       "timings": {
         "tokenizer_encode": {
-          "p50_s": 0.00455279101151973,
-          "p90_s": 0.00632629101164639,
-          "min_s": 0.003492959076538682,
-          "max_s": 0.007095375098288059,
+          "p50_s": 0.005369208520278335,
+          "p90_s": 0.006841458845883608,
+          "min_s": 0.0037106669042259455,
+          "max_s": 0.007056874921545386,
           "n": 20
         },
         "tokenizer_decode": {
-          "p50_s": 0.007078604074195027,
-          "p90_s": 0.007239416940137744,
-          "min_s": 0.004779875045642257,
-          "max_s": 0.007338874973356724,
+          "p50_s": 0.004873436992056668,
+          "p90_s": 0.005515249911695719,
+          "min_s": 0.004294208949431777,
+          "max_s": 0.0077326251193881035,
           "n": 20
         },
         "denoiser_step_batch3": {
-          "p50_s": 0.010981103871017694,
-          "p90_s": 0.01592245791107416,
-          "min_s": 0.010478708893060684,
-          "max_s": 0.02357775019481778,
+          "p50_s": 0.010938416351564229,
+          "p90_s": 0.012717125006020069,
+          "min_s": 0.010284499963745475,
+          "max_s": 0.019739167066290975,
           "n": 20
         },
         "full_clip_40f_10steps": {
-          "p50_s": 0.1083954581990838,
-          "p90_s": 0.10905308299697936,
-          "min_s": 0.10698170796968043,
-          "max_s": 0.10905308299697936,
+          "p50_s": 0.10993974981829524,
+          "p90_s": 0.11124366614967585,
+          "min_s": 0.10862370789982378,
+          "max_s": 0.11124366614967585,
           "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.5271041670348495,
+          "p90_s": 1.045327000087127,
+          "min_s": 0.2677890839986503,
+          "max_s": 1.045327000087127,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0028017294825986028,
+          "p90_s": 0.007271749898791313,
+          "min_s": 0.0021400831174105406,
+          "max_s": 0.019464165903627872,
+          "n": 20
         }
       },
-      "peak_memory_bytes": 2803733708,
-      "active_memory_bytes": 2746922111
+      "peak_memory_bytes": 1010259143,
+      "active_memory_bytes": 939384559
     }
-  ]
+  ],
+  "benchmark_passes": [
+    {
+      "pass": "full-run (levels L1-L4 + CLI acceptance + controls + bench)",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        16.9345703125,
+        10.5029296875,
+        9.74755859375
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.023860499961301684,
+        "denoiser_load": 0.5985406250692904,
+        "total": 0.6224011250305921
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.029324667062610388,
+          "p90_s": 0.036136332899332047,
+          "min_s": 0.02236120798625052,
+          "max_s": 0.036984417121857405,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.03616106288973242,
+          "p90_s": 0.04992804117500782,
+          "min_s": 0.02490675006993115,
+          "max_s": 0.05767662497237325,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.15201691701076925,
+          "p90_s": 0.2572613328229636,
+          "min_s": 0.10856504109688103,
+          "max_s": 0.2760234591551125,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 1.5012702920939773,
+          "p90_s": 2.4091550828889012,
+          "min_s": 1.1185954581014812,
+          "max_s": 2.4091550828889012,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 2.7750941670965403,
+          "p90_s": 4.0705772917717695,
+          "min_s": 2.6082755839452147,
+          "max_s": 4.0705772917717695,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0020743749337270856,
+          "p90_s": 0.002733958186581731,
+          "min_s": 0.0017260829918086529,
+          "max_s": 0.0032702090684324503,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 2684930135,
+      "active_memory_bytes": 2676968827
+    },
+    {
+      "pass": "full-run (levels L1-L4 + CLI acceptance + controls + bench)",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        20.37158203125,
+        11.98974609375,
+        10.314453125
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.031180874910205603,
+        "denoiser_load": 0.35035212500952184,
+        "total": 0.38153299991972744
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.005788646056316793,
+          "p90_s": 0.015525083057582378,
+          "min_s": 0.004368416965007782,
+          "max_s": 0.016613665968179703,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.005383729003369808,
+          "p90_s": 0.01333662518300116,
+          "min_s": 0.004426125204190612,
+          "max_s": 0.013921499950811267,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.024705812451429665,
+          "p90_s": 0.029646666953340173,
+          "min_s": 0.013878667028620839,
+          "max_s": 0.031934792175889015,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.5190402080770582,
+          "p90_s": 0.623761875089258,
+          "min_s": 0.419640792068094,
+          "max_s": 0.623761875089258,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.8686687499284744,
+          "p90_s": 0.8787061248440295,
+          "min_s": 0.7628316250629723,
+          "max_s": 0.8787061248440295,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0017664585029706359,
+          "p90_s": 0.0027466248720884323,
+          "min_s": 0.0015231668949127197,
+          "max_s": 0.01974775013513863,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 2748005143,
+      "active_memory_bytes": 2677165339
+    },
+    {
+      "pass": "bench-1",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        17.0703125,
+        11.7919921875,
+        10.28271484375
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.014351707883179188,
+        "denoiser_load": 0.1594561671372503,
+        "total": 0.1738078750204295
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.00940637441817671,
+          "p90_s": 0.0105747499037534,
+          "min_s": 0.008413000032305717,
+          "max_s": 0.011441791895776987,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.009373708511702716,
+          "p90_s": 0.012623833026736975,
+          "min_s": 0.008623417001217604,
+          "max_s": 0.022068332880735397,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.07599802105687559,
+          "p90_s": 0.07929458399303257,
+          "min_s": 0.07264749985188246,
+          "max_s": 0.07988524995744228,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.7695563330780715,
+          "p90_s": 0.7823076250497252,
+          "min_s": 0.7357537921052426,
+          "max_s": 0.7823076250497252,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 1.6736560829449445,
+          "p90_s": 1.8317545410245657,
+          "min_s": 1.5368912920821458,
+          "max_s": 1.8317545410245657,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.001358541427180171,
+          "p90_s": 0.0016410411335527897,
+          "min_s": 0.0012338338419795036,
+          "max_s": 0.0024622080381959677,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 947184206,
+      "active_memory_bytes": 939225555
+    },
+    {
+      "pass": "bench-1",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        14.26318359375,
+        11.4833984375,
+        10.2060546875
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.01259116712026298,
+        "denoiser_load": 0.15850912500172853,
+        "total": 0.17110029212199152
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.005117167020216584,
+          "p90_s": 0.015847125090658665,
+          "min_s": 0.004066624911502004,
+          "max_s": 0.016600165981799364,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.00536266656126827,
+          "p90_s": 0.014175584074109793,
+          "min_s": 0.004151457920670509,
+          "max_s": 0.016132958000525832,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.01611710444558412,
+          "p90_s": 0.022799375001341105,
+          "min_s": 0.011010583955794573,
+          "max_s": 0.025036083068698645,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.15236333291977644,
+          "p90_s": 0.28524966700933874,
+          "min_s": 0.14911608397960663,
+          "max_s": 0.28524966700933874,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.8954009169247001,
+          "p90_s": 1.05398029088974,
+          "min_s": 0.8419029170181602,
+          "max_s": 1.05398029088974,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0026255209231749177,
+          "p90_s": 0.005384666146710515,
+          "min_s": 0.0018752079922705889,
+          "max_s": 0.017337541095912457,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 1010251726,
+      "active_memory_bytes": 939181039
+    },
+    {
+      "pass": "bench-2",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        16.32373046875,
+        11.95654296875,
+        10.38037109375
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.02567404182627797,
+        "denoiser_load": 0.266498374985531,
+        "total": 0.29217241681180894
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.01230658357962966,
+          "p90_s": 0.01345820794813335,
+          "min_s": 0.010390208102762699,
+          "max_s": 0.015838792081922293,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.012860770453698933,
+          "p90_s": 0.013915209099650383,
+          "min_s": 0.011308958986774087,
+          "max_s": 0.01716420892626047,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.0990440211025998,
+          "p90_s": 0.11099812481552362,
+          "min_s": 0.08638849994167686,
+          "max_s": 0.11550133395940065,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.8606935830321163,
+          "p90_s": 1.0142124581616372,
+          "min_s": 0.8028675001114607,
+          "max_s": 1.0142124581616372,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 1.7255103748757392,
+          "p90_s": 1.9110556659288704,
+          "min_s": 1.6030289169866592,
+          "max_s": 1.9110556659288704,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0015159164322540164,
+          "p90_s": 0.0017020830418914557,
+          "min_s": 0.0013024588115513325,
+          "max_s": 0.002520583104342222,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 947184242,
+      "active_memory_bytes": 939225555
+    },
+    {
+      "pass": "bench-2",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        13.681640625,
+        11.6474609375,
+        10.306640625
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.01533012487925589,
+        "denoiser_load": 0.1759877500589937,
+        "total": 0.1913178749382496
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.004860582994297147,
+          "p90_s": 0.011622000019997358,
+          "min_s": 0.003832958871498704,
+          "max_s": 0.013732291990891099,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.0049965205835178494,
+          "p90_s": 0.012907665921375155,
+          "min_s": 0.0036938751582056284,
+          "max_s": 0.01433825003914535,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.017004125053063035,
+          "p90_s": 0.022096582921221852,
+          "min_s": 0.01146933319978416,
+          "max_s": 0.024385208962485194,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.5466587080154568,
+          "p90_s": 0.609860457945615,
+          "min_s": 0.17112104105763137,
+          "max_s": 0.609860457945615,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.8875475418753922,
+          "p90_s": 1.031516166869551,
+          "min_s": 0.8205613340251148,
+          "max_s": 1.031516166869551,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0026908955769613385,
+          "p90_s": 0.0036473749205470085,
+          "min_s": 0.001715708989650011,
+          "max_s": 0.018050333950668573,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 1010279792,
+      "active_memory_bytes": 939693587
+    },
+    {
+      "pass": "bench-3",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        13.53466796875,
+        11.67626953125,
+        10.33203125
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.020613166969269514,
+        "denoiser_load": 0.2737012500874698,
+        "total": 0.29431441705673933
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.012024458032101393,
+          "p90_s": 0.012858458096161485,
+          "min_s": 0.010724500054493546,
+          "max_s": 0.014485625084489584,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.011739270994439721,
+          "p90_s": 0.013511584140360355,
+          "min_s": 0.010113457916304469,
+          "max_s": 0.015755750006064773,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.09201637492515147,
+          "p90_s": 0.13192712515592575,
+          "min_s": 0.08291237498633564,
+          "max_s": 0.3099050000309944,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.950788666959852,
+          "p90_s": 1.0481490830425173,
+          "min_s": 0.9219102079514414,
+          "max_s": 1.0481490830425173,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 1.9359387918375432,
+          "p90_s": 2.1915071660187095,
+          "min_s": 1.8191388328559697,
+          "max_s": 2.1915071660187095,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0015794369392096996,
+          "p90_s": 0.0019186658319085836,
+          "min_s": 0.001403791829943657,
+          "max_s": 0.0023074999917298555,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 947184242,
+      "active_memory_bytes": 939225555
+    },
+    {
+      "pass": "bench-3",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        13.78759765625,
+        11.857421875,
+        10.427734375
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.015152459032833576,
+        "denoiser_load": 0.17959283292293549,
+        "total": 0.19474529195576906
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.004424333572387695,
+          "p90_s": 0.0120749999769032,
+          "min_s": 0.0038268750067800283,
+          "max_s": 0.01449520792812109,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.004772979067638516,
+          "p90_s": 0.012621916132047772,
+          "min_s": 0.0038385000079870224,
+          "max_s": 0.0144249580334872,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.01642564602661878,
+          "p90_s": 0.02242874982766807,
+          "min_s": 0.011811750009655952,
+          "max_s": 0.02343879104591906,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.5208475000690669,
+          "p90_s": 0.9516647499985993,
+          "min_s": 0.2529882499948144,
+          "max_s": 0.9516647499985993,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.9770836669486016,
+          "p90_s": 1.1320926251355559,
+          "min_s": 0.730805833125487,
+          "max_s": 1.1320926251355559,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0020936453947797418,
+          "p90_s": 0.0048287499230355024,
+          "min_s": 0.0015914170071482658,
+          "max_s": 0.018921124981716275,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 1010247438,
+      "active_memory_bytes": 939673807
+    },
+    {
+      "pass": "bench-4",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        14.14892578125,
+        12.125,
+        10.5732421875
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.022767832968384027,
+        "denoiser_load": 0.2732749581336975,
+        "total": 0.29604279110208154
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.012975833960808814,
+          "p90_s": 0.014151541981846094,
+          "min_s": 0.011396208079531789,
+          "max_s": 0.014601249946281314,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.013735875021666288,
+          "p90_s": 0.021680458914488554,
+          "min_s": 0.012044375063851476,
+          "max_s": 0.023014625068753958,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.13641510403249413,
+          "p90_s": 0.15263495803810656,
+          "min_s": 0.11224545794539154,
+          "max_s": 0.23126879218034446,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 1.5496332498732954,
+          "p90_s": 1.615246000001207,
+          "min_s": 1.3103344170376658,
+          "max_s": 1.615246000001207,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 3.311646166956052,
+          "p90_s": 3.5371291658375412,
+          "min_s": 2.978858167072758,
+          "max_s": 3.5371291658375412,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0029151670169085264,
+          "p90_s": 0.0035222501028329134,
+          "min_s": 0.0022339168936014175,
+          "max_s": 0.0039530000649392605,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 947184046,
+      "active_memory_bytes": 939225395
+    },
+    {
+      "pass": "bench-4",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        15.49560546875,
+        12.66357421875,
+        10.82275390625
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.026396792149171233,
+        "denoiser_load": 0.3367544999346137,
+        "total": 0.36315129208378494
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.006424333434551954,
+          "p90_s": 0.020080958027392626,
+          "min_s": 0.004532957915216684,
+          "max_s": 0.02013799990527332,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.00824710400775075,
+          "p90_s": 0.016527167055755854,
+          "min_s": 0.005646417150273919,
+          "max_s": 0.018823416903614998,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.027046979404985905,
+          "p90_s": 0.04797866614535451,
+          "min_s": 0.015776042127981782,
+          "max_s": 0.06123750004917383,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.5275466660968959,
+          "p90_s": 0.6532851660158485,
+          "min_s": 0.5121399578638375,
+          "max_s": 0.6532851660158485,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.9683299998287112,
+          "p90_s": 1.0517423748970032,
+          "min_s": 0.8590374160557985,
+          "max_s": 1.0517423748970032,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0029078953666612506,
+          "p90_s": 0.004922458902001381,
+          "min_s": 0.0018228748813271523,
+          "max_s": 0.018862791126593947,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 1010265129,
+      "active_memory_bytes": 939375631
+    },
+    {
+      "pass": "bench-5",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        20.86376953125,
+        13.92138671875,
+        11.29150390625
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.02368350001052022,
+        "denoiser_load": 0.28224070905707777,
+        "total": 0.305924209067598
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.012273333501070738,
+          "p90_s": 0.013733291067183018,
+          "min_s": 0.010561582865193486,
+          "max_s": 0.015178582863882184,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.01280858344398439,
+          "p90_s": 0.014538999879732728,
+          "min_s": 0.011310083093121648,
+          "max_s": 0.015457124914973974,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.10156374995131046,
+          "p90_s": 0.14393300004303455,
+          "min_s": 0.07917608320713043,
+          "max_s": 0.2289720829576254,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.6753341250587255,
+          "p90_s": 0.7787495830561966,
+          "min_s": 0.6620945839677006,
+          "max_s": 0.7787495830561966,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 1.3182953749783337,
+          "p90_s": 1.3999835830181837,
+          "min_s": 1.2999100838787854,
+          "max_s": 1.3999835830181837,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.001081708469428122,
+          "p90_s": 0.0012074171099811792,
+          "min_s": 0.0008010000456124544,
+          "max_s": 0.0017400409560650587,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 947184206,
+      "active_memory_bytes": 939225555
+    },
+    {
+      "pass": "bench-5",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        16.58984375,
+        13.40478515625,
+        11.1669921875
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.010459208162501454,
+        "denoiser_load": 0.1212383748497814,
+        "total": 0.13169758301228285
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.005133041529916227,
+          "p90_s": 0.0070075830444693565,
+          "min_s": 0.004077041056007147,
+          "max_s": 0.008134791860356927,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.004831916536204517,
+          "p90_s": 0.00548591697588563,
+          "min_s": 0.004065582994371653,
+          "max_s": 0.00573337497189641,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.01582337508443743,
+          "p90_s": 0.01814175001345575,
+          "min_s": 0.014458458870649338,
+          "max_s": 0.025284749921411276,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.1165129579603672,
+          "p90_s": 0.17667320813052356,
+          "min_s": 0.11003020801581442,
+          "max_s": 0.17667320813052356,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.6091375409159809,
+          "p90_s": 1.1229624580591917,
+          "min_s": 0.28765695821493864,
+          "max_s": 1.1229624580591917,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.002651499933563173,
+          "p90_s": 0.006078333128243685,
+          "min_s": 0.0020377920009195805,
+          "max_s": 0.007389792008325458,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 1010247237,
+      "active_memory_bytes": 939183155
+    },
+    {
+      "pass": "bench-6",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        17.90380859375,
+        13.72998046875,
+        11.29443359375
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.022397374967113137,
+        "denoiser_load": 0.5996569579001516,
+        "total": 0.6220543328672647
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.010862978990189731,
+          "p90_s": 0.012841332936659455,
+          "min_s": 0.00988537515513599,
+          "max_s": 0.014510083012282848,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.010058666579425335,
+          "p90_s": 0.012254666071385145,
+          "min_s": 0.009010333800688386,
+          "max_s": 0.016548709012567997,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.06851085450034589,
+          "p90_s": 0.08185899979434907,
+          "min_s": 0.059262082912027836,
+          "max_s": 0.0868183330167085,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.6199871248099953,
+          "p90_s": 0.6422793751116842,
+          "min_s": 0.6073720830027014,
+          "max_s": 0.6422793751116842,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 1.339682084042579,
+          "p90_s": 1.5295802091713995,
+          "min_s": 1.2095351670868695,
+          "max_s": 1.5295802091713995,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0010955620091408491,
+          "p90_s": 0.0012256251648068428,
+          "min_s": 0.0009093750268220901,
+          "max_s": 0.0013667501043528318,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 947184046,
+      "active_memory_bytes": 939225395
+    },
+    {
+      "pass": "bench-6",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        15.30322265625,
+        13.3525390625,
+        11.20166015625
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.010773499961942434,
+        "denoiser_load": 0.13263912498950958,
+        "total": 0.14341262495145202
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.005959041998721659,
+          "p90_s": 0.007814333075657487,
+          "min_s": 0.004298208048567176,
+          "max_s": 0.008837790926918387,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.0050090005388483405,
+          "p90_s": 0.00565495784394443,
+          "min_s": 0.004191250074654818,
+          "max_s": 0.006131166126579046,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.01135870791040361,
+          "p90_s": 0.012348625110462308,
+          "min_s": 0.01107037509791553,
+          "max_s": 0.02270600013434887,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.1195447500795126,
+          "p90_s": 0.1806541250552982,
+          "min_s": 0.11659837490878999,
+          "max_s": 0.1806541250552982,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.6619677080307156,
+          "p90_s": 1.0608785420190543,
+          "min_s": 0.5266835829243064,
+          "max_s": 1.0608785420190543,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.002966208034195006,
+          "p90_s": 0.006829499965533614,
+          "min_s": 0.0020643749739974737,
+          "max_s": 0.008754333015531301,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 1010246097,
+      "active_memory_bytes": 939180851
+    },
+    {
+      "pass": "bench-7",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        15.11865234375,
+        13.3466796875,
+        11.2119140625
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.024751875083893538,
+        "denoiser_load": 0.24146387493237853,
+        "total": 0.26621575001627207
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.012582666939124465,
+          "p90_s": 0.014521792065352201,
+          "min_s": 0.010615333914756775,
+          "max_s": 0.014856999972835183,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.012453312403522432,
+          "p90_s": 0.014617708045989275,
+          "min_s": 0.010586791904643178,
+          "max_s": 0.01687608379870653,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.08346493740100414,
+          "p90_s": 0.0889017079025507,
+          "min_s": 0.06985837500542402,
+          "max_s": 0.09519062493927777,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.6222623749636114,
+          "p90_s": 0.6431702501140535,
+          "min_s": 0.6121833340730518,
+          "max_s": 0.6431702501140535,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 1.2640780420042574,
+          "p90_s": 1.6025503331329674,
+          "min_s": 1.1952345001045614,
+          "max_s": 1.6025503331329674,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0009339585667476058,
+          "p90_s": 0.00113062490709126,
+          "min_s": 0.0007991660386323929,
+          "max_s": 0.0016925830859690905,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 947184223,
+      "active_memory_bytes": 939225555
+    },
+    {
+      "pass": "bench-7",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        17.48828125,
+        13.9248046875,
+        11.453125
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.009587874868884683,
+        "denoiser_load": 0.11157608311623335,
+        "total": 0.12116395798511803
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.005266062566079199,
+          "p90_s": 0.007049917010590434,
+          "min_s": 0.003720457898452878,
+          "max_s": 0.00723379198461771,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.004572937497869134,
+          "p90_s": 0.006934416014701128,
+          "min_s": 0.0039059161208570004,
+          "max_s": 0.008114707889035344,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.013581333449110389,
+          "p90_s": 0.014640874927863479,
+          "min_s": 0.01253525004722178,
+          "max_s": 0.021934540942311287,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.10918179200962186,
+          "p90_s": 0.1122257080860436,
+          "min_s": 0.10892462497577071,
+          "max_s": 0.1122257080860436,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.5540660829283297,
+          "p90_s": 0.9423434170894325,
+          "min_s": 0.26416795887053013,
+          "max_s": 0.9423434170894325,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.003056707908399403,
+          "p90_s": 0.005710416939109564,
+          "min_s": 0.002038541017100215,
+          "max_s": 0.01405524997971952,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 1010268326,
+      "active_memory_bytes": 939182095
+    },
+    {
+      "pass": "bench-8",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        20.01123046875,
+        14.5068359375,
+        11.6728515625
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.01826604106463492,
+        "denoiser_load": 0.18608275009319186,
+        "total": 0.20434879115782678
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.010117062483914196,
+          "p90_s": 0.011786166811361909,
+          "min_s": 0.009226332884281874,
+          "max_s": 0.012340333079919219,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.009518395992927253,
+          "p90_s": 0.01070537487976253,
+          "min_s": 0.008864207891747355,
+          "max_s": 0.030904291896149516,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.06573652103543282,
+          "p90_s": 0.06882295804098248,
+          "min_s": 0.058446459006518126,
+          "max_s": 0.07180445804260671,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.600969749968499,
+          "p90_s": 0.6078877910040319,
+          "min_s": 0.5958827089052647,
+          "max_s": 0.6078877910040319,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 1.1638724589720368,
+          "p90_s": 1.2315492499619722,
+          "min_s": 1.1396209169179201,
+          "max_s": 1.2315492499619722,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0010259165428578854,
+          "p90_s": 0.0013259169645607471,
+          "min_s": 0.0009357919916510582,
+          "max_s": 0.0019406250212341547,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 947184206,
+      "active_memory_bytes": 939225555
+    },
+    {
+      "pass": "bench-8",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        17.703125,
+        14.193359375,
+        11.59423828125
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.009377750102430582,
+        "denoiser_load": 0.11147099989466369,
+        "total": 0.12084874999709427
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.004815229447558522,
+          "p90_s": 0.006879249820485711,
+          "min_s": 0.0034203329123556614,
+          "max_s": 0.007642750162631273,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.0046726459404453635,
+          "p90_s": 0.007199999876320362,
+          "min_s": 0.003890500171110034,
+          "max_s": 0.008694292046129704,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.011156770982779562,
+          "p90_s": 0.011634208029136062,
+          "min_s": 0.01042958302423358,
+          "max_s": 0.018604540964588523,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.1124559580348432,
+          "p90_s": 0.11378745781257749,
+          "min_s": 0.10988137498497963,
+          "max_s": 0.11378745781257749,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.5898227081634104,
+          "p90_s": 0.9589928328059614,
+          "min_s": 0.27219508308917284,
+          "max_s": 0.9589928328059614,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0021762499818578362,
+          "p90_s": 0.0033630419056862593,
+          "min_s": 0.0018652500584721565,
+          "max_s": 0.004155332921072841,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 1010260496,
+      "active_memory_bytes": 939375503
+    },
+    {
+      "pass": "bench-9",
+      "device": "cpu",
+      "repeats": 20,
+      "loadavg": [
+        18.3671875,
+        14.38916015625,
+        11.67822265625
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.019499125191941857,
+        "denoiser_load": 0.19655024982057512,
+        "total": 0.21604937501251698
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.00990304199513048,
+          "p90_s": 0.01123145897872746,
+          "min_s": 0.008594041923061013,
+          "max_s": 0.011480208020657301,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.009355332935228944,
+          "p90_s": 0.01016854215413332,
+          "min_s": 0.008587000193074346,
+          "max_s": 0.010717042023316026,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.06362475058995187,
+          "p90_s": 0.06822266685776412,
+          "min_s": 0.05907795811071992,
+          "max_s": 0.07090641697868705,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.598401749972254,
+          "p90_s": 0.6064935410395265,
+          "min_s": 0.5935876669827849,
+          "max_s": 0.6064935410395265,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 1.1247435419354588,
+          "p90_s": 1.1449281668756157,
+          "min_s": 1.1099790839944035,
+          "max_s": 1.1449281668756157,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0009660209761932492,
+          "p90_s": 0.0010753339156508446,
+          "min_s": 0.0007995839696377516,
+          "max_s": 0.0011270411778241396,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 947184232,
+      "active_memory_bytes": 939225555
+    },
+    {
+      "pass": "bench-9",
+      "device": "gpu",
+      "repeats": 20,
+      "loadavg": [
+        16.95166015625,
+        14.2451171875,
+        11.671875
+      ],
+      "machine": "arm64 / macOS-26.5.2-arm64-arm-64bit-Mach-O",
+      "cold_start_s": {
+        "tokenizer_load": 0.009674167027696967,
+        "denoiser_load": 0.11361520807258785,
+        "total": 0.12328937510028481
+      },
+      "timings": {
+        "tokenizer_encode": {
+          "p50_s": 0.005369208520278335,
+          "p90_s": 0.006841458845883608,
+          "min_s": 0.0037106669042259455,
+          "max_s": 0.007056874921545386,
+          "n": 20
+        },
+        "tokenizer_decode": {
+          "p50_s": 0.004873436992056668,
+          "p90_s": 0.005515249911695719,
+          "min_s": 0.004294208949431777,
+          "max_s": 0.0077326251193881035,
+          "n": 20
+        },
+        "denoiser_step_batch3": {
+          "p50_s": 0.010938416351564229,
+          "p90_s": 0.012717125006020069,
+          "min_s": 0.010284499963745475,
+          "max_s": 0.019739167066290975,
+          "n": 20
+        },
+        "full_clip_40f_10steps": {
+          "p50_s": 0.10993974981829524,
+          "p90_s": 0.11124366614967585,
+          "min_s": 0.10862370789982378,
+          "max_s": 0.11124366614967585,
+          "n": 5
+        },
+        "full_clip_80f_20steps": {
+          "p50_s": 0.5271041670348495,
+          "p90_s": 1.045327000087127,
+          "min_s": 0.2677890839986503,
+          "max_s": 1.045327000087127,
+          "n": 5
+        },
+        "skeleton_fk_80f": {
+          "p50_s": 0.0028017294825986028,
+          "p90_s": 0.007271749898791313,
+          "min_s": 0.0021400831174105406,
+          "max_s": 0.019464165903627872,
+          "n": 20
+        }
+      },
+      "peak_memory_bytes": 1010259143,
+      "active_memory_bytes": 939384559
+    }
+  ],
+  "benchmarks_note": "The host was shared with another agent for this whole round (loadavg 8-21 on 10 cores), so absolute timings are upper bounds. benchmarks = the recorded pass with the lowest 80f/20-step p50 per device; benchmark_passes = every pass, with its loadavg, so the spread is auditable."
 }

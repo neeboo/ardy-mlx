@@ -740,3 +740,94 @@ MAX_WINDOW_SECONDS = 10
 - §2.4 MotionBricks/Unity 转换：仍待定。
 
 
+## 11. 实测确认（A 侧第 4 轮 · 2026-10-13，**只加注记，未改任何字段/维度/顺序**）
+
+本轮补上 §1.5/§7 里 `posed_joints` 的**真骨架 FK**（`0004` 裁定 4 的收尾），并做最终端到端验收。
+契约的字段、维度、顺序、单位一律未动；下面每条都是注记，可直接照此消费。
+
+### N14 · `posed_joints` 现在是真 FK，骨架定义来自**参考源码**（不是 checkpoint）
+
+- **骨架 = `CoreSkeleton27`**：关节名与父子关系取自 `ardy/skeleton/definitions.py:348-381`
+  （27 关节，根 = `Hips`）；静息姿态 `neutral_joints` 取自 `ardy/assets/skeletons/cskel27/joints.p`；
+  FK 本体是 `ardy/skeleton/kinematics.py:87-171`（`batch_rigid_transform`：
+  `rel_j = neutral_j − neutral_parent(j)`、`T_j = [[R_j, rel_j],[0,0,0,1]]`、`G_j = G_parent @ T_j`、
+  `posed_joints = G[..., :3, 3] + root_positions`）。**checkpoint 里没有骨架信息**，所以这份定义只能
+  从 Apache-2.0 的源码抄；A 侧落在 `src/ardy_mlx/model/skeleton.py`。
+- **特征向量 → `posed_joints` 的链**与参考 `inverse()` 完全一致（`ardy_motionrep.py:259-264`）：
+
+  ```
+  frames[..., 0:3]                      -> root_positions
+  frames[..., 83:245] (6D, 27×6)        -> cont6d_to_matrix -> global_rot_mats
+  global_rots_to_local_rots(global)     -> local_rot_mats
+  fk(local_rot_mats, root_positions)    -> posed_joints (T,27,3)
+  ```
+
+  `local_joints_positions`（§1.1 的第 3 块）**不参与**这条链——它是 FK 的*输出*再加工，不是输入。
+- **实测（本金标准）**：
+
+  | 比较 | 2.0 s / 40 帧 | 4.0 s / 80 帧 |
+  |---|---|---|
+  | FK(金标准自己的 `local_rot_mats`+`root_positions`) vs npz `posed_joints` | **2.4e-07** | **1.2e-07** |
+  | 同一 FK 的 `global_rot_mats` vs npz | 1.0e-06 | 8.9e-07 |
+  | 从**金标准特征向量**走的链（上行整条） | **3.0e-07** | **4.8e-07** |
+  | **出货路径**（我们自己的 `frames`）→ FK | **5.18e-06** | **4.81e-06**（分段 2.06e-06 / 4.81e-06） |
+  | 占位实现（`local_joints_positions` + `root_pos`）→ 差 | **0.132** | **0.236** |
+
+  即：补 FK 前是 `0004` 裁定 4 记录的那个 **0.132**，补后与 `frames` 自身残差（1.87e-05 / 3.54e-05）
+  同量级；`posed_joints` 的 `|max|` 是 1.68，所以这是 5 个数量级的收紧。
+- **负对照**（`0003` 裁定 1 要求每条新比较都能红）：把父子关系拍平成"全部挂在根上"
+  → `posed_joints` 错 **6.51e-01**（2.0 s）/ **6.55e-01**（4.0 s），是容差的 651/655 倍。
+  该对照在 `scripts/ardy_align.py` 里登记为诊断项 `posed_joints_flat_hierarchy_vs_npz`。
+- **仍未接上（B 侧，A 不动其文件）**：`scripts/ardy_generate.py` 落盘的 `posed_joints` 仍是
+  `synthesize_posed_joints` 的占位，sidecar 仍写
+  `extra.posed_joints_source = "local_joints_positions (root-local) + root_pos; real FK not implemented"`。
+  B 只需把 `_common_outputs` 里的 `synthesize_posed_joints(frames, layout)` 换成
+  `ardy_mlx.model.skeleton.posed_joints_from_features(frames)`，并把那行文案改成
+  `"skeleton FK (CoreSkeleton27) on global_rot_data + root_pos"`。
+  **在这行接上之前，CLI 落盘的 `posed_joints` 不是契约值**（2.0 s 差 0.132 / 4.0 s 差 0.236），
+  而 A 侧 API 已可用并有测试锁定。
+
+### N15 · 6D 的 `matrix[..., 0]` 取的是**列**，不是"行"（§1.4 的措辞是标签，代码行才是行为）
+
+`geometry.py:16-18` 的 `cont6d = concat(matrix[..., 0], matrix[..., 1])` 里，`matrix[..., 0]` 索引
+**最后一个轴**，所以 6D 存的是旋转矩阵**前两列**；`cont6d_to_matrix` 也按列拼回（`x=normalize(c0)`、
+`z=x×c1`、`y=z×x`，再 `stack([x,y,z], -1)`）。实测（2.0 s 金标准）：
+
+| 读法 | 与 npz `global_rot_mats` 的差 |
+|---|---|
+| 把同一段 6D 当**列**读（= 代码的行为） | **0.026** |
+| 当**行**读 | **2.01** |
+
+0.026 不是错误：模型回归出来的 6D 并不严格正交（`|r0|−1` 最大 0.017、`r0·r1` 最大 0.027），
+Gram–Schmidt 正是为修它；把 `cont6d_to_matrix` 的输出再转回 6D 稳定在 **2.4e-07**（幂等）。
+`0004` 的"契约是对的，不要修"依然成立——**代码行是权威**，本注记只把"行/列"这个标签说清楚。
+
+### N16 · 复现金标准的最小 CLI 调用（以及两处 B 侧接线现状）
+
+```
+./.venv/bin/python scripts/ardy_generate.py --backend mlx \
+    --embedding <text_feat.npy> --prompt "A person walks forward." \
+    --duration {2.0|4.0} --seed 0 --no-postprocess --history-frames 160
+```
+
+- **`--history-frames 160` 必须显式给**：CLI 自己的默认是 `None`，落到模型就是
+  `crop_history_length=None`，会同时关掉**裁剪**、`first_heading_angle` 刷新（§5.5）与
+  **分块解码**（§5.7）。实测该默认与金标准差 **4.42e-02**（容差的 44 倍，正是负对照
+  `crop_history_length=None` 的数）；显式传 `160`（= 参考 batch 默认，§5.2）后
+  2.0 s **1.869e-05**、4.0 s **3.543e-05**。
+- **`--noise-file` 在 ≥2 个窗口时注入不进去**：它的判据是
+  `injected.shape[1:] == shape[1:]`，而 `injected` 还带 batch 轴（`(W,1,10,148)` vs `(1,10,148)`），
+  于是多窗口文件永远不匹配，**每个窗口都静默回落到 MLX RNG**（实测整段错 4.42，但没有任何报错/警告）。
+  单窗口文件（`(1,10,148)`）是好的：2.0 s 用它可以复现 1.869e-05。
+  多窗口要注入参考 `x_T`，本轮用的是"在进程内替换 `mx.random.normal`"（不改 B 的文件，同第 3 轮手法）；
+  该验收已固化成 `scripts/ardy_align.py --cli-acceptance`，可一键复跑。
+- 两条都在 B 的文件里，A 只报告不改；`--history-frames` 的默认值建议改成
+  `layout.default_history_frames`（A 侧已把该值导出为 `PRESETS[...].default_history_frames`）。
+
+**仍未验证（保留为残留未知）**
+
+- 带 `--constraints` 的路径（`motion_mask`/`observed_motion` 非零）：两次参考运行都没有约束。
+- 真正发生历史截断的多窗口（>200 帧）：没有金标准（沿用 §10 的 N13 结论）。
+- seed / CUDA RNG 语义：未对齐（靠注入参考 `x_T` 绕开）。
+- §2.4 MotionBricks/Unity 转换：仍待定。
+- `posed_joints` 的 CLI/sidecar 接线（N14 末条）：A 侧 API 与测试完成，**B 侧未接**。

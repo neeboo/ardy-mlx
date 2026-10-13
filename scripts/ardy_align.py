@@ -59,8 +59,10 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import statistics
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -73,6 +75,7 @@ if str(_SRC) not in sys.path:
 
 import mlx.core as mx  # noqa: E402
 
+from ardy_mlx.io import PRESETS  # noqa: E402
 from ardy_mlx.model.ardy import (  # noqa: E402
     Ablation,
     ArdyBatch,
@@ -85,6 +88,11 @@ from ardy_mlx.model.diffusion import Diffusion  # noqa: E402
 from ardy_mlx.model.fsq import FSQVAETransformer  # noqa: E402
 from ardy_mlx.model.motion_rep import MotionRep  # noqa: E402
 from ardy_mlx.model.nn import WeightStore  # noqa: E402
+from ardy_mlx.model.skeleton import (  # noqa: E402
+    core_skeleton,
+    placeholder_posed_joints,
+    posed_joints_from_features,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CKPT = ROOT / "checkpoints" / "ARDY-Core-RP-20FPS-Horizon40"
@@ -98,6 +106,15 @@ DEFAULT_RAW4 = ROOT / "artifacts" / "golden-run-4s" / "raw"
 DEFAULT_NPZ4 = ROOT / "artifacts" / "golden-run-4s" / "out" / "golden_core_h40_4s_seed0.npz"
 
 TOLERANCES = {"L1": 1e-3, "L2": 1e-3, "L3": 1e-3, "L4": 1e-3}
+
+#: Comparisons that are **diagnostics, not assertions**: they are supposed to be
+#: large, and their job is to keep the "before" number visible next to the real
+#: one. The pre-FK ``posed_joints`` placeholder (``0004`` ruling 4) is the only
+#: one: it is 0.132 / 0.236 off the golden clip by construction.
+DIAGNOSTIC_KEYS = {
+    "posed_joints_placeholder_vs_npz",
+    "posed_joints_flat_hierarchy_vs_npz",
+}
 
 #: The reference's prompt embedding has length 1.
 NUM_STEPS = 10
@@ -118,6 +135,62 @@ def _stats(got: np.ndarray, exp: np.ndarray) -> Dict[str, float]:
         "reference_abs_mean": float(np.abs(exp).mean()),
         "shape": list(got.shape),
     }
+
+
+def corrupt_flat_skeleton():
+    """A deliberately broken hierarchy for the FK negative control.
+
+    Every joint is re-parented to ``Hips``, so the intermediate rotations stop
+    propagating. That is exactly the class of error a wrong ``joint_parents``
+    table produces, and it must make the ``posed_joints`` comparison fail.
+    """
+    from ardy_mlx.model.skeleton import (
+        CORE_JOINT_NAMES,
+        CORE_NEUTRAL_JOINTS,
+        Skeleton,
+    )
+
+    return Skeleton(
+        "cskel27-corrupt-flat",
+        CORE_JOINT_NAMES,
+        [-1] + [0] * (len(CORE_JOINT_NAMES) - 1),
+        CORE_NEUTRAL_JOINTS,
+    )
+
+
+def posed_joints_comparisons(frames, npz, with_controls: bool = False) -> Dict[str, Dict[str, float]]:
+    """``0004`` ruling 4, re-aligned: FK ``posed_joints`` against the reference npz.
+
+    ``frames`` is the port's own end-to-end output ``(B, T, 330)`` (physical
+    units). Two numbers come out of the same input on purpose:
+
+    * ``posed_joints_vs_npz`` -- :func:`ardy_mlx.model.skeleton.posed_joints_from_features`,
+      i.e. ``global_rot_data -> matrices -> local rotations -> skeleton FK``, the
+      chain the reference's ``inverse()`` runs (``ardy_motionrep.py:259-264``);
+    * ``posed_joints_placeholder_vs_npz`` -- the pre-FK placeholder the ruling
+      recorded, kept so the "before" number stays visible (0.132 on the 2.0 s
+      clip, 0.236 on the 4.0 s one).
+    """
+    feats = mx.array(np.asarray(frames, dtype=np.float32))
+    golden = np.asarray(npz["posed_joints"])
+    skel = core_skeleton()
+    fk = np.asarray(posed_joints_from_features(feats, skel))
+    placeholder = np.asarray(placeholder_posed_joints(feats))
+    if fk.shape[0] == 1 and fk.shape[1:] == golden.shape:
+        fk = fk[0]
+        placeholder = placeholder[0]
+    out = {
+        "posed_joints_vs_npz": _stats(fk, golden),
+        "posed_joints_placeholder_vs_npz": _stats(placeholder, golden),
+    }
+    if with_controls:
+        # Falsifiability (0003 ruling 1): a wrong hierarchy must blow the
+        # comparison up, otherwise "FK matches the golden clip" means nothing.
+        broken = np.asarray(posed_joints_from_features(feats, corrupt_flat_skeleton()))
+        if broken.shape[0] == 1 and broken.shape[1:] == golden.shape:
+            broken = broken[0]
+        out["posed_joints_flat_hierarchy_vs_npz"] = _stats(broken, golden)
+    return out
 
 
 def _denorm(obj):
@@ -314,6 +387,7 @@ class Harness:
             z = np.load(self.npz)
             res["root_positions_vs_npz"] = _stats(mine_frames[0, :, :3], z["root_positions"])
             res["heading_vs_npz"] = _stats(mine_frames[0, :, 3:5], z["global_root_heading"])
+            res.update(posed_joints_comparisons(mine_frames, z, with_controls=True))
         return res
 
     # ------------------------------------------------------------------- L4
@@ -552,6 +626,7 @@ class Harness:
             z = np.load(self.npz)
             report["final"]["root_positions_vs_npz"] = _stats(mine_frames[0, :, :3], z["root_positions"])
             report["final"]["heading_vs_npz"] = _stats(mine_frames[0, :, 3:5], z["global_root_heading"])
+            report["final"].update(posed_joints_comparisons(mine_frames, z, with_controls=True))
             for w in range(n_windows):
                 a, b = w * GEN_HORIZON, (w + 1) * GEN_HORIZON
                 chunks[w]["root_positions_vs_npz"] = _stats(
@@ -560,6 +635,10 @@ class Harness:
                 chunks[w]["heading_vs_npz"] = _stats(
                     mine_frames[0, a:b, 3:5], z["global_root_heading"][a:b]
                 )
+                chunk_pj = posed_joints_comparisons(mine_frames[:, a:b], {
+                    "posed_joints": z["posed_joints"][a:b],
+                })
+                chunks[w].update(chunk_pj)
 
         # ---- accumulated translation / final hybrid -------------------------
         fh_path = self.raw / "final_hybrid_translated.npy"
@@ -593,6 +672,10 @@ class Harness:
             "x0_worst": max(g["x0"]["max_abs"] for g in per_window),
             "step_worst": worst,
             "frames_max_abs": report["final"]["frames"]["max_abs"],
+            "posed_joints_max_abs": report["final"].get("posed_joints_vs_npz", {}).get("max_abs"),
+            "posed_joints_placeholder_max_abs": report["final"].get(
+                "posed_joints_placeholder_vs_npz", {}
+            ).get("max_abs"),
             "crop_history_length": crop_history_length,
             "ablation": ablation.__dict__,
             "noise_offset": noise_offset,
@@ -765,20 +848,186 @@ def benchmark(ckpt: Path, device: str, repeats: int = 20, raw: Path = DEFAULT_RA
             "n": len(times),
         }
 
+    # The shipped workload is the 4.0 s clip: 80 frames = 2 windows x 10 DDIM steps.
+    # Its two windows use the reference's own x_T when run-2's dumps are present
+    # (otherwise the single-window draw, which is enough for timing).
+    if (DEFAULT_RAW4 / "randn_1.npy").is_file():
+        x_t4 = [np.load(DEFAULT_RAW4 / f"randn_{w}.npy") for w in (0, 1)]
+    else:
+        x_t4 = [x_t, x_t]
+    clip80 = timed(
+        lambda: pipe.generate(
+            text, tmask, num_frames=frames * 2, num_steps=NUM_STEPS, cfg_weight=CFG_WEIGHT,
+            first_heading_angle=mx.array([0.0]), crop_history_length=CROP_HISTORY,
+            noise_fn=lambda i, shape: mx.array(x_t4[i % len(x_t4)]),
+        ),
+        max(3, repeats // 4),
+    )
+    # The new FK seam (0004 ruling 4) on the full clip: pure matrix algebra, so it
+    # should be noise next to the denoiser.
+    mean = np.load(ckpt / "stats" / "motion" / "mean.npy")
+    std = np.load(ckpt / "stats" / "motion" / "std.npy")
+    sel = list(range(5)) + list(range(9, mean.shape[0]))
+    ref80_path = DEFAULT_RAW4 / "motion_normalized.npy"
+    if not ref80_path.is_file():
+        ref80_path = raw / "motion_normalized.npy"
+    feats80 = mx.array(
+        np.asarray(np.load(ref80_path))[0] * np.sqrt(std[sel].astype(np.float32) ** 2 + 1e-5)
+        + mean[sel]
+    )
+    fk_times = timed(lambda: posed_joints_from_features(feats80), repeats)
+
     result["timings"] = {
         "tokenizer_encode": summarize(enc),
         "tokenizer_decode": summarize(dec),
         "denoiser_step_batch3": summarize(one_step),
         "full_clip_40f_10steps": summarize(clip),
+        "full_clip_80f_20steps": summarize(clip80),
+        "skeleton_fk_80f": summarize(fk_times),
     }
     result["peak_memory_bytes"] = int(mx.get_peak_memory())
     result["active_memory_bytes"] = int(mx.get_active_memory())
     return result
 
 
+def _load_cli_module():
+    """Import B's ``scripts/ardy_generate.py`` (read-only; A never edits it)."""
+    import importlib.util
+
+    path = ROOT / "scripts" / "ardy_generate.py"
+    spec = importlib.util.spec_from_file_location("ardy_generate_cli", path)
+    assert spec and spec.loader, f"cannot load {path}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def cli_acceptance(device: str = "gpu", keep_dir: Optional[str] = None) -> Dict:
+    """Drive B's CLI end to end with the reference ``x_T`` and compare to golden.
+
+    This is the "does the shipped command reproduce the reference" check, as
+    opposed to the level comparisons, which drive ``ArdyBatch`` directly.
+
+    Two deliberate choices:
+
+    * ``--history-frames 160`` is passed explicitly. It is the reference's own
+      batch default (``generate.py:209-210``) and what the CLI prints as
+      "init_history=160 (batch max)"; its *own* default is ``None``, which reaches
+      the model as ``crop_history_length=None`` and disables cropping, the
+      ``first_heading_angle`` refresh **and** the chunked decode -- measured 44x
+      the tolerance away from golden (the ``crop_history_length = None`` control).
+    * the noise is injected by patching ``mx.random.normal`` **in process**, not
+      with ``--noise-file``: that flag's multi-window branch compares
+      ``injected.shape[1:]`` (which still carries the batch axis) against
+      ``shape[1:]``, so a 2-window file never matches and the CLI silently falls
+      back to MLX's RNG for *every* window. Single-window injection works.
+      B's file is not modified -- same technique round 3 used for its sampler.
+    """
+    cli = _load_cli_module()
+    model_name = "ARDY-Core-RP-20FPS-Horizon40"
+    layout = PRESETS[model_name]
+    mean = np.load(DEFAULT_CKPT / "stats" / "motion" / "mean.npy")
+    std = np.load(DEFAULT_CKPT / "stats" / "motion" / "std.npy")
+    sel = list(range(5)) + list(range(9, mean.shape[0]))
+    real_normal = mx.random.normal
+    out: Dict = {}
+    for label, duration, raw, npz in (
+        ("2.0s/40f/1window", 2.0, DEFAULT_RAW, DEFAULT_NPZ),
+        ("4.0s/80f/2windows", 4.0, DEFAULT_RAW4, DEFAULT_NPZ4),
+    ):
+        num_frames = int(round(duration * layout.fps))
+        windows = int(np.ceil(num_frames / layout.horizon))
+        # run 1 did not dump ``randn_0.npy`` (the round-1 hook lost it); window 0
+        # has no history, so its starting latent *is* x_T.
+        ref_x = [
+            np.load(raw / (f"randn_{w}.npy" if windows > 1 else "denoise_step0_x_in.npy")).astype(
+                np.float32
+            )
+            for w in range(windows)
+        ]
+        served = {"n": 0}
+
+        def patched(shape, key=None, _ref=ref_x, _served=served):
+            i = _served["n"]
+            _served["n"] += 1
+            if i < len(_ref) and tuple(_ref[i].shape) == tuple(shape):
+                return mx.array(_ref[i])
+            return real_normal(shape, key=key) if key is not None else real_normal(shape)
+
+        tmp = Path(keep_dir or tempfile.mkdtemp(prefix="ardy-cli-"))
+        mx.random.normal = patched
+        try:
+            rc = cli.main([
+                "--embedding", str(raw / "text_feat.npy"),
+                "--prompt", "A person walks forward.",
+                "--backend", "mlx",
+                "--duration", str(duration),
+                "--seed", "0",
+                "--no-postprocess",
+                "--history-frames", str(layout.default_history_frames),
+                "--out", str(tmp),
+                "--device", device,
+            ])
+        finally:
+            mx.random.normal = real_normal
+        written = sorted((tmp / model_name).glob("*.npz"))
+        if rc != 0 or not written:
+            out[label] = {"exit_code": rc, "error": "CLI produced no npz"}
+            continue
+        z_cli = np.load(written[0])
+        z_gold = np.load(npz)
+        mine = np.asarray(z_cli["frames"])
+        gold_norm = np.load(raw / "motion_normalized.npy")
+        gold_frames = (
+            np.asarray(gold_norm)[0] * np.sqrt(std[sel].astype(np.float32) ** 2 + 1e-5)
+            + mean[sel]
+        )[None]
+        mine_norm = (mine - mean[sel]) / np.sqrt(std[sel].astype(np.float32) ** 2 + 1e-5)
+        sidecar = json.loads(written[0].with_suffix(".json").read_text())
+        entry = {
+            "exit_code": rc,
+            "windows": windows,
+            "rng_draws_injected": served["n"],
+            "num_frames": int(mine.shape[1]),
+            "frames": _stats(mine, gold_frames),
+            "motion_normalized": _stats(mine_norm, np.asarray(gold_norm)),
+            "root_positions_vs_npz": _stats(mine[0, :, :3], z_gold["root_positions"]),
+            "heading_vs_npz": _stats(mine[0, :, 3:5], z_gold["global_root_heading"]),
+            "sidecar": {
+                "num_frames": sidecar["num_frames"],
+                "crop_history_frames": sidecar["extra"]["init_history_frames"],
+                "posed_joints_source": sidecar["extra"]["posed_joints_source"],
+            },
+        }
+        entry.update(posed_joints_comparisons(mine, z_gold, with_controls=True))
+        out[label] = entry
+        if keep_dir is None:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+def _print_cli_acceptance(res: Dict, tol: float) -> List[str]:
+    fails: List[str] = []
+    for label, entry in res.items():
+        if "frames" not in entry:
+            fails.append(f"cli:{label}")
+            print(f"  FAIL {label}: {entry}")
+            continue
+        ok = entry["frames"]["max_abs"] <= tol
+        if not ok:
+            fails.append(f"cli:{label}")
+        print(
+            f"  {'OK ' if ok else 'FAIL'} {label:18s} frames max_abs={entry['frames']['max_abs']:.3e} "
+            f"ref|max|={entry['frames']['reference_abs_max']:.3f}  "
+            f"normalized={entry['motion_normalized']['max_abs']:.3e}  "
+            f"posed_joints(FK)={entry['posed_joints_vs_npz']['max_abs']:.3e}"
+        )
+    return fails
+
+
 def _print_level4(res: Dict, tol: float) -> List[str]:
     fails: List[str] = []
-    print(f"  window  history[frames]  tokens  future  x0_max_abs  ref|x0|max  geo_ok")
+    print("  window  history[frames]  tokens  future  x0_max_abs  ref|x0|max  geo_ok")
     for g in res["per_window"]:
         ok = "OK " if g["x0"]["max_abs"] <= tol else "FAIL"
         if g["x0"]["max_abs"] > tol or not g.get("geometry_matches_reference", False):
@@ -815,12 +1064,20 @@ def _print_level4(res: Dict, tol: float) -> List[str]:
     for name, st in res["final"].items():
         if not isinstance(st, dict) or "max_abs" not in st:
             continue
+        if name in DIAGNOSTIC_KEYS:
+            continue
         flag = "OK " if st["max_abs"] <= tol else "FAIL"
         if st["max_abs"] > tol:
             fails.append(f"final:{name}")
         print(f"  {flag} {name:26s} max_abs={st['max_abs']:.3e} ref|max|={st['reference_abs_max']:.3f}")
+    pj = res["final"].get("posed_joints_vs_npz")
+    pj_ph = res["final"].get("posed_joints_placeholder_vs_npz")
+    if pj and pj_ph:
+        print(f"  [0004 ruling 4] posed_joints: FK max_abs={pj['max_abs']:.3e} "
+              f"(ref|max|={pj['reference_abs_max']:.3f}) vs placeholder "
+              f"{pj_ph['max_abs']:.3e} -- the placeholder is the pre-FK behaviour")
     for c in res["chunks"]:
-        for key in ("frames", "root_positions_vs_npz", "heading_vs_npz"):
+        for key in ("frames", "root_positions_vs_npz", "heading_vs_npz", "posed_joints_vs_npz"):
             st = c.get(key)
             if not isinstance(st, dict):
                 continue
@@ -848,6 +1105,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="deliberately corrupt an input and assert the harness fails (single window)")
     ap.add_argument("--controls", action="store_true",
                     help="run every multi-window negative control and assert each one is detected")
+    ap.add_argument("--cli-acceptance", action="store_true",
+                    help="drive scripts/ardy_generate.py end to end with the reference x_T "
+                         "(both golden runs) and compare its npz with the golden clip")
     ap.add_argument("--json", default=None, help="write the full report to this path")
     args = ap.parse_args(argv)
 
@@ -890,6 +1150,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 fails = []
                 for name, st in res.items():
+                    if name in DIAGNOSTIC_KEYS:
+                        print(f"  REF {name:22s} max_abs={st['max_abs']:.3e} "
+                              f"(diagnostic, expected to be large)")
+                        continue
                     flag = "OK " if st["max_abs"] <= tol else "FAIL"
                     print(f"  {flag} {name:22s} max_abs={st['max_abs']:.3e} mean={st['mean_abs']:.3e} "
                           f"ref|max|={st['reference_abs_max']:.3f}")
@@ -924,6 +1188,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  {mark} {flag:13s} frames_max_abs={row['worst_max_abs']:.3e}  {row['control']}")
             if not row["matches_expectation"]:
                 rc = 1
+
+    if args.cli_acceptance:
+        print("--- CLI acceptance (scripts/ardy_generate.py, reference x_T injected) ---")
+        res = cli_acceptance(device=args.device)
+        report["cli_acceptance"] = res
+        if _print_cli_acceptance(res, TOLERANCES["L3"]):
+            rc = 1
 
     if not args.no_bench:
         report["benchmarks"] = []

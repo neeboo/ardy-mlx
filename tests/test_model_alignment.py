@@ -110,8 +110,32 @@ def test_L2_denoiser_single_step_all_ten_steps(harness):
 def test_L3_full_clip(harness):
     res = harness.level3()
     for name, st in res.items():
+        if name in align.DIAGNOSTIC_KEYS:
+            # The pre-FK ``posed_joints`` placeholder and the broken-hierarchy FK
+            # control are *supposed* to miss (0004 ruling 4); asserting they are
+            # large is what keeps the real FK number from being vacuous.
+            assert st["max_abs"] > TOL, (name, st)
+            continue
         assert st["max_abs"] <= TOL, f"{name}: max_abs={st['max_abs']:.3e} (tol {TOL:g})"
     assert res["frames"]["shape"] == [1, 40, 330]
+
+
+def test_L3_posed_joints_fk_is_the_real_thing(harness):
+    """``0004`` ruling 4: FK replaces the placeholder and matches the golden npz.
+
+    Before the FK landed the placeholder was 0.132 off; the FK chain
+    (``global_rot_data`` -> matrices -> local rotations -> skeleton FK) is four
+    orders of magnitude tighter, and the broken-hierarchy control proves the
+    comparison can still fail.
+    """
+    res = harness.level3()
+    fk = res["posed_joints_vs_npz"]
+    placeholder = res["posed_joints_placeholder_vs_npz"]
+    broken = res["posed_joints_flat_hierarchy_vs_npz"]
+    assert fk["max_abs"] <= 1e-5, fk
+    assert fk["reference_abs_max"] > 1.0  # the target is O(1) metres, not noise
+    assert placeholder["max_abs"] > 0.1  # the recorded pre-FK error
+    assert broken["max_abs"] > TOL  # wrong hierarchy must be detected
 
 
 def test_L3_root_matches_the_reference_npz_physical_values(harness):
