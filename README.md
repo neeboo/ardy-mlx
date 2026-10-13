@@ -20,7 +20,7 @@ see [`NOTICE`](NOTICE) and [`docs/decisions/0002-checkpoint-terms.md`](docs/deci
 | Sampler chain (cosine β schedule, DDIM `eta=0`, separated 3-pass CFG, autoregressive windows) | implemented; every one of the 10 DDIM steps asserted per window | [`docs/motion-contract.md`](docs/motion-contract.md) §4, [`artifacts/align-report.json`](artifacts/align-report.json) |
 | Alignment, single window (2.0 s / 40 frames / 1 window) | `frames` **1.869e-05** (L1 ≤7.0e-06, L2 ≤5.4e-05) | `align-report.json` → `levels.L3`; baseline [`0003`](docs/decisions/0003-alignment-baseline.md) |
 | Alignment, multi-window (4.0 s / 80 frames / 2 windows) | `frames` **3.543e-05**, per chunk 3.543e-05 / 3.054e-05, 20 DDIM steps raw 8.48e-05 / CFG 9.11e-05 / DDIM 1.66e-05 | `align-report.json` → `levels.L4`; baseline [`0005`](docs/decisions/0005-multi-window-alignment.md) |
-posed_joints is now real skeleton FK (CoreSkeleton27, from the reference source) wired into the CLI sidecar: 0.132/0.236 before, 5.178e-06/4.813e-06 after, matching the golden npz
+| `posed_joints` (world joint positions) | **real skeleton FK** now: **5.178e-06** (2.0 s) / **4.813e-06** (4.0 s) against the golden npz, vs **0.132 / 0.236** for the placeholder it replaced | [`src/ardy_mlx/model/skeleton.py`](src/ardy_mlx/model/skeleton.py), contract §11 (N14) |
 | CLI (`scripts/ardy_generate.py`, `--backend mlx` = this side's `ArdyBatch`) | reproduces both golden clips end to end: **1.869e-05** / **3.543e-05** | `align-report.json` → `cli_acceptance` |
 | Seam for the sampling side: `make_step_fn` | `ArdyBatch` exposed as the `DenoiseRequest → DenoiseResult` callable `ardy_mlx.sampling.ArdySampler` expects | [`src/ardy_mlx/model/ardy.py`](src/ardy_mlx/model/ardy.py) |
 | Negative controls (tolerance falsifiability) | 11 multi-window + 1 single-window + 1 FK control, all as expected (incl. 3 deliberately vacuous ones, recorded as such) | `align-report.json` → `negative_controls_multi`, `levels.*` diagnostics |
@@ -37,7 +37,7 @@ posed_joints is now real skeleton FK (CoreSkeleton27, from the reference source)
 | multi-window `motion_normalized` | 7.620e-05 | `levels.L4.comparisons.final.motion_normalized` |
 | root / heading vs the reference npz (4.0 s) | 4.709e-06 / 1.866e-06 | `levels.L4.comparisons.final` |
 | `posed_joints` (FK) vs the reference npz | 5.178e-06 (2.0 s), 4.813e-06 (4.0 s) | `levels.L3/L4` → `posed_joints_vs_npz` |
-posed_joints is now real skeleton FK (CoreSkeleton27, from the reference source) wired into the CLI sidecar: 0.132/0.236 before, 5.178e-06/4.813e-06 after, matching the golden npz
+| `posed_joints` placeholder (pre-FK), for contrast | 0.132 (2.0 s), 0.236 (4.0 s) | `posed_joints_placeholder_vs_npz` (diagnostic) |
 | FK negative control (broken hierarchy) | 0.651 -- 651x the tolerance | `posed_joints_flat_hierarchy_vs_npz` (diagnostic) |
 | CLI end-to-end, 2.0 s / 4.0 s | 1.869e-05 / 3.543e-05 | `cli_acceptance` |
 | full clip 80 frames / 20 steps, **Metal** | p50 **527 ms**, p90 1045 ms (shared host, loadavg 17.0); 527–977 ms over the 10 recorded Metal passes (loadavg 13.7–20.4) | `benchmarks` / `benchmark_passes` |
@@ -53,7 +53,7 @@ O(1e-1), which is what the negative controls demonstrate (`x_T += 0.25` → **2.
 
 ## Boundaries: what is *not* true
 
-posed_joints is now real skeleton FK (CoreSkeleton27, from the reference source) wired into the CLI sidecar: 0.132/0.236 before, 5.178e-06/4.813e-06 after, matching the golden npz
+1. **`posed_joints` in the *files* the CLI writes is still the placeholder.**
    This side's FK is real and aligned (`posed_joints_from_features`, 5.2e-06 / 4.8e-06), but
    `scripts/ardy_generate.py` still exports `synthesize_posed_joints` and labels it
    `"…real FK not implemented"` — B's side of that one line is outstanding, so **before it is
