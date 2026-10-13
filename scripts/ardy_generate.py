@@ -56,6 +56,7 @@ from ardy_mlx.sampling.demo import make_demo_denoise_fn, sanitize_placeholder_ou
 from ardy_mlx.sampling.diffusion import resolve_num_steps  # noqa: E402
 from ardy_mlx.sampling.pipeline import (  # noqa: E402
     POSED_JOINTS_SOURCE,
+    build_mlx_runner,
     compute_feature_layout,
     duration_to_frames,
     load_text_embedding,
@@ -405,78 +406,62 @@ def _run_mlx_backend(
     reproducible in MLX (A's module docstring), so absolute equality with the
     reference needs the reference's own ``x_T`` (the align harness injects it, or
     ``--noise-file`` supplies one entry per window, validated in :func:`main`).
+
+    The loader itself is :func:`ardy_mlx.sampling.pipeline.build_mlx_runner`, which
+    the browser viewer calls too: one loader means ``--backend mlx`` and
+    ``scripts/ardy_viewer.py`` cannot drift into two different definitions of "the
+    standard path".
     """
-    from ardy_mlx.model.ardy import ArdyBatch
-    from ardy_mlx.model.denoiser import AutoLatentTwostageDenoiser
-    from ardy_mlx.model.fsq import FSQVAETransformer
-    from ardy_mlx.model.motion_rep import MotionRep
-    from ardy_mlx.model.nn import WeightStore
+    try:
+        runner = build_mlx_runner(
+            args.model,
+            embedding,
+            checkpoint_dir=args.checkpoint_dir,
+            device=args.device,
+            repo_root=REPO_ROOT,
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(f"error: {exc}") from None
+    ckpt = runner.checkpoint_dir
+    window_shape = runner.noise_window_shape
 
-    ckpt = Path(args.checkpoint_dir) if args.checkpoint_dir else (REPO_ROOT / "checkpoints" / args.model)
-    if not ckpt.is_dir():
-        raise SystemExit(f"error: checkpoint directory not found: {ckpt}")
-    tokenizer_weights = ckpt / "mlx" / "tokenizer.mlx.safetensors"
-    denoiser_weights = ckpt / "mlx" / "denoiser.mlx.safetensors"
-    for path in (tokenizer_weights, denoiser_weights):
-        if not path.exists():
-            raise SystemExit(
-                f"error: {path} is missing; run scripts/ardy_convert.py first "
-                "(see docs/status-deepseek.md)"
-            )
-
-    mx.set_default_device(mx.gpu if args.device == "gpu" else mx.cpu)
-    motion_rep = MotionRep(ckpt / "stats" / "motion")
-    tokenizer = FSQVAETransformer(WeightStore.load(tokenizer_weights), motion_rep).load_stats(
-        ckpt / "stats"
-    )
-    denoiser = AutoLatentTwostageDenoiser(WeightStore.load(denoiser_weights), motion_rep)
-    batch_pipe = ArdyBatch(tokenizer, denoiser, motion_rep)
-
-    base_key = mx.random.key(int(args.seed)) if args.seed is not None else mx.random.key(0)
-    step_keys = list(mx.random.split(base_key, windows))
-    window_shape = (
-        embedding.batch_size,
-        layout.horizon // NUM_FRAMES_PER_TOKEN,
-        layout.dim_token,
-    )
-
-    def noise_fn(step, shape):
+    def injected_noise(step, shape):
         # ``--noise-file`` reproduces the reference x_T: one entry per window
         # (single-window files are only accepted for single-window runs). A shape
         # mismatch or a short file already raised in ``main``; it must never fall
         # back to MLX's RNG, because that error is O(1) and silent (contract S11 N16).
-        if noise_windows is not None:
-            if tuple(shape) != window_shape:
-                raise ValueError(
-                    f"model asked for noise shape {tuple(shape)} but this run was validated "
-                    f"for {window_shape}; refusing to inject a mismatched x_T"
-                )
-            return mx.array(noise_windows[min(step, len(noise_windows) - 1)])
-        return mx.random.normal(shape, key=step_keys[min(step, len(step_keys) - 1)]).astype(
-            mx.float32
-        )
+        if tuple(shape) != window_shape:
+            raise ValueError(
+                f"model asked for noise shape {tuple(shape)} but this run was validated "
+                f"for {window_shape}; refusing to inject a mismatched x_T"
+            )
+        return mx.array(noise_windows[min(step, len(noise_windows) - 1)])
 
-    out = batch_pipe.generate(
-        embedding.embeddings,
-        embedding.mask,
+    out = runner.generate(
         num_frames=total_frames,
         num_steps=num_steps,
         cfg_weight=cfg_weight,
-        first_heading_angle=mx.zeros((embedding.batch_size,)),
-        crop_history_length=history_frames,
-        noise_fn=noise_fn,
+        history_frames=history_frames,
+        noise_fn=injected_noise if noise_windows is not None else None,
+        seed=args.seed,
+        windows=windows,
     )
     frames = out["frames"].astype(mx.float32)
     return {
         **_common_outputs(frames, layout),
-        "offsets": list(out["offsets"]),
+        "offsets": out["offsets"],
         "extra": {
             "mode": "dense",
-            "init_history_frames": history_frames,
+            "init_history_frames": out["history_frames"],
             "num_autoregressive_steps": max(len(out["offsets"]) - 1, 0),
             "posed_joints_source": POSED_JOINTS_SOURCE,
-            "noise": "mlx.random (CUDA Philox x_T is not reproducible; align injects the reference x_T)",
+            "noise": (
+                "mlx.random (CUDA Philox x_T is not reproducible; align injects the reference x_T)"
+                if noise_windows is None
+                else f"--noise-file ({len(noise_windows)} window(s))"
+            ),
             "checkpoint_dir": str(ckpt),
+            "load_seconds": runner.load_seconds,
         },
     }
 

@@ -7,3 +7,25 @@ checkpoints/*
 !checkpoints/.gitkeep
 out/
 .DS_Store
+
+# ---------------------------------------------------------------------------
+# Weight-derived data: never committed, wherever it lives.
+#
+# This is a blanket rule on purpose. `artifacts/golden-run*/{raw,out}` have their
+# own .gitignore files, but a rule that only covers the paths we happened to
+# think of is how a 16 KB embedding or a 90 KB reference clip ends up in a
+# commit. The audit is:
+#
+#   git ls-files | grep -E '\.(safetensors|npz|npy)$|golden-run[^/]*/(raw|out)/'
+#
+# and it must print nothing.
+# ---------------------------------------------------------------------------
+*.npz
+*.npy
+*.safetensors
+
+# The viewer's cached text embeddings (artifacts/embeddings/<prompt-hash>.npy).
+# Documented in embeddings/README.md; regenerated on the reference machine.
+artifacts/embeddings/*
+!artifacts/embeddings/.gitkeep
+

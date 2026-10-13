@@ -48,6 +48,26 @@ English: [README.md](README.md)
 （实测 1e-7~9e-5，而信号是 O(1)）；结构性错误是 O(1e-1)——负对照正是为此
 （`x_T += 0.25` → **2.556**）。
 
+## 浏览器查看器
+
+一个本地页面：用 MLX checkpoint **现场采样**一段动作，在 CoreSkeleton27 骨架上播放，
+并能叠加**相同时长**的金标准那支作对照。完整文档（含接口与诚实边界）：
+[`docs/VIEWER.md`](docs/VIEWER.md)。
+
+```sh
+./.venv/bin/python scripts/ardy_viewer.py --port 8850     # 然后打开 http://127.0.0.1:8850/
+```
+
+| 部件 | 状态 | 证据 |
+|---|---|---|
+| `scripts/ardy_viewer.py` | 单线程回环 HTTP 服务（MLX 的 GPU stream 是 thread-local，所以**加载与处理请求同一个线程**）；`/api/health`、`/api/plan`、`/api/reference` | [`docs/VIEWER.md`](docs/VIEWER.md) §2、§7 |
+| `/api/plan` 2.0 s / 40 帧，注入金标准 `x_T` | 热态采样 **113–152 ms**，首次 248 ms（机器忙时 350 ms）；`posed_joints` 与金标准 npz 差 **5.178e-06** | `docs/VIEWER.md` §7 |
+| `/api/plan` 4.0 s / 80 帧 / 2 窗口，注入金标准 `x_T` | 采样 **281–315 ms**（机器忙时 794 ms）；差 **4.813e-06** | `docs/VIEWER.md` §7 |
+| prompt 选择 | 只能选**已缓存 embedding**（`artifacts/embeddings/<prompt-hash>.npy`）；找不到就报 `no_cached_embedding_for_prompt`，**绝不回退** | [`embeddings/README.md`](embeddings/README.md) |
+| 时长输入 | 必须是 horizon 的整数倍，否则 `duration_not_horizon_multiple` | `docs/VIEWER.md` §2 |
+| 查看器测试 | 4 个文件：接口、HTTP/目录包含、负对照、真权重端到端——前两个不需要 checkpoint | `docs/VIEWER.md` §8 |
+| 加载器 | 查看器与 `--backend mlx` 共用 `pipeline.build_mlx_runner`；有测试断言两者逐位产出同一段动作 | `docs/VIEWER.md` §5 |
+
 ## 边界：哪些话**不**成立
 
 1. **CLI 落盘的 `posed_joints` 已是真实骨架 FK**（CoreSkeleton27，转录自参考源码）并接进 sidecar：接线前 0.132（2.0 s）/ 0.236（4.0 s），接线后 5.178e-06 / 4.813e-06，与金标准 npz 一致。
@@ -94,7 +114,12 @@ CLI 自己的 `--history-frames` 默认值是 `None`，**会同时关掉裁剪�
     --duration 4.0 --seed 0 --no-postprocess --history-frames 160 --out out
 
 # 测试
-./.venv/bin/python -m pytest -q          # 199 passed, 1 xfailed
+./.venv/bin/python -m pytest -q          # 303 passed, 1 xfailed
+#   其中 199 个在查看器之前就有；tests/test_viewer_*.py 新增 89 个
+
+# 浏览器查看器
+./.venv/bin/python scripts/ardy_viewer.py --port 8850     # 然后 http://127.0.0.1:8850/
+./.venv/bin/python -m pytest tests/test_viewer_api.py tests/test_viewer_http.py -q
 ```
 
 金标准 npz、参考运行的 dump、以及转换后的权重**都不入库**
@@ -111,7 +136,13 @@ src/ardy_mlx/sampling/      采样侧自己的链（B）：调度、CFG、自回
 scripts/ardy_convert.py     参考 checkpoint → MLX safetensors（逐字节核验）
 scripts/ardy_align.py       对齐 ＋ 验收 ＋ 性能的验收台
 scripts/ardy_generate.py    CLI（契约 §7 产物：npz ＋ json sidecar）
+scripts/ardy_viewer.py      浏览器查看器的 HTTP 服务（＋ 生成接口）
+viewer/                     页面本体：index.html、app.js、rig.js（CoreSkeleton27）、
+                            style.css，以及 vendor/ 下一份逐字节复制的 three.js
+artifacts/embeddings/       查看器可选的缓存文本 embedding（**不入库**）
+embeddings/README.md        怎么新增一个 prompt 的 embedding
 docs/motion-contract.md     A/B 数据契约（字段、单位、逐行证据）
+docs/VIEWER.md              查看器：起停、接口、页面功能、复用与归属、诚实边界
 docs/decisions/             裁定：checkpoint 条款、容差、契约问题、两条基线
 docs/status-deepseek.md     A 侧状态日志（第 1–4 轮，含仍未验证清单）
 ```

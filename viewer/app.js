@@ -1,0 +1,688 @@
+// viewer/app.js -- ardy-mlx browser viewer.
+//
+// Written for this repository. The page drives three endpoints on
+// `scripts/ardy_viewer.py`:
+//
+//   GET  /api/health                     -> device, parameters, cold start, cached prompts, skeleton
+//   POST /api/plan  {prompt, seed, ...}  -> one generated clip (posed_joints, contacts, timing)
+//   GET  /api/reference?duration=&prompt= -> the golden clip for that exact duration, or a named error
+//
+// Two rules the page enforces rather than hides:
+//
+//   * a prompt is one of the *cached* embeddings, addressed by its hash. The
+//     server answers a miss with `no_cached_embedding_for_prompt`; this page shows
+//     that name verbatim and never substitutes another prompt;
+//   * `duration` must be a whole number of ARDY generation horizons. The input
+//     steps by one horizon and the server rejects anything else, so the page
+//     cannot quietly round a request into a different clip.
+//
+// Frames arrive base64-encoded float32 (`posed_joints`, `root_positions`), so what
+// is drawn is the server's float32 bit-for-bit, with no JSON round-trip through
+// a decimal representation.
+
+import * as THREE from './vendor/three.module.min.js';
+import { Rig, clipBounds } from './rig.js';
+
+const viewport = document.querySelector('#viewport');
+const html = document.documentElement;
+
+const els = {
+  promptSelect: document.querySelector('#prompt-select'),
+  promptHelp: document.querySelector('#prompt-help'),
+  seedInput: document.querySelector('#seed-input'),
+  seedNext: document.querySelector('#seed-next'),
+  durationInput: document.querySelector('#duration-input'),
+  durationStep: document.querySelector('#duration-step'),
+  durationHelp: document.querySelector('#duration-help'),
+  noiseSelect: document.querySelector('#noise-select'),
+  noiseHelp: document.querySelector('#noise-help'),
+  generate: document.querySelector('#generate'),
+  reload: document.querySelector('#reload'),
+  playPause: document.querySelector('#play-pause'),
+  frameLabel: document.querySelector('#frame-label'),
+  frameSlider: document.querySelector('#frame-slider'),
+  resetCamera: document.querySelector('#reset-camera'),
+  fitCamera: document.querySelector('#fit-camera'),
+  goldenToggle: document.querySelector('#golden-toggle'),
+  goldenHelp: document.querySelector('#golden-help'),
+  contactsToggle: document.querySelector('#contacts-toggle'),
+  trailToggle: document.querySelector('#trail-toggle'),
+  status: document.querySelector('#status'),
+  errorBox: document.querySelector('#error-box'),
+  hud: {
+    clip: document.querySelector('#hud-clip'),
+    model: document.querySelector('#hud-model'),
+    frames: document.querySelector('#hud-frames'),
+    generate: document.querySelector('#hud-generate'),
+    fps: document.querySelector('#hud-fps'),
+    noise: document.querySelector('#hud-noise'),
+    embedding: document.querySelector('#hud-embedding'),
+  },
+  stats: {
+    model: document.querySelector('#stat-model'),
+    device: document.querySelector('#stat-device'),
+    params: document.querySelector('#stat-params'),
+    coldStart: document.querySelector('#stat-coldstart'),
+    generate: document.querySelector('#stat-generate'),
+    frames: document.querySelector('#stat-frames'),
+    windows: document.querySelector('#stat-windows'),
+    fps: document.querySelector('#stat-fps'),
+    clipFps: document.querySelector('#stat-clipfps'),
+    noise: document.querySelector('#stat-noise'),
+    embedding: document.querySelector('#stat-embedding'),
+    prompt: document.querySelector('#stat-prompt'),
+    endpoint: document.querySelector('#stat-endpoint'),
+  },
+};
+
+// ---------------------------------------------------------------------------
+// scene
+// ---------------------------------------------------------------------------
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x080a0f, 0.035);
+const camera = new THREE.PerspectiveCamera(42, 1, 0.02, 200);
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+viewport.append(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xcde4ff, 0x25322a, 2.4));
+const keyLight = new THREE.DirectionalLight(0xffffff, 3.0);
+keyLight.position.set(3.5, 7, 4);
+scene.add(keyLight);
+const rimLight = new THREE.DirectionalLight(0x6be6ba, 1.1);
+rimLight.position.set(-4, 3, -3.5);
+scene.add(rimLight);
+
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(60, 60),
+  new THREE.MeshStandardMaterial({ color: 0x0d121a, roughness: 0.96, metalness: 0.02 }),
+);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -0.014;
+scene.add(floor);
+const grid = new THREE.GridHelper(24, 48, 0x3a4b5d, 0x1d2733);
+scene.add(grid);
+// 1 m reference squares: the grid alone does not say how far "forward" is.
+const metreGrid = new THREE.GridHelper(24, 24, 0x24414f, 0x24414f);
+metreGrid.position.y = 0.001;
+scene.add(metreGrid);
+
+// ---------------------------------------------------------------------------
+// camera (drag to orbit, wheel to zoom, double-click to reset)
+// ---------------------------------------------------------------------------
+const cameraView = {
+  yaw: 0.7, pitch: 0.22, distance: 4.6, dragging: false, x: 0, y: 0,
+  focus: new THREE.Vector3(0, 0.75, 0),
+};
+const desiredCamera = new THREE.Vector3();
+
+function resetCameraView() {
+  cameraView.yaw = 0.7;
+  cameraView.pitch = 0.22;
+  cameraView.distance = 4.6;
+  cameraView.focus.set(0, 0.75, 0);
+}
+
+function fitCameraToClip() {
+  const clip = state.clip;
+  if (!clip || !clip.jointCount || !clip.frameCount) return;
+  const box = clipBounds(clip.joints, clip.frameCount, clip.jointCount);
+  if (box.isEmpty()) return;
+  box.getCenter(cameraView.focus);
+  cameraView.focus.y = Math.max(0.45, cameraView.focus.y);
+  const size = box.getSize(new THREE.Vector3());
+  const reach = Math.max(size.x, size.y, size.z, 0.6);
+  cameraView.distance = THREE.MathUtils.clamp(reach * 2.6, 2.2, 24);
+}
+
+function resize() {
+  const width = Math.max(1, viewport.clientWidth);
+  const height = Math.max(1, viewport.clientHeight);
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(viewport);
+
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  cameraView.dragging = true;
+  cameraView.x = event.clientX;
+  cameraView.y = event.clientY;
+  renderer.domElement.setPointerCapture(event.pointerId);
+});
+renderer.domElement.addEventListener('pointermove', (event) => {
+  if (!cameraView.dragging) return;
+  cameraView.yaw -= (event.clientX - cameraView.x) * 0.006;
+  cameraView.pitch = THREE.MathUtils.clamp(
+    cameraView.pitch + (event.clientY - cameraView.y) * 0.004, -0.08, 1.15);
+  cameraView.x = event.clientX;
+  cameraView.y = event.clientY;
+});
+const endDrag = (event) => {
+  cameraView.dragging = false;
+  if (event.pointerId !== undefined && renderer.domElement.hasPointerCapture(event.pointerId)) {
+    renderer.domElement.releasePointerCapture(event.pointerId);
+  }
+};
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+renderer.domElement.addEventListener('wheel', (event) => {
+  cameraView.distance = THREE.MathUtils.clamp(
+    cameraView.distance * Math.exp(event.deltaY * 0.001), 1.2, 30);
+  event.preventDefault();
+}, { passive: false });
+renderer.domElement.addEventListener('dblclick', resetCameraView);
+
+// ---------------------------------------------------------------------------
+// state
+// ---------------------------------------------------------------------------
+const state = {
+  health: null,
+  skeleton: null,
+  clip: null,        // {joints, roots, contacts, frameCount, jointCount, meta}
+  golden: null,      // same shape, or null
+  goldenKey: null,   // `${duration}|${prompt}` the loaded golden answers
+  rig: null,
+  goldenRig: null,
+  playhead: 0,
+  playing: true,
+  lastTime: performance.now(),
+  fpsWindow: [],
+  fps: 0,
+  busy: false,
+  requestId: 0,
+};
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+function setStatus(text, isError = false) {
+  els.status.textContent = text;
+  els.status.dataset.error = isError ? 'true' : 'false';
+  html.dataset.viewerStatus = isError ? 'error' : 'ready';
+}
+
+function showError(name, message, detail) {
+  els.errorBox.hidden = false;
+  els.errorBox.innerHTML = '';
+  const head = document.createElement('div');
+  head.innerHTML = `<code>${name}</code>`;
+  const body = document.createElement('div');
+  body.textContent = message;
+  els.errorBox.append(head, body);
+  if (detail) {
+    const extra = document.createElement('div');
+    extra.textContent = detail;
+    els.errorBox.append(extra);
+  }
+}
+
+function clearError() {
+  els.errorBox.hidden = true;
+  els.errorBox.textContent = '';
+}
+
+function fmtMs(ms) {
+  if (ms === null || ms === undefined) return '—';
+  if (ms < 1000) return `${ms.toFixed(0)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
+function fmtCount(value) {
+  if (value === null || value === undefined) return '—';
+  return value.toLocaleString('en-US');
+}
+
+function shortHash(hash, keep = 12) {
+  if (!hash) return '—';
+  return hash.length <= keep * 2 ? hash : `${hash.slice(0, keep)}…${hash.slice(-6)}`;
+}
+
+/** Decode a base64 string of little-endian float32 into a Float32Array. */
+function decodeFloat32(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+}
+
+/** Decode a base64 string of 0/1 bytes into a Uint8Array. */
+function decodeUint8(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function getJson(url, options) {
+  const response = await fetch(url, options);
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    throw Object.assign(new Error(`${url} did not return JSON (HTTP ${response.status})`), {
+      errorName: 'not_json',
+    });
+  }
+  if (!response.ok) {
+    const err = new Error(payload && payload.message ? payload.message : `HTTP ${response.status}`);
+    err.errorName = (payload && payload.error) || `http_${response.status}`;
+    err.payload = payload;
+    throw err;
+  }
+  return payload;
+}
+
+// ---------------------------------------------------------------------------
+// server round trips
+// ---------------------------------------------------------------------------
+async function loadHealth() {
+  const health = await getJson('/api/health');
+  state.health = health;
+  state.skeleton = health.skeleton;
+  populatePrompts(health);
+  populateDuration(health);
+  els.stats.device.textContent = `${health.device.name} (${health.device.backend})`;
+  els.stats.model.textContent = health.model;
+  els.stats.params.textContent = fmtCount(health.parameters);
+  els.stats.coldStart.textContent = fmtMs(health.cold_start_s * 1000);
+  els.hud.model.textContent = health.model;
+  html.dataset.viewerStatus = 'ready';
+  return health;
+}
+
+function populatePrompts(health) {
+  els.promptSelect.innerHTML = '';
+  if (!health.embeddings.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'no cached embedding';
+    els.promptSelect.append(option);
+    els.promptSelect.disabled = true;
+    els.generate.disabled = true;
+    els.promptHelp.textContent = 'No cached embedding is on disk. See embeddings/README.md.';
+    return;
+  }
+  for (const entry of health.embeddings) {
+    const option = document.createElement('option');
+    option.value = entry.prompt_hash;
+    option.textContent = `${entry.text}  ·  ${entry.prompt_hash.slice(0, 10)}`;
+    els.promptSelect.append(option);
+  }
+  els.promptSelect.disabled = false;
+  els.generate.disabled = false;
+  updatePromptHelp();
+}
+
+function selectedEmbedding() {
+  const hash = els.promptSelect.value;
+  return (state.health?.embeddings ?? []).find((entry) => entry.prompt_hash === hash) ?? null;
+}
+
+function updatePromptHelp() {
+  const entry = selectedEmbedding();
+  if (!entry) {
+    els.promptHelp.textContent = '—';
+    return;
+  }
+  els.promptHelp.textContent =
+    `prompt sha256 ${entry.prompt_hash} · embedding ${entry.embedding_sha256.slice(0, 16)}… · `
+    + `${entry.tokens} token(s)`;
+}
+
+function populateDuration(health) {
+  const step = health.duration_step_s;
+  els.durationInput.step = String(step);
+  els.durationInput.min = String(step);
+  if (Number(els.durationInput.value) % step !== 0) {
+    els.durationInput.value = String(step);
+  }
+  els.durationHelp.textContent =
+    `Must be a whole number of ${health.horizon}-frame horizons `
+    + `(${step.toFixed(2)} s at ${health.fps} fps). Anything else is rejected by the server `
+    + `as duration_not_horizon_multiple.`;
+  const golden = health.golden_references.map((r) => `${r.duration_s.toFixed(1)}s`).join(', ');
+  els.noiseHelp.textContent =
+    `golden injects the reference x_T recorded with artifacts/golden-run* (available for: `
+    + `${golden || 'none'}). random is MLX's own RNG, which is not CUDA's Philox stream, so a `
+    + `random clip is a valid sample but not a reference reproduction.`;
+  updateGoldenHelp();
+}
+
+function updateGoldenHelp() {
+  if (!state.health) return;
+  const duration = Number(els.durationInput.value);
+  const entry = state.health.golden_references.find((r) => r.duration_s === duration);
+  if (!entry) {
+    els.goldenHelp.textContent =
+      `No golden clip exists for ${duration.toFixed(1)} s. The toggle will report that by name `
+      + `rather than showing a different clip.`;
+    els.goldenHelp.classList.add('warn');
+  } else {
+    els.goldenHelp.textContent =
+      `A golden clip exists for ${duration.toFixed(1)} s (${entry.npz_path}); `
+      + `it is the reference implementation's own output.`;
+    els.goldenHelp.classList.remove('warn');
+  }
+}
+
+async function generateClip() {
+  if (state.busy) return;
+  const entry = selectedEmbedding();
+  if (!entry) {
+    showError('no_cached_embedding_for_prompt',
+      'Select a cached prompt first; this viewer cannot encode text.');
+    setStatus('No cached embedding selected.', true);
+    return;
+  }
+  const duration = Number(els.durationInput.value);
+  const seed = Number(els.seedInput.value);
+  const noise = els.noiseSelect.value;
+  state.busy = true;
+  els.generate.disabled = true;
+  clearError();
+  setStatus(`Generating ${duration.toFixed(1)} s with ${noise} noise…`);
+  const requestId = ++state.requestId;
+  const startedAt = performance.now();
+  try {
+    const payload = await getJson('/api/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: entry.prompt_hash, seed, duration, noise }),
+    });
+    if (requestId !== state.requestId) return;
+    installClip(payload, 'mine');
+    setStatus(`Generated ${payload.frames} frames in ${fmtMs(payload.generate_ms)}.`);
+  } catch (error) {
+    if (requestId !== state.requestId) return;
+    const name = error.errorName || 'request_failed';
+    showError(name, error.message, error.payload && error.payload.detail);
+    setStatus(`Failed: ${name}`, true);
+    els.hud.generate.textContent = fmtMs(performance.now() - startedAt);
+  } finally {
+    state.busy = false;
+    els.generate.disabled = false;
+  }
+}
+
+async function loadReference(force = false) {
+  if (!state.health) return;
+  const duration = Number(els.durationInput.value);
+  const entry = selectedEmbedding();
+  const key = `${duration}|${entry ? entry.prompt_hash : ''}`;
+  if (!force && state.goldenKey === key && state.golden) return;
+  try {
+    const payload = await getJson(
+      `/api/reference?duration=${encodeURIComponent(duration)}`
+      + `&prompt=${encodeURIComponent(entry ? entry.prompt_hash : '')}`);
+    state.golden = payload;
+    state.goldenKey = key;
+    installClip(payload, 'golden');
+    els.hud.clip.textContent = `mine + golden (${payload.duration_s.toFixed(1)} s)`;
+  } catch (error) {
+    const name = error.errorName || 'request_failed';
+    state.golden = null;
+    state.goldenKey = null;
+    if (state.goldenRig) {
+      state.goldenRig.dispose();
+      state.goldenRig = null;
+    }
+    showError(name, error.message, error.payload && error.payload.detail);
+    setStatus(`Golden reference unavailable: ${name}`, true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// clip installation
+// ---------------------------------------------------------------------------
+function decodeClip(payload) {
+  return {
+    joints: decodeFloat32(payload.posed_joints_b64),
+    roots: decodeFloat32(payload.root_positions_b64),
+    contacts: payload.foot_contacts_b64 ? decodeUint8(payload.foot_contacts_b64) : null,
+    frameCount: payload.frames,
+    jointCount: payload.joints,
+    fps: payload.fps,
+    duration: payload.duration_s,
+    meta: payload,
+  };
+}
+
+function installClip(payload, role) {
+  const clip = decodeClip(payload);
+  if (role === 'golden') {
+    if (state.goldenRig) state.goldenRig.dispose();
+    state.golden = clip;
+    state.goldenRig = new Rig(scene, state.skeleton, {
+      boneRadius: 0.010,
+      jointRadius: 0.011,
+      rootRadius: 0.018,
+      trailColor: 0xf4b860,
+      contactColor: 0xf4b860,
+      contactRadius: 0.038,
+    });
+    state.goldenRig.setTrail(clip.roots, clip.frameCount);
+    state.goldenRig.setOpacity(0.5);
+    state.goldenRig.setVisible(els.goldenToggle.checked);
+  } else {
+    if (state.rig) state.rig.dispose();
+    state.clip = clip;
+    state.rig = new Rig(scene, state.skeleton, {});
+    state.rig.setTrail(clip.roots, clip.frameCount);
+    state.rig.setVisible(true);
+    state.playhead = 0;
+    els.frameSlider.max = String(Math.max(0, clip.frameCount - 1));
+    els.frameSlider.value = '0';
+    // The camera is only refitted for a fresh clip, never per frame.
+    fitCameraToClip();
+    updateHudForClip(payload);
+  }
+  updateFrameLabel();
+}
+
+function updateHudForClip(payload) {
+  els.hud.model.textContent = payload.model;
+  els.hud.frames.textContent = `${payload.frames} @ ${payload.fps} fps`;
+  els.hud.generate.textContent = fmtMs(payload.generate_ms);
+  els.hud.noise.textContent = payload.noise.mode === 'golden'
+    ? `golden x_T (${payload.noise.source_files.length} window file(s))`
+    : `random (seed ${payload.noise.seed})`;
+  els.hud.noise.className = `hud-value ${payload.noise.mode === 'golden' ? 'is-golden' : 'is-mine'}`;
+  els.hud.embedding.textContent = `${payload.embedding.prompt_hash} · ${payload.embedding.embedding_sha256.slice(0, 12)}…`;
+  els.hud.embedding.title = payload.embedding.embedding_path;
+
+  els.stats.generate.textContent = fmtMs(payload.generate_ms);
+  els.stats.frames.textContent = fmtCount(payload.frames);
+  els.stats.windows.textContent = String(payload.windows);
+  els.stats.clipFps.textContent = `${payload.fps} fps`;
+  els.stats.noise.textContent = payload.noise.mode === 'golden' ? 'golden x_T' : `random (seed ${payload.noise.seed})`;
+  els.stats.embedding.textContent = payload.embedding.embedding_sha256;
+  els.stats.prompt.textContent = `${payload.embedding.text} (${payload.embedding.prompt_hash})`;
+  els.stats.endpoint.textContent = payload.served_by;
+}
+
+function updateFrameLabel() {
+  const clip = state.clip;
+  const frame = clip ? Math.min(clip.frameCount - 1, Math.max(0, Math.round(state.playhead))) : 0;
+  els.frameLabel.textContent = `frame ${frame} / ${clip ? clip.frameCount - 1 : 0}`;
+}
+
+// ---------------------------------------------------------------------------
+// playback
+// ---------------------------------------------------------------------------
+function updatePlayhead(deltaSeconds) {
+  const clip = state.clip;
+  if (!clip || !state.playing) return;
+  state.playhead += deltaSeconds * clip.fps;
+  if (state.playhead > clip.frameCount - 1) {
+    state.playhead -= clip.frameCount - 1;   // loop
+    if (state.playhead < 0) state.playhead = 0;
+  }
+  els.frameSlider.value = String(Math.round(state.playhead));
+  updateFrameLabel();
+}
+
+function pushFpsSample(count) {
+  state.fpsWindow.push(count);
+  if (state.fpsWindow.length > 45) state.fpsWindow.shift();
+  state.fps = state.fpsWindow.reduce((a, b) => a + b, 0) / state.fpsWindow.length;
+}
+
+// ---------------------------------------------------------------------------
+// render loop
+// ---------------------------------------------------------------------------
+let renderedFrames = 0;
+let fpsClock = performance.now();
+
+function frame() {
+  requestAnimationFrame(frame);
+  const now = performance.now();
+  const delta = Math.min(0.1, (now - state.lastTime) / 1000);
+  state.lastTime = now;
+
+  updatePlayhead(delta);
+
+  if (state.clip && state.rig) {
+    state.rig.setPose(
+      state.clip.joints,
+      Math.round(state.playhead),
+      state.clip.frameCount,
+      els.contactsToggle.checked ? state.clip.contacts : null,
+    );
+  }
+  if (state.golden && state.goldenRig) {
+    state.goldenRig.setPose(
+      state.golden.joints,
+      Math.round(state.playhead),
+      state.golden.frameCount,
+      els.contactsToggle.checked ? state.golden.contacts : null,
+    );
+  }
+
+  // Camera: orbit around the focus point with a fixed convention (yaw 0 looks
+  // down -Z, +Y up), so dragging behaves the same whatever the clip does.
+  desiredCamera.set(
+    cameraView.focus.x + cameraView.distance * Math.cos(cameraView.pitch) * Math.sin(cameraView.yaw),
+    cameraView.focus.y + cameraView.distance * Math.sin(cameraView.pitch),
+    cameraView.focus.z + cameraView.distance * Math.cos(cameraView.pitch) * Math.cos(cameraView.yaw),
+  );
+  camera.position.copy(desiredCamera);
+  camera.lookAt(cameraView.focus);
+
+  renderer.render(scene, camera);
+  renderedFrames += 1;
+  if (now - fpsClock >= 500) {
+    pushFpsSample(renderedFrames / ((now - fpsClock) / 1000));
+    renderedFrames = 0;
+    fpsClock = now;
+    els.hud.fps.textContent = `${state.fps.toFixed(0)} fps (page)`;
+    els.stats.fps.textContent = `${state.fps.toFixed(1)} fps`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// wiring
+// ---------------------------------------------------------------------------
+els.generate.addEventListener('click', generateClip);
+els.reload.addEventListener('click', () => { loadHealth().catch(() => {}); generateClip(); });
+els.promptSelect.addEventListener('change', () => {
+  updatePromptHelp();
+  state.goldenKey = null;
+  if (els.goldenToggle.checked) loadReference(true);
+});
+els.seedInput.addEventListener('change', () => {
+  if (els.noiseSelect.value === 'random') return;
+  els.noiseHelp.textContent =
+    'Seed is ignored while golden noise is selected: the reference x_T is injected verbatim.';
+});
+els.noiseSelect.addEventListener('change', () => {
+  updateDurationConstraints();
+});
+els.durationInput.addEventListener('change', () => {
+  updateDurationConstraints();
+  state.goldenKey = null;
+  if (els.goldenToggle.checked) loadReference(true);
+});
+els.durationStep.addEventListener('click', () => {
+  const step = state.health ? state.health.duration_step_s : 2;
+  els.durationInput.value = String(Number(els.durationInput.value) + step);
+  updateDurationConstraints();
+  state.goldenKey = null;
+  if (els.goldenToggle.checked) loadReference(true);
+});
+els.seedNext.addEventListener('click', () => {
+  els.seedInput.value = String(Number(els.seedInput.value) + 1);
+});
+els.playPause.addEventListener('click', () => {
+  state.playing = !state.playing;
+  els.playPause.textContent = state.playing ? 'Pause' : 'Play';
+  els.playPause.setAttribute('aria-pressed', String(state.playing));
+});
+els.frameSlider.addEventListener('input', () => {
+  state.playhead = Number(els.frameSlider.value);
+  state.playing = false;
+  els.playPause.textContent = 'Play';
+  els.playPause.setAttribute('aria-pressed', 'false');
+  updateFrameLabel();
+});
+els.resetCamera.addEventListener('click', resetCameraView);
+els.fitCamera.addEventListener('click', fitCameraToClip);
+els.contactsToggle.addEventListener('change', () => {
+  if (state.rig) state.rig.setVisible(true);
+  if (state.goldenRig) state.goldenRig.setVisible(els.goldenToggle.checked);
+});
+els.trailToggle.addEventListener('change', () => {
+  if (state.rig) state.rig.trail.visible = els.trailToggle.checked;
+  if (state.goldenRig) state.goldenRig.trail.visible = els.trailToggle.checked;
+});
+els.goldenToggle.addEventListener('change', async () => {
+  if (!els.goldenToggle.checked) {
+    if (state.goldenRig) state.goldenRig.setVisible(false);
+    els.hud.clip.textContent = state.clip ? `mine (${state.clip.duration.toFixed(1)} s)` : '—';
+    setStatus('Reference hidden. The clip on screen is this machine\'s own output.');
+    return;
+  }
+  setStatus('Loading the golden reference…');
+  await loadReference(false);
+});
+
+function updateDurationConstraints() {
+  const step = state.health ? state.health.duration_step_s : 2;
+  const raw = Number(els.durationInput.value);
+  if (!Number.isFinite(raw) || raw <= 0 || Math.abs(raw % step) > 1e-9) {
+    els.durationHelp.classList.add('warn');
+    els.durationHelp.textContent =
+      `${raw} s is not a whole multiple of the ${step.toFixed(2)} s horizon; the server will `
+      + `reject it as duration_not_horizon_multiple.`;
+  } else {
+    els.durationHelp.classList.remove('warn');
+    els.durationHelp.textContent =
+      `${raw.toFixed(2)} s = ${Math.round(raw / step)} horizon(s) of `
+      + `${state.health ? state.health.horizon : 40} frames.`;
+  }
+  updateGoldenHelp();
+}
+
+// ---------------------------------------------------------------------------
+// boot
+// ---------------------------------------------------------------------------
+window.addEventListener('error', (event) => {
+  showError('page_error', String(event.message).slice(0, 400));
+});
+
+async function boot() {
+  resize();
+  requestAnimationFrame(frame);
+  try {
+    const health = await loadHealth();
+    setStatus(`Ready. ${health.embeddings.length} cached prompt(s); cold start ${fmtMs(health.cold_start_s * 1000)}.`);
+    updateDurationConstraints();
+    await generateClip();
+  } catch (error) {
+    setStatus('Could not reach the viewer server.', true);
+    showError(error.errorName || 'boot_failed', error.message);
+  }
+}
+
+boot();

@@ -72,6 +72,15 @@ class WeightStore:
         """Tensors never looked up -- a non-empty list means the port is incomplete."""
         return sorted(set(self._arrays) - self._used)
 
+    def total_elements(self) -> int:
+        """Total number of elements across every tensor, without marking any as used.
+
+        A read-only checkpoint property (the viewer's HUD reports it next to the
+        device name); unlike :meth:`get` it never touches ``_used``, so asking for
+        the size of a checkpoint cannot make :meth:`unused` lie.
+        """
+        return int(sum(int(array.size) for array in self._arrays.values()))
+
 
 class Linear:
     """``nn.Linear``: ``y = x @ W.T + b`` (weights kept in PyTorch layout)."""

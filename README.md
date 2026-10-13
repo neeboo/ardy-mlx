@@ -51,6 +51,27 @@ Both sides are float32 on different hardware, so the honest target is "residue a
 reordered float32 summation" (measured 1e-7..9e-5, signals are O(1)); a structural mistake is
 O(1e-1), which is what the negative controls demonstrate (`x_T += 0.25` → **2.556**).
 
+## Browser viewer
+
+A local page that samples a clip live with the MLX checkpoint, plays it back on the
+CoreSkeleton27 rig, and can overlay the golden reference clip for the same duration.
+Full documentation, including the API and the honest boundaries:
+[`docs/VIEWER.md`](docs/VIEWER.md).
+
+```sh
+./.venv/bin/python scripts/ardy_viewer.py --port 8850     # then http://127.0.0.1:8850/
+```
+
+| piece | state | evidence |
+|---|---|---|
+| `scripts/ardy_viewer.py` | single-threaded loopback HTTP server (MLX's GPU stream is thread-local, so one thread loads *and* serves); `/api/health`, `/api/plan`, `/api/reference` | [`docs/VIEWER.md`](docs/VIEWER.md) §2, §7 |
+| 2.0 s / 40 frames via `/api/plan`, golden `x_T` | **113–152 ms** sampling warm, 248 ms cold (350 ms on a busy host); `posed_joints` **5.178e-06** vs the golden npz | `docs/VIEWER.md` §7 |
+| 4.0 s / 80 frames / 2 windows via `/api/plan`, golden `x_T` | **281–315 ms** sampling (794 ms on a busy host); `posed_joints` **4.813e-06** | `docs/VIEWER.md` §7 |
+| prompt selection | the **cached embeddings** only (`artifacts/embeddings/<prompt-hash>.npy`); a miss is `no_cached_embedding_for_prompt`, never a fallback | [`embeddings/README.md`](embeddings/README.md) |
+| duration input | must be a whole number of generation horizons, else `duration_not_horizon_multiple` | `docs/VIEWER.md` §2 |
+| viewer tests | 4 files: API, HTTP/containment, negative controls, real-weight service — the first two need no checkpoint | `docs/VIEWER.md` §8 |
+| the loader | the viewer and `--backend mlx` share `pipeline.build_mlx_runner`; a test asserts they produce bit-identical frames | `docs/VIEWER.md` §5 |
+
 ## Boundaries: what is *not* true
 
 1. **`posed_joints` in the files the CLI writes is now real skeleton FK** (CoreSkeleton27, transcribed from the reference source) and is wired into the sidecar: 0.132 (2.0 s) / 0.236 (4.0 s) before, 5.178e-06 / 4.813e-06 after, matching the golden npz.
@@ -104,7 +125,12 @@ by patching `mx.random.normal` in process instead (see `--cli-acceptance`).
     --duration 4.0 --seed 0 --no-postprocess --history-frames 160 --out out
 
 # tests
-./.venv/bin/python -m pytest -q          # 199 passed, 1 xfailed
+./.venv/bin/python -m pytest -q          # 303 passed, 1 xfailed
+#   199 of those predate the viewer; tests/test_viewer_*.py adds 89
+
+# the browser viewer
+./.venv/bin/python scripts/ardy_viewer.py --port 8850     # http://127.0.0.1:8850/
+./.venv/bin/python -m pytest tests/test_viewer_api.py tests/test_viewer_http.py -q
 ```
 
 The golden npz files, the reference dumps and the converted weights are **not committed**
@@ -121,7 +147,13 @@ src/ardy_mlx/sampling/      the sampling side's own chain (B): scheduler, CFG, a
 scripts/ardy_convert.py     reference checkpoint -> MLX safetensors (byte-verified)
 scripts/ardy_align.py       the alignment + acceptance + benchmark harness
 scripts/ardy_generate.py    the CLI (contract §7 output: npz + json sidecar)
+scripts/ardy_viewer.py      the browser viewer's HTTP server (+ generation endpoint)
+viewer/                     the page itself: index.html, app.js, rig.js (CoreSkeleton27),
+                            style.css, and a byte-identical copy of three.js under vendor/
+artifacts/embeddings/       the cached text embeddings the viewer offers (NOT committed)
+embeddings/README.md        how to add a cached prompt embedding
 docs/motion-contract.md     the A/B data contract (fields, units, evidence line by line)
+docs/VIEWER.md              the viewer: start/stop, API, page features, reuse, boundaries
 docs/decisions/             the rulings: checkpoint terms, tolerance, contract questions, baselines
 docs/status-deepseek.md     A-side status log (rounds 1-4, including what is still unverified)
 ```

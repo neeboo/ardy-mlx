@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en" data-viewer-status="starting">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>ardy-mlx · motion viewer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <section id="viewport" aria-label="Animated CoreSkeleton27 motion">
+      <div id="hud" aria-live="off">
+        <span class="hud-key">clip</span><span class="hud-value" id="hud-clip">—</span>
+        <span class="hud-key">model</span><span class="hud-value" id="hud-model">—</span>
+        <span class="hud-key">frames</span><span class="hud-value" id="hud-frames">—</span>
+        <span class="hud-key">generate</span><span class="hud-value" id="hud-generate">—</span>
+        <span class="hud-key">playback</span><span class="hud-value" id="hud-fps">—</span>
+        <span class="hud-key">noise</span><span class="hud-value" id="hud-noise">—</span>
+        <span class="hud-key">embedding</span><span class="hud-value" id="hud-embedding">—</span>
+      </div>
+    </section>
+
+    <aside>
+      <p class="eyebrow">ARDY / MLX</p>
+      <h1>Motion viewer</h1>
+      <p class="lede">Every clip on this page is sampled live on this machine by the MLX
+        port. Pick a cached prompt, set a seed, and generate.</p>
+
+      <h2>Prompt</h2>
+      <div class="field">
+        <label for="prompt-select">Cached text embedding</label>
+        <select id="prompt-select" aria-label="Cached text embedding"></select>
+        <p class="help" id="prompt-help">—</p>
+      </div>
+
+      <h2>Sample</h2>
+      <div class="field">
+        <label for="seed-input">Seed</label>
+        <div class="row">
+          <input id="seed-input" type="number" step="1" value="0" aria-label="Seed">
+          <button id="seed-next" class="ghost" type="button">Next</button>
+        </div>
+        <p class="help">Only affects the <b>random</b> noise below. With golden noise the
+          reference's own x<sub>T</sub> is injected and the seed changes nothing.</p>
+      </div>
+
+      <div class="field">
+        <label for="duration-input">Duration (seconds)</label>
+        <div class="row">
+          <input id="duration-input" type="number" step="1" min="2" value="2"
+                 aria-label="Duration in seconds">
+          <button id="duration-step" class="ghost" type="button">+1 step</button>
+        </div>
+        <p class="help" id="duration-help">—</p>
+      </div>
+
+      <div class="field">
+        <label for="noise-select">Initial noise (x<sub>T</sub>)</label>
+        <select id="noise-select" aria-label="Initial noise source">
+          <option value="golden">golden — the reference's own x_T</option>
+          <option value="random">random — MLX RNG</option>
+        </select>
+        <p class="help" id="noise-help">—</p>
+      </div>
+
+      <div class="buttons">
+        <button id="generate" class="primary" type="button">Generate &amp; play</button>
+        <button id="reload" type="button">Reload</button>
+      </div>
+
+      <h2>Playback</h2>
+      <div class="transport">
+        <button id="play-pause" class="ghost" type="button" aria-pressed="true">Pause</button>
+        <output id="frame-label">frame 0 / 0</output>
+        <input id="frame-slider" type="range" min="0" max="0" step="1" value="0"
+               aria-label="Scrub to frame">
+      </div>
+      <div class="buttons">
+        <button id="reset-camera" class="ghost" type="button">Reset camera</button>
+        <button id="fit-camera" class="ghost" type="button">Fit clip</button>
+      </div>
+
+      <h2>Reference</h2>
+      <label class="checkline"><input id="golden-toggle" type="checkbox">
+        Reference (golden)</label>
+      <p class="help" id="golden-help">—</p>
+      <label class="checkline"><input id="contacts-toggle" type="checkbox" checked>
+        Foot-contact markers</label>
+      <label class="checkline"><input id="trail-toggle" type="checkbox" checked>
+        Ground trail</label>
+
+      <h2>This run</h2>
+      <dl id="stats">
+        <div><dt>Model</dt><dd id="stat-model">—</dd></div>
+        <div><dt>Device</dt><dd id="stat-device">—</dd></div>
+        <div><dt>Parameters</dt><dd id="stat-params">—</dd></div>
+        <div><dt>Cold start (weights)</dt><dd id="stat-coldstart">—</dd></div>
+        <div><dt>Generate (last)</dt><dd id="stat-generate">—</dd></div>
+        <div><dt>Frames</dt><dd id="stat-frames">—</dd></div>
+        <div><dt>Autoregressive windows</dt><dd id="stat-windows">—</dd></div>
+        <div><dt>Playback fps</dt><dd id="stat-fps">—</dd></div>
+        <div><dt>Clip fps (model)</dt><dd id="stat-clipfps">—</dd></div>
+        <div><dt>Injected x<sub>T</sub></dt><dd id="stat-noise">—</dd></div>
+        <div><dt>Embedding sha256</dt><dd id="stat-embedding">—</dd></div>
+        <div><dt>Prompt hash</dt><dd id="stat-prompt">—</dd></div>
+        <div><dt>Endpoint</dt><dd id="stat-endpoint">—</dd></div>
+      </dl>
+
+      <div id="status" role="status" aria-live="polite">Loading model…</div>
+      <div id="error-box" hidden></div>
+
+      <p class="note" id="limits">
+        <b>v1 has no text encoder.</b> The prompts in the list are precomputed
+        <code>artifacts/embeddings/&lt;prompt-hash&gt;.npy</code> files, not text encoded on
+        the fly. A prompt with no cached embedding fails by name — the server never
+        falls back to a different one. See <code>embeddings/README.md</code> for how to add
+        one, and <code>docs/VIEWER.md</code> for the rest of the honest boundaries
+        (post-processing is not built, so the clip carries foot skating; the MLX RNG is
+        not CUDA's Philox stream).
+      </p>
+    </aside>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

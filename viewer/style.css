@@ -1,0 +1,167 @@
+/* viewer/style.css -- ardy-mlx browser viewer.
+ *
+ * Written for this repository. The layout follows the MotionBricks MLX viewer's
+ * page shape (a full-bleed viewport with a fixed control rail on the right,
+ * dark palette, HUD overlaid on the canvas), which is a look, not code: no
+ * rule below is copied from it. three.js is vendored, not styled here.
+ */
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --bg: #080a0f;
+  --panel: rgba(11, 14, 20, .96);
+  --line: #2a3240;
+  --ink: #edf1f7;
+  --dim: #9eabbc;
+  --accent: #6be6ba;
+  --warn: #ffad9b;
+  --golden: #f4b860;
+  --mine: #55efc4;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body, main { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+#viewport {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: radial-gradient(circle at 50% 38%, #1d2634 0, #10141d 40%, #06080c 78%);
+}
+#viewport canvas { display: block; width: 100%; height: 100%; }
+
+/* ------------------------------------------------------------------ HUD */
+#hud {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 12px;
+  max-width: min(420px, 60%);
+  padding: 12px 14px;
+  border: 1px solid #263041;
+  border-radius: 10px;
+  background: rgba(8, 11, 16, .78);
+  backdrop-filter: blur(6px);
+  font-size: 11.5px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+#hud .hud-key { color: #6f7d91; letter-spacing: .06em; text-transform: uppercase; font-size: 10px; padding-top: 1px; }
+#hud .hud-value { color: #e3ebf5; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+#hud .hud-value.is-golden { color: var(--golden); }
+#hud .hud-value.is-mine { color: var(--mine); }
+#hud .hud-value.is-warn { color: var(--warn); }
+
+/* -------------------------------------------------------------- sidebar */
+aside {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 28px 22px 40px;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: -18px 0 60px #0008;
+}
+
+.eyebrow { margin: 0 0 8px; color: var(--accent); letter-spacing: .18em; font-size: 10.5px; font-weight: 750; }
+h1 { margin: 0 0 10px; font-size: 25px; letter-spacing: -.035em; }
+h2 { margin: 26px 0 10px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: #8c9aad; }
+.lede { margin: 0 0 16px; color: var(--dim); line-height: 1.45; font-size: 13px; }
+
+.field { margin-bottom: 14px; }
+label { display: block; margin-bottom: 6px; color: #c8d1dd; font-size: 11.5px; font-weight: 700; }
+select, input[type="number"] {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #343d4d;
+  border-radius: 8px;
+  background: #171c26;
+  color: #f2f6fb;
+  font: inherit;
+  font-size: 13px;
+}
+select:disabled, input:disabled { opacity: .5; cursor: not-allowed; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+
+button {
+  padding: 10px 13px;
+  border: 1px solid #343d4d;
+  border-radius: 8px;
+  background: #171c26;
+  color: #dbe4ef;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: #59677b; background: #202735; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { border-color: #3a7867; background: #17372c; color: #b9f8e3; }
+button.primary:hover:not(:disabled) { border-color: #6be6ba; background: #1d4536; }
+button.ghost { padding: 8px 10px; font-size: 11.5px; font-weight: 600; }
+
+.checkline { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-weight: 600; color: #b7c2d0; font-size: 12px; }
+.checkline input { accent-color: var(--golden); }
+
+.help { margin: 8px 0 0; color: #647286; font-size: 11px; line-height: 1.4; }
+.help.warn { color: #c9a06a; }
+
+#status { min-height: 1.4em; margin: 14px 0 0; font-size: 12px; color: var(--accent); }
+#status[data-error="true"] { color: var(--warn); font-weight: 650; }
+#error-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #7a3b30;
+  border-radius: 8px;
+  background: #24130f;
+  color: #ffcabd;
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+#error-box code { color: #ffd9a0; font-size: 11px; }
+
+/* --------------------------------------------------------- transport */
+.transport { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 10px; align-items: center; margin-top: 8px; }
+.transport output { color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+input[type="range"] { width: 100%; accent-color: var(--mine); }
+
+dl { margin: 6px 0 0; }
+dl div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #1c2532; }
+dt { color: #778599; font-size: 11.5px; }
+dd { margin: 0; text-align: right; color: #dce4ee; font-size: 11.5px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+.note {
+  margin-top: 22px;
+  padding: 12px 14px;
+  border: 1px solid #3d3524;
+  border-radius: 10px;
+  background: #1b1710;
+  color: #d8c39a;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.note b { color: #f0d9a8; }
+.note code { color: #ffe1a8; font-size: 11px; }
+
+@media (max-width: 860px) {
+  main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 56dvh); }
+  aside { padding: 16px 18px 28px; border-left: 0; border-top: 1px solid var(--line); }
+  #hud { max-width: 92%; font-size: 10.5px; }
+}

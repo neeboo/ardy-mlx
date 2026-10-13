@@ -26,6 +26,7 @@ import hashlib
 import json
 import math
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,11 +45,14 @@ from ..io import (
 __all__ = [
     "POSED_JOINTS_SOURCE",
     "REFERENCE",
+    "MlxRunner",
     "TextEmbedding",
+    "build_mlx_runner",
     "compute_feature_layout",
     "duration_to_frames",
     "git_sha",
     "load_text_embedding",
+    "mlx_parameter_count",
     "output_stem",
     "prompt_hash",
     "prompt_hash_bytes",
@@ -461,3 +465,171 @@ def save_outputs(
     )
     json_path.write_text(json.dumps(sidecar, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     return npz_path, json_path
+
+
+# --------------------------------------------------------------------------- #
+# the MLX batch runner -- one loader for both entry points
+# --------------------------------------------------------------------------- #
+def mlx_parameter_count(weight_store) -> int:
+    """Number of array elements in a :class:`WeightStore` (for the viewer HUD)."""
+    return int(weight_store.total_elements())
+
+
+@dataclass
+class MlxRunner:
+    """A loaded Core checkpoint plus a cached text embedding, ready to generate.
+
+    This is the **shape** of the one verified path to a real clip: A's
+    :class:`~ardy_mlx.model.ardy.ArdyBatch` (the thing ``scripts/ardy_align.py``
+    aligns) driven by the reference's own window arithmetic. Nothing here samples
+    anything itself -- the window loop, the recentring, the requantisation and the
+    detokenisation all stay in ``model/ardy.py``.
+
+    It exists so the CLI (``scripts/ardy_generate.py --backend mlx``) and the
+    browser viewer (``scripts/ardy_viewer.py``) load the weights through **one**
+    function instead of two copies that can drift apart. The sidecar's
+    ``text_embedding_sha256``, the noise shape validation and the "a shape
+    mismatch must fail loudly" rule are the same in both.
+    """
+
+    model: str
+    checkpoint_dir: Path
+    embedding: TextEmbedding
+    layout: FeatureLayout
+    batch: object  # ArdyBatch; left untyped so this module does not import model/ at import time
+    parameter_count: int
+    load_seconds: Dict[str, float]
+    device: str
+
+    @property
+    def noise_window_shape(self) -> Tuple[int, int, int]:
+        """The per-window ``x_T`` shape the model asks the RNG for.
+
+        ``(batch, generation tokens, hybrid token dim)`` -- ``(1, 10, 148)`` for
+        Core/20fps/H40. Every injected-noise path is validated against this before
+        anything is spent on a weight load or a diffusion step.
+        """
+        return (
+            self.embedding.batch_size,
+            self.layout.horizon // NUM_FRAMES_PER_TOKEN,
+            self.layout.dim_token,
+        )
+
+    def generate(
+        self,
+        *,
+        num_frames: int,
+        num_steps: int = 10,
+        cfg_weight: Sequence[float] = (2.0, 2.0),
+        history_frames: Optional[int] = None,
+        noise_fn=None,
+        seed: Optional[int] = None,
+        windows: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """Run the batch path; returns ``frames (1, T, 330)`` and the chunk offsets.
+
+        ``noise_fn`` is forwarded verbatim to ``ArdyBatch.generate`` (per step and
+        per window); ``seed`` only picks the MLX key when ``noise_fn`` is absent.
+        ``windows`` is the number of autoregressive windows the caller already
+        validated its noise against -- when it is omitted the model's own
+        ``ceil(num_frames / horizon)`` arithmetic is used, and a mismatch with a
+        caller-supplied noise stack would show up as a loud shape error rather
+        than as a quiet fallback to MLX's RNG.
+        """
+        if num_frames < 1:
+            raise ValueError(f"num_frames must be >= 1, got {num_frames}")
+        resolved_history = resolve_history_frames(self.model, history_frames)
+        if windows is None:
+            windows = int(math.ceil(num_frames / self.layout.horizon))
+
+        if noise_fn is None:
+            base_key = mx.random.key(int(seed) if seed is not None else 0)
+            step_keys = list(mx.random.split(base_key, max(windows, 1)))
+
+            def noise_fn(step, shape):  # noqa: ANN001 - MLX callback signature
+                return mx.random.normal(shape, key=step_keys[min(step, len(step_keys) - 1)]).astype(
+                    mx.float32
+                )
+
+        out = self.batch.generate(
+            self.embedding.embeddings,
+            self.embedding.mask,
+            num_frames=num_frames,
+            num_steps=num_steps,
+            cfg_weight=tuple(cfg_weight),
+            first_heading_angle=mx.zeros((self.embedding.batch_size,)),
+            crop_history_length=resolved_history,
+            noise_fn=noise_fn,
+        )
+        return {
+            "frames": out["frames"].astype(mx.float32),
+            "offsets": list(out["offsets"]),
+            "history_frames": resolved_history,
+            "windows": windows,
+        }
+
+
+def build_mlx_runner(
+    model: str,
+    embedding: TextEmbedding,
+    checkpoint_dir: Optional[str | Path] = None,
+    device: str = "gpu",
+    repo_root: Optional[str | Path] = None,
+) -> MlxRunner:
+    """Load ``checkpoints/<model>/mlx/*.safetensors`` and assemble :class:`ArdyBatch`.
+
+    Both entry points call this: ``scripts/ardy_generate.py --backend mlx`` and
+    ``scripts/ardy_viewer.py``. It is the *only* place the tokenizer, the denoiser
+    and the motion-rep stats are loaded.
+
+    ``device`` selects the MLX default device for the whole process. The caller is
+    responsible for **not** touching MLX from another thread: the MLX GPU stream is
+    thread-local, and a worker thread that starts evaluating (or aborts) on the
+    stream a previous thread opened is what the viewer's single-threaded HTTP
+    handler exists to prevent.
+    """
+    from ..model.ardy import ArdyBatch
+    from ..model.denoiser import AutoLatentTwostageDenoiser
+    from ..model.fsq import FSQVAETransformer
+    from ..model.motion_rep import MotionRep
+    from ..model.nn import WeightStore
+
+    if model not in PRESETS:
+        raise KeyError(f"unknown model {model!r}; known presets: {sorted(PRESETS)}")
+    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[3]
+    ckpt = Path(checkpoint_dir) if checkpoint_dir is not None else (root / "checkpoints" / model)
+    if not ckpt.is_dir():
+        raise FileNotFoundError(f"checkpoint directory not found: {ckpt}")
+    tokenizer_weights = ckpt / "mlx" / "tokenizer.mlx.safetensors"
+    denoiser_weights = ckpt / "mlx" / "denoiser.mlx.safetensors"
+    for path in (tokenizer_weights, denoiser_weights):
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{path} is missing; run scripts/ardy_convert.py first (docs/status-deepseek.md)"
+            )
+
+    mx.set_default_device(mx.gpu if device == "gpu" else mx.cpu)
+    started = time.time()
+    motion_rep = MotionRep(ckpt / "stats" / "motion")
+    tokenizer_store = WeightStore.load(tokenizer_weights)
+    tokenizer = FSQVAETransformer(tokenizer_store, motion_rep).load_stats(ckpt / "stats")
+    mid = time.time()
+    denoiser_store = WeightStore.load(denoiser_weights)
+    denoiser = AutoLatentTwostageDenoiser(denoiser_store, motion_rep)
+    batch_pipe = ArdyBatch(tokenizer, denoiser, motion_rep)
+    ended = time.time()
+
+    return MlxRunner(
+        model=model,
+        checkpoint_dir=ckpt,
+        embedding=embedding,
+        layout=PRESETS[model],
+        batch=batch_pipe,
+        parameter_count=mlx_parameter_count(tokenizer_store) + mlx_parameter_count(denoiser_store),
+        load_seconds={
+            "tokenizer_s": mid - started,
+            "denoiser_s": ended - mid,
+            "total_s": ended - started,
+        },
+        device=device,
+    )

@@ -1,0 +1,11 @@
+# Byte-exact files: never let git rewrite them on the way in or out.
+#
+# The vendored three.js bundles are documented as byte-identical copies, with their
+# sha256 recorded in docs/VIEWER.md and embeddings/README.md. This machine has
+# `core.autocrlf=true`, which rewrites line endings when a file is added -- that
+# silently changes the blob (it turns CRLF into CRCRLF), so the recorded digest
+# stops describing what is in the tree. `-text` turns the rewriting off for these
+# paths; the golden `.npz` files are blocked from being committed at all by
+# .gitignore, and this keeps a stray one from being mangled if that ever changes.
+viewer/vendor/** -text
+*.npz -text
