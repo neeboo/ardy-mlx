@@ -9,8 +9,12 @@ An independent MLX (Apple Silicon) implementation of the motion model from:
 
 Policy (same as the sibling project motionbrick-mlx):
 * We take the SOURCE-CODE route only. Reference source is Apache-2.0.
-* Checkpoints carry their OWN terms per model (the upstream README lists a
-  License column per checkpoint). Until that is read and recorded in
-  docs/decisions/, no checkpoint is converted, redistributed or depended on.
+* Checkpoints carry their OWN terms per model. Those terms have now been read
+  and recorded in docs/decisions/0002-checkpoint-terms.md (NVIDIA Open Model
+  License, 2025-10-24): local inference, format conversion, fine-tuning and
+  commercial use are permitted; redistribution is permitted subject to
+  attaching the agreement and the attribution notice. The agreement is
+  revocable and terminates if guardrails are circumvented. We do not
+  redistribute NVIDIA weights or golden outputs derived from them.
 * Reference runs happen on a Linux/CUDA box we do not own; that box stays
   read-only and is used as a golden-output oracle only.

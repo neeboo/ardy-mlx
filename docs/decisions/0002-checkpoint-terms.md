@@ -1,4 +1,4 @@
-# 0002 · checkpoint 许可核查（**提案** · 待人类批准）
+# 0002（已批准 2026-10-13） · checkpoint 许可核查（**提案** · 待人类批准）
 
 - 状态：**提案（proposal）**，尚未生效；本文件不改写任何上游条款，只记录证据与建议。
 - 核查人：A 侧（DeepSeek）
@@ -213,3 +213,24 @@ Use of this model is governed by the [NVIDIA Open Model Agreement](https://www.n
 - **未运行** `generate.py` 或任何推理；金标准输出仍需人类单独批准。
 - **未修改**那台 Linux 机器上的任何文件（只读；过程中曾误建 2 个 `/tmp` 临时文件，已即刻删除并复核不存在）。
 - **未修改** `NOTICE` / `LICENSE` / `README*` / `pyproject.toml` / `.gitignore`。
+
+---
+
+## Lead 批准（2026-10-13）
+
+**硬门通过**，并同时裁定本轮提出的另外三件事：
+
+1. **许可**：批准本提案。四个 checkpoint 同为 **NVIDIA Open Model License（2025-10-24）**：
+   允许本地推理、**格式转换（构成 Derivative Model）**、微调、商用；**再分发须满足条件**（随附协议副本 ＋
+   在 Notice 写明归属声明）。**风险记在案**：协议 `revocable`、绕过/削弱 Guardrail 会**自动终止**、
+   不得用 NVIDIA 商标、出口管制条款；**Cosmos 标注义务**按提案判断为不适用（属法律解释，保留为残留未知）。
+   **金标准输出不在本仓库分发**（它由 NVIDIA 权重派生），与"不再分发权重"的既有立场一致。
+2. **金标准是否含后处理**：**批准"两侧都 `--no-postprocess`"**。理由：Core 默认跑 `MotionCorrection`，
+   本机缺该扩展会直接 `raise`；两侧都不跑才能同口径比对。**报告里必须写明**这条取舍及其后果
+   （保留 foot skating、与"Core 默认含后处理"的官方产物存在系统性差异）。
+3. **坐标转换（MotionBricks/Unity）**：**v1 不做**。第一版一律保留上游约定（**右手系、Y 轴向上、地面 XZ、世界坐标、米、6D 旋转**），
+   与产品侧的转换留到接线时再定；`docs/motion-contract.md` 里的建议表**标注为未验证**，B 侧不得据此写死。
+4. **`<prompt-hash>` 口径**：批准 **prompt UTF-8 原文**（稳定、可复算），并**冻结进契约**；改口径必须走契约变更流程。
+
+**附带授权**（用户已开工并要求"英文优先、不写分工"）：本裁定允许把 `NOTICE` 里"未清条款前不转换/不再分发"那句
+更新为"已核查，见 `docs/decisions/0002`"。`
