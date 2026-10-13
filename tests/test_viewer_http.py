@@ -904,6 +904,61 @@ def test_client_log_round_trip_records_and_is_queryable_by_kind(live_server):
     assert body["events"][0]["kind"] == "console.warn"
 
 
+def test_client_log_carries_the_prefetch_readings_a_stall_is_diagnosed_from(live_server):
+    """The two fields that answer "it stopped moving" from the server log alone.
+
+    `segments` + `buffered` + `held` say *that* the stream stopped; `prefetch_retries`
+    and `prefetch_error` say *why*, by name. They are the page's own report of a stall
+    (`prefetch_timeout` after the 15 s deadline, or `prefetch_failed` for a refusal),
+    and the whole point of the round trip is that the server keeps them: a page that
+    builds a field the server silently drops has no diagnostic channel at all.
+    """
+    base, app = live_server
+    payload = {
+        "events": [
+            _client_event(
+                "prefetch prefetch_timeout (retry 3): no answer in 15.0 s (deadline 15.0 s, released=true)",
+                kind="console.warn", at=900.0,
+            ),
+        ],
+        "snapshot": {
+            "playhead": 800, "timelineFrames": 800, "segments": 10,
+            "buffered": 0, "held": True, "playing": True,
+            "prefetch_retries": 3, "prefetch_error": "prefetch_timeout",
+            "url": "/",
+        },
+    }
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST", payload)
+    assert status == 200, body
+    # The naming survives the wire, so `?kind=console.warn` is a usable filter for it.
+    assert body["snapshot"]["segments"] == 10
+    assert body["snapshot"]["held"] is True
+    assert body["snapshot"]["buffered"] == 0
+    assert body["snapshot"]["prefetch_retries"] == 3
+    assert body["snapshot"]["prefetch_error"] == "prefetch_timeout"
+
+    status, body, _ = jrequest(f"{base}/api/client-log?kind=console.warn")
+    assert status == 200
+    assert body["matching"] == 1
+    assert "prefetch_timeout" in body["events"][0]["text"], "the name must be greppable"
+
+    # ... and the snapshot the *health* view reports carries the same two readings.
+    block = app.health()["client_log"]["snapshot"]
+    assert block["prefetch_retries"] == 3
+    assert block["prefetch_error"] == "prefetch_timeout"
+
+    # A field the page was not written to send is still dropped, unchanged by this
+    # round: the whitelist is the list on both sides, not a new hole.
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST", {
+        "events": [],
+        "snapshot": {"segments": 11, "prefetch_error": "prefetch_failed",
+                     "apiKey": "ts_test_key_do_not_use_0123456789"},
+    })
+    assert status == 200, body
+    assert body["snapshot"]["prefetch_error"] == "prefetch_failed"
+    assert "apiKey" not in body["snapshot"]
+
+
 def test_client_log_appears_in_health_with_a_count_and_a_timestamp(live_server):
     base, app = live_server
     before = app.health()["client_log"]

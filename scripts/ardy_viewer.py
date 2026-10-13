@@ -2353,6 +2353,11 @@ CLIENT_LOG_SNAPSHOT_FIELDS = (
     "playhead", "timelineFrames", "segments", "buffered", "held", "playing", "fps",
     "intent_version", "intent_state", "route", "route_probability", "noise", "duration",
     "camera", "screen", "root", "url",
+    # The prefetch controller's own readings: *that* the stream stopped (segments
+    # frozen, held true) versus *why* it stopped. ``prefetch_error`` is a named reason
+    # (``prefetch_timeout``, ``prefetch_failed``), so a stall is diagnosable from the
+    # server log without the reader having to describe it.
+    "prefetch_retries", "prefetch_error",
 )
 
 #: Environment variable names whose *values* are secrets. `_API_KEY` and friends.

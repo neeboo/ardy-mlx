@@ -1299,3 +1299,134 @@ $ ./.venv/bin/python -m pytest -q     # 423 passed, 1 xfailed        （上轮 4
 * 心跳 **30 s** 一次，所以"读者说不太对之前"最多缺 30 s 上下文；更密会让日志变噪。
 * `at` 是整毫秒，`performance.now()` 的小数在传输时被舍掉。
 * 浏览器观感仍需人眼；本轮**没有**用 CGEvent/AX/osascript 合成输入。
+
+---
+
+## 21. 本轮（预取截止时间 ＋ 每帧重算）：把"跑一段就不动了"修掉
+
+**症状**：页面跑一段后**角色彻底不动**。服务端 `/api/health` 的 `segments_generated` /
+`frames_generated` **冻住**（10 段 / 800 帧，隔 4 s 再看完全一样），进程活着、仍在轮询
+`/api/health`，但**不再 `POST /api/plan`**；播放头走到已缓冲末尾 → `held: true` → 按设计停在最后一帧。
+
+### 21.1 现场证据（只读，未重启 8850）
+
+`GET /api/client-log` 读回的**页面自述快照**（旧 `app.js`，刷新前）：
+
+```
+segments 1   timelineFrames 40   playhead 39   buffered 0
+held true    playing true        fps 52.9      url /
+prefetch_retries <missing>   prefetch_error <missing>   ← 旧页面没有这两个字段
+```
+
+**`segments: 1` + `held: true` + `playing: true`**：在播、停在最后一帧、而且**只生成过一段**。
+这就是根因，且**不是**"请求在飞卡住"（那条也存在，但这里是更早、更确定的一条）。
+
+### 21.2 三个死结（都修了）
+
+| # | 死结 | 那**一行** | 修法 |
+|---|---|---|---|
+| 1 | **一句话只买到一段**：条件未变 → `intent: null`，而 `pullSegment` 拒绝 null intent；`quiet:true` 让拒绝连状态行都不写 | `viewer/app.js` · `nextSegmentIntent`：`return { intent: null, commit: null, changed: false, reason: null };` | `return { intent: committed, commit: null, changed: false, reason: null };`（连续流就是同一句话继续；`commit:null` 保证不换条件） |
+| 2 | **在飞标志可永久卡住**：`shouldPrefetch` 读上一帧的 `lastDecision` ＋ `fetching`，`fetch` 永不 settle 就永久压制 | `shouldPrefetch` 的 `lastDecision` 守卫；`frame()` 里 `decision.wantMore` 的一次性门 | `shouldPrefetch` 改为**每帧**由 `playhead`/`timeline`/`RUNAHEAD_FRAMES` 重算；唯一压制理由是"已有在飞且**未过截止时间**" |
+| 3 | **`hold` 把两个 intent 都清空** → `no_stream_intent` 永久停住 | `pullSegment` 的 `state.committedIntent = null; state.nextIntent = null;` | `holdResolution`：保留正在播放的条件、丢掉那句话、具名 `prefetch_intent_rearmed` |
+
+截止时间：`PREFETCH_TIMEOUT_MS = 15000`。依据是实测而不是拍的：最慢实测请求 **1.4 s**
+（2.0 s 片段 + 冷 4-bit 编码子进程）、4.0 s 片段 p50 **257 ms**、热缓存 p50 **111 ms**
+→ 15 s ≈ 最慢实测的 **10 倍**。到期即具名 `prefetch_timeout` → `AbortController.abort()`
+释放 socket → `requestId += 1` 让迟到响应不能追加 → 记 `lastPrefetchError` ＋ 重试计数 ＋
+`console.warn` 上报 → **下一帧重试**。非 2xx / 非 JSON / 网络拒绝同样具名、同样可重试。
+
+界面：`stream` 行区分 **正在取 / 取失败 / 真的没料 / 没有条件 / 循环**，并附**重试次数**与
+**最后一次失败的具名原因**；新增**继续 / 重试下一段**按钮（只释放在飞请求并立刻重试，**不是 reset**）。
+
+### 21.3 本轮数字
+
+* `node --check viewer/app.js`：通过。
+* `node tests/viewer_js_guard.test.mjs`：**84 passed**（上一轮 72；新增 12，未减）。
+* `./.venv/bin/python -m pytest -q`：**486 passed, 1 xfailed**（上一轮 482 + 1；新增 4，未减：
+  `test_client_log_carries_the_prefetch_readings_a_stall_is_diagnosed_from` 1 条 ＋
+  `tests/test_viewer_stream_growth.py` 3 条）。
+* 改动文件：`viewer/app.js`、`viewer/index.html`、`scripts/ardy_viewer.py`、
+  `tests/viewer_js_guard.test.mjs`、`tests/test_viewer_http.py`、
+  `tests/test_viewer_stream_growth.py`（新）、`docs/VIEWER.md`、
+  `docs/decisions/0012-prefetch-deadline-and-per-frame-recompute.md`（新提案）、本文件。
+* **未**改：`src/ardy_mlx/**` 既有语义、`scripts/ardy_{generate,align}.py`、
+  `tests/test_model_*.py`、`tests/test_io_*.py`、`NOTICE`、`LICENSE`、`pyproject.toml`、
+  根 `.gitignore`、`~/dev/llm2vec-mlx`。权重/向量零入库（`git status` 无 `.npy/.npz/.safetensors`）。
+* key 不进前端：`viewer/**` 无 `TYPESAFE_API_KEY`/`JEV_API_KEY` 字样、无 key 形态**值**；
+  打码只按**形态**（`CLIENT_LOG_SECRET_SHAPES`）。
+
+### 21.4 浸泡测试（关键，纯函数 ＋ 桩 `fetch`，`node` 里跑）
+
+`tests/viewer_js_guard.test.mjs` 新增一节：`soakRun()` 用**出货的**纯函数
+（`advancePlayhead` / `shouldPrefetch` / `nextSegmentIntent`）对**桩 `/api/plan`** 连推
+≥ 20 段；只桩掉**网络**，决策全是页面自己的代码。判据由 `soakVerdict()` 统一给出，
+**负对照让同一个 verdict 变红**。
+
+| 场景 | 段数 | 持帧（连续最坏） | 结论 |
+|---|---|---|---|
+| 健康（24 段目标，runahead 40，请求 3 帧） | **≥ 24** ✓ | **0 帧** ✓ | PASS |
+| 每第 7 次请求失败（latency 20 帧） | **≥ 24** ✓ | ≤ 1 个 runahead 窗口 ✓ | PASS（失败被具名并重试） |
+| 首个请求永不 settle ＋ 失败后标志不清，**截止时间 20 帧** | **≥ 24** ✓ | ≤ 1 窗 ✓ | PASS（`prefetch_timeout` 确实触发） |
+| ✗ 关掉预取 | **0** | — | **RED** ✓ |
+| ✗ 恢复 `intent: null` | **1** | — | **RED** ✓ |
+| ✗ 永久卡住 ＋ `timeoutMs: 1e9`（无截止时间＝出货旧状） | **0** | — | **RED** ✓ |
+| ✗ 截止时间到了却释放不了标志 | 卡在中途 | **> 40 帧**、`timeouts > 10` | **RED** ✓ |
+
+**变异测试（改坏出货源码，逐条重跑，证明判据能红）**：
+
+| 注入 | 结果 |
+|---|---|
+| A 截止时间永不触发（`if (fetching && ageMs >= timeoutMs)` → `if (false)`） | **2 条 RED** ✓ |
+| B 恢复 `intent: null` | **4 条 RED** ✓ |
+| C 预取重新被 `decision.wantMore` 门住 | **1 条 RED** ✓ |
+
+### 21.5 服务端真实 HTTP 的持续增长（`stream.segments_generated`）
+
+`tests/test_viewer_stream_growth.py`（真实 handler、真实编码、临时 loopback 端口、
+`FakeRunner` 顶替 checkpoint，不碰 GPU、不碰 8850）：
+
+```
+  plan | segments_generated | frames_generated
+     1 |                  1 |               40
+     2 |                  2 |               80
+   ...
+    20 |                 20 |              800
+  final stream block: {"frames_generated": 800, "segments_generated": 20}
+```
+
+严格单调 ✓；且**没有 plan 时不动** ✓（后面的 `test_stream_counters_do_not_move_without_a_plan`）。
+代价写在明处：`FakeRunner` 没有接续路径，所以 `continuation.applied` 全程 `False` ✓——
+本判据只关于**计数器**，不关于接续。
+
+**读者自己复现增长的命令**（硬刷新页面后；这是本轮唯一需要人手的一步）：
+
+```sh
+# 隔 4 秒看两次，两个数必须都在涨
+for i in 1 2; do
+  curl -s http://127.0.0.1:8850/api/health \
+    | python3 -c "import json,sys;s=json.load(sys.stdin)['stream'];print('segments=%s frames=%s' % (s['segments_generated'],s['frames_generated']))"
+  sleep 4
+done
+
+# 边看边看"是不是在取 / 取失败 / 真的没料"，以及重试次数与具名原因
+watch -n2 "curl -s 'http://127.0.0.1:8850/api/client-log' | python3 -c \"import json,sys;d=json.load(sys.stdin);s=d['snapshot'];print(s.get('segments'),s.get('buffered'),s.get('held'),s.get('prefetch_retries'),s.get('prefetch_error'))\""
+
+# 预取失败的具名证据（服务端保留）
+curl -s 'http://127.0.0.1:8850/api/client-log?kind=console.warn' \
+  | python3 -c "import json,sys;d=json.load(sys.stdin);[print(e['text']) for e in d['events']]"
+```
+
+### 21.6 本轮的诚实边界
+
+* **失败后"下一帧重试"是刻意的**：需求就是"只因为已有在飞请求才不发第二个"。代价是
+  服务端**秒级拒绝**时会以帧率重试。我**没有**加退避——加了就是引入第二个压制理由，
+  与判据冲突；若日后要加，必须**有界且小于一个 runahead 窗口**并写进判据。
+  量过而不是猜的：本机 handler 对**瞬间拒绝**（空 body → 400）的吞吐是
+  **300 次 / 0.180 s = 1668 req/s**；而重试只发生在**每渲染帧一次**，即 ≤ 60–120 req/s
+  （显示器帧率），在服务端接受循环的能力之内。真正慢的失败被 15 s 截止时间夹住
+  （每 15 s 至多一次）。同一个失败重复出现时错误框**不重建**（`shownErrorKey`）。
+* 截止时间判死的是**请求**；服务端（单线程）**可能仍在算那一段**，重试会排在它后面。
+  15 s 相对实测 1.4 s 有 10 倍余量，正常路径走不到这里。
+* 快照仍是**页面自述、未经服务端验证**；`prefetch_error` 是页面给的**名字**，服务端只存不判。
+* `held: true` 仍可能出现（生成真跟不上），只是现在**必然伴随**可读原因与可点的出口。
+* 浏览器观感仍需人眼；本轮**没有**用 CGEvent/AX/osascript 合成输入，**没有**重启 8850。

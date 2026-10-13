@@ -68,6 +68,8 @@ const els = {
   loopHelp: document.querySelector('#loop-help'),
   resetCamera: document.querySelector('#reset-camera'),
   fitCamera: document.querySelector('#fit-camera'),
+  retryPrefetch: document.querySelector('#retry-prefetch'),
+  streamRetryHelp: document.querySelector('#stream-retry-help'),
   goldenToggle: document.querySelector('#golden-toggle'),
   goldenHelp: document.querySelector('#golden-help'),
   contactsToggle: document.querySelector('#contacts-toggle'),
@@ -312,6 +314,17 @@ const state = {
   busy: false,
   fetching: false,   // a `/api/plan` for the queue tail is in flight
   requestId: 0,
+  // -- the prefetch controller (see `prefetchStep`'s neighbours in `pure-timeline`) --
+  //
+  // The in-flight request carries its own deadline. `fetchStartedAt` is what
+  // `shouldPrefetch` compares against `PREFETCH_TIMEOUT_MS`, and `fetchAbort` is what
+  // actually releases the socket when the deadline passes: a flag cleared while the
+  // request is still out there would let it append a segment after its replacement.
+  fetchStartedAt: 0,
+  fetchAbort: null,
+  retries: 0,             // attempts that ended by name since the last appended segment
+  lastPrefetchError: null, // {name, message, at, retries}; the last named prefetch failure
+  lastGoodIntent: null,   // the conditions of the last segment actually appended
 };
 
 // ---------------------------------------------------------------------------
@@ -328,8 +341,18 @@ function setStatus(text, isError = false) {
   html.dataset.viewerStatus = isError ? 'error' : 'ready';
 }
 
+/** What the error box currently shows, so an identical failure is not rebuilt. */
+let shownErrorKey = null;
+
 function showError(name, message, detail) {
+  // A retry runs once per rendered frame (`§11.4`), so a failing request can report
+  // the same thing 60 times a second: rebuilding this box for a failure the reader is
+  // already looking at is DOM work with nothing to show for it. The *request* rate is
+  // capped by that same frame loop; this caps the repaint.
+  const key = `${name}|${message === undefined ? '' : message}|${detail || ''}`;
   els.errorBox.hidden = false;
+  if (key === shownErrorKey) return;
+  shownErrorKey = key;
   els.errorBox.innerHTML = '';
   const head = document.createElement('div');
   head.innerHTML = `<code>${name}</code>`;
@@ -346,6 +369,7 @@ function showError(name, message, detail) {
 function clearError() {
   els.errorBox.hidden = true;
   els.errorBox.textContent = '';
+  shownErrorKey = null;
 }
 
 // --- pure-bubble: start (no DOM, no fetch, no state) -------------------------
@@ -1003,6 +1027,11 @@ const CLIENT_LOG_SNAPSHOT_FIELDS = [
   'playhead', 'timelineFrames', 'segments', 'buffered', 'held', 'playing', 'fps',
   'intent_version', 'intent_state', 'route', 'route_probability', 'noise', 'duration',
   'camera', 'screen', 'root', 'url',
+  // The prefetch controller's own readings. `segments` + `buffered` + `held` say
+  // *that* the stream stopped; these two say *why* -- and `prefetch_error` is the
+  // named reason (`prefetch_timeout`, `prefetch_failed`), so "it stopped moving" is
+  // answerable from the server log alone instead of from a guess.
+  'prefetch_retries', 'prefetch_error',
 ];
 
 /**
@@ -1167,6 +1196,8 @@ function clientSnapshot(input) {
       last_step_m: num(camera.lastStep),
       user_jumps: int(camera.userJumps),
     },
+    prefetch_retries: int(given.prefetchRetries),
+    prefetch_error: words(given.prefetchError, 60),
     screen: given.screen ? triple(given.screen) : null,
     root: given.root ? triple(given.root) : null,
     url: clientLogPath(given.href),
@@ -1209,17 +1240,65 @@ function clientSnapshot(input) {
 /** How much runway is kept ahead of the playhead before the next clip is asked for. */
 const RUNAHEAD_FRAMES = 40;
 
+/**
+ * How long one `/api/plan` may stay in flight before it is abandoned **by name**.
+ *
+ * Sized against the measurements in `docs/VIEWER.md` §7 rather than picked: the
+ * slowest request observed on this host is 1.4 s (`timing.total_ms` for a 2.0 s clip
+ * with a cold 4-bit encoder subprocess), a 4.0 s clip is p50 257 ms, and a warm
+ * cached prompt is p50 111 ms. `15000 ms` is therefore ~10× the slowest *observed*
+ * request, so a real timeout means the request is genuinely wedged rather than
+ * merely slow.
+ *
+ * The deadline is not a nicety. A `fetch` that never settles leaves the in-flight
+ * flag true forever; `shouldPrefetch` then answers `stream_segment_in_flight` on
+ * every frame, the page stops asking for segments, and the playhead parks on the
+ * last buffered frame while `/api/health` keeps being polled -- which is exactly the
+ * "角色彻底不动" symptom (frozen `segments_generated`/`frames_generated`, a live
+ * process, no further `POST /api/plan`). The deadline is what makes that state
+ * recoverable instead of terminal.
+ */
+const PREFETCH_TIMEOUT_MS = 15000;
+
 /** The buffered-frames readout is pinned here when nothing is buffered behind the playhead. */
 const BUFFER_EMPTY_HINT = '缓冲耗尽：生成跟不上播放，已停在这一帧（不循环）。';
 
 /**
  * Why a request is refused, in the same named style the server uses. Used when the
  * page would otherwise have to invent a reason for not fetching a next segment.
+ *
+ * `TIMEOUT` and `FAILED` are *outcomes*, not refusals: they name what ended the last
+ * attempt, and both leave the next frame free to try again (`prefetch_timeout` is the
+ * name requirement for the deadline).
  */
 const STREAM_HOLD = {
   NO_INTENT: 'no_stream_intent',
   GENERATING: 'stream_segment_in_flight',
   BUFFERED: 'stream_buffer_has_runway',
+  LOOPING: 'stream_loop_single_segment',
+  TIMEOUT: 'prefetch_timeout',
+  FAILED: 'prefetch_failed',
+};
+
+/**
+ * The four readings the `stream` row has to be able to tell apart, because "it
+ * stopped moving" looks identical from the sofa whatever the cause (`0007` ⑤: a
+ * stall must be *said*):
+ *
+ *   * `FETCHING` -- a request is out; the queue is being fed.
+ *   * `FAILED`   -- the last attempt ended by name and a retry is due. The page is
+ *                   not idle, it is failing, and it says with what.
+ *   * `DRY`      -- nothing buffered and nothing in flight: the player really has no
+ *                   material, and the hold is honest.
+ *   * `BLOCKED`  -- no conditions to generate from: a user action is required.
+ */
+const PREFETCH_STATE = {
+  IDLE: 'idle',
+  FETCHING: 'fetching',
+  FAILED: 'failed',
+  DRY: 'dry',
+  BLOCKED: 'blocked',
+  LOOP: 'loop',
 };
 
 /** `segment: {frames, joints, roots, contacts, ...}` -> the fields the timeline reads. */
@@ -1416,9 +1495,23 @@ function nextSegmentIntent(input) {
   const pending = given.nextIntent || null;
   const committed = given.committedIntent || null;
   const haveSegments = Array.isArray(given.segments) && given.segments.length > 0;
-  // Identical conditions: nothing to decide, keep what the last segment used.
+  // Identical conditions: nothing to *decide* -- and the stream keeps going with the
+  // conditions that are already playing. **This branch is the freeze that was
+  // reported.** It used to return `intent: null`, and `pullSegment` refuses a null
+  // intent, so after the first segment of a sentence the page asked for nothing,
+  // forever: `shouldPrefetch` said "fetch", `pullSegment` returned early (quietly, in
+  // the runahead path), and the playhead parked on its last frame while
+  // `/api/health` kept being polled. A continuous stream is *the same sentence
+  // continued* (`0007`), so reusing the committed conditions is the entire point of
+  // this branch -- no new intent is committed, the one already committed is returned.
   if (pending && committed && pending.version === committed.version) {
-    return { intent: null, commit: null, changed: false, reason: null };
+    return { intent: committed, commit: null, changed: false, reason: null };
+  }
+  // Nothing pending, something committed: the same reading. This is the state a
+  // `hold` leaves behind (`holdResolution`), and the one the very first runahead
+  // fetch after a successful append is in.
+  if (!pending && committed) {
+    return { intent: committed, commit: null, changed: false, reason: null };
   }
   // A new sentence arrived while we were generating. It waits for the next segment:
   // committing it now would apply it to the clip already being generated.
@@ -1431,18 +1524,167 @@ function nextSegmentIntent(input) {
   return { intent: pending, commit: pending, changed: !!committed, reason: null };
 }
 
-/** Whether to ask for another segment now. **Pure.** */
+/**
+ * Whether to ask for another segment **this frame**. **Pure.**
+ *
+ * Driven by the playhead *alone*: the runway is recomputed from `playhead` and
+ * `timeline` on every call, so nothing here can be left in a state that suppresses
+ * the request forever. The one-shot `lastDecision` this function used to read is
+ * gone -- a remembered decision is a decision about a frame that has already been
+ * drawn.
+ *
+ * A request already in flight is the only thing that stops a second one, and it does
+ * so only until its deadline: at or past `timeoutMs` the answer is `expired`, which
+ * the caller must treat as "abandon this one by name and let the next frame try
+ * again", never as "keep waiting".
+ */
 function shouldPrefetch(input) {
   const given = input || {};
-  if (given.fetching) return { fetch: false, reason: STREAM_HOLD.GENERATING };
-  if (!given.nextIntent && !given.committedIntent) {
-    return { fetch: false, reason: STREAM_HOLD.NO_INTENT };
-  }
   const timeline = given.timeline || null;
-  if (timeline && given.lastDecision && !given.lastDecision.wantMore) {
-    return { fetch: false, reason: STREAM_HOLD.BUFFERED };
+  const runahead = Number.isFinite(Number(given.runaheadFrames))
+    ? Number(given.runaheadFrames)
+    : RUNAHEAD_FRAMES;
+  const timeoutMs = Number(given.timeoutMs) > 0 ? Number(given.timeoutMs) : PREFETCH_TIMEOUT_MS;
+  const depth = bufferDepth(timeline, given.playhead);
+  // The only input that decides whether the queue wants more.
+  const wantMore = !timeline || timeline.frameCount <= 0 || depth <= runahead;
+  const fetching = Boolean(given.fetching);
+  const ageMs = fetching ? Math.max(0, Number(given.fetchAgeMs) || 0) : 0;
+  if (given.loopSingleSegment) {
+    // The explicit single-clip loop is not a stream: it must not grow the queue
+    // behind the reader's back (0009 §二, "Loop is off by default" and means *this*).
+    return {
+      fetch: false, expired: false, wantMore: false, depth, reason: STREAM_HOLD.LOOPING,
+      timeoutMs, ageMs,
+    };
   }
-  return { fetch: true, reason: null };
+  if (fetching && ageMs >= timeoutMs) {
+    return {
+      fetch: false, expired: true, wantMore, depth, reason: STREAM_HOLD.TIMEOUT,
+      timeoutMs, ageMs,
+    };
+  }
+  if (fetching) {
+    return {
+      fetch: false, expired: false, wantMore, depth, reason: STREAM_HOLD.GENERATING,
+      timeoutMs, ageMs,
+    };
+  }
+  if (!wantMore) {
+    return {
+      fetch: false, expired: false, wantMore, depth, reason: STREAM_HOLD.BUFFERED,
+      timeoutMs, ageMs,
+    };
+  }
+  if (!given.nextIntent && !given.committedIntent) {
+    return {
+      fetch: false, expired: false, wantMore, depth, reason: STREAM_HOLD.NO_INTENT,
+      timeoutMs, ageMs,
+    };
+  }
+  return {
+    fetch: true, expired: false, wantMore, depth, reason: null, timeoutMs, ageMs,
+  };
+}
+
+/**
+ * What the `stream` row and the retry line say. **Pure.**
+ *
+ * Three readings have to be distinguishable at a glance, because the reader's
+ * symptom ("实际它没有动") is identical for all of them: *取* (`FETCHING`), *取失败*
+ * (`FAILED`), *真的没料* (`DRY`). `retries` and the last named failure are appended
+ * to every reading, so "it stopped" is never again a report with no number behind
+ * it. `blocked` is the fourth: nothing is broken, there is simply no condition to
+ * generate from, and the manual retry (or a sentence) is what resolves it.
+ */
+function prefetchNote(input) {
+  const given = input || {};
+  const timeline = given.timeline || null;
+  const fps = Number(given.fps) > 0 ? Number(given.fps) : 20;
+  const runahead = Number.isFinite(Number(given.runaheadFrames))
+    ? Number(given.runaheadFrames)
+    : RUNAHEAD_FRAMES;
+  const depth = bufferDepth(timeline, given.playhead);
+  const wantMore = !timeline || timeline.frameCount <= 0 || depth <= runahead;
+  const retries = Math.max(0, Math.round(Number(given.retries) || 0));
+  const error = given.lastPrefetchError || null;
+  const code = error && error.name ? String(error.name) : null;
+  const fetching = Boolean(given.fetching);
+  const held = Boolean(given.held);
+  const armed = Boolean(given.nextIntent || given.committedIntent);
+  let state;
+  if (given.loopSingleSegment) state = PREFETCH_STATE.LOOP;
+  else if (fetching) state = PREFETCH_STATE.FETCHING;
+  // "No conditions at all" is more actionable than anything about the buffer: with no
+  // intent the page can never be fed again, whatever the buffer says.
+  else if (!armed && wantMore) state = PREFETCH_STATE.BLOCKED;
+  // A hold wins over a named failure: "缓冲耗尽（持帧）" is the honest primary reading,
+  // and the failure is appended to it rather than replacing it.
+  else if (held || depth <= 0) state = PREFETCH_STATE.DRY;
+  else if (code && wantMore) state = PREFETCH_STATE.FAILED;
+  else state = PREFETCH_STATE.IDLE;
+
+  const heads = {
+    [PREFETCH_STATE.FETCHING]: '正在取下一段…',
+    [PREFETCH_STATE.FAILED]: '取下一段失败，正在重试',
+    [PREFETCH_STATE.DRY]: '缓冲耗尽（持帧）',
+    [PREFETCH_STATE.BLOCKED]: '没有可预取的条件',
+    [PREFETCH_STATE.LOOP]: '循环开（单段反复）——不是连续流',
+    [PREFETCH_STATE.IDLE]: `${depth} 帧 / ${(depth / fps).toFixed(1)} s`,
+  };
+  const parts = [heads[state]];
+  if (code) parts.push(`最后失败 ${code}`);
+  if (retries > 0) parts.push(`重试 ${retries} 次`);
+  const why = {
+    [PREFETCH_STATE.FETCHING]: '一次一个在飞请求：本帧不会再发第二个。',
+    [PREFETCH_STATE.FAILED]: `上一次以 ${code} 结束；失败不被吞掉，下一帧立即再试。`,
+    [PREFETCH_STATE.DRY]: '播放头停在最后一帧，永不回头、不循环（0009 二）。',
+    [PREFETCH_STATE.BLOCKED]: '没有条件可生成：输入一句动作，或点「继续 / 重试下一段」。',
+    [PREFETCH_STATE.LOOP]: '循环是显式选项：单段反复播，位置显示会回退（默认关闭）。',
+    [PREFETCH_STATE.IDLE]: `缓冲充足：还有 ${(depth / fps).toFixed(1)} s 的余量，不急着取。`,
+  };
+  return {
+    state,
+    code,
+    retries,
+    depth,
+    wantMore,
+    text: parts.join(' · '),
+    title: why[state],
+    // What the small print under the transport says, including the numbers that make
+    // the reading auditable after the fact.
+    help: `${parts.join(' · ')} — 重试 ${retries} 次，最后一次失败：${code || '无'}`
+      + `（在飞 ${fetching ? '是' : '否'}，余量 ${depth} 帧）`,
+    honest: true,
+  };
+}
+
+/**
+ * What a `hold` does to the stream's conditions. **Pure.**
+ *
+ * A `hold` is the server saying *this sentence did not ask for motion*
+ * (`/api/plan`, `decision.starts_new_action === false`): nothing is generated and the
+ * clip on screen is left alone. The shipped page read that as "forget everything" --
+ * it nulled **both** intents -- and that is the second permanent wedge: with no
+ * intent, `shouldPrefetch` can only answer `no_stream_intent`, no request is ever
+ * sent again, and a continuous stream stops dead while `/api/health` keeps being
+ * polled. A hold is not a stop signal, so the conditions that are *playing* are
+ * re-armed and the queue keeps growing; the sentence itself is dropped, by name.
+ *
+ * With nothing to re-arm (a hold on the very first request) there is no stream to
+ * continue: the page says so by name and the manual retry / a new sentence is the
+ * recovery, rather than a silent stall.
+ */
+function holdResolution(input) {
+  const given = input || {};
+  const lastGood = given.lastGoodIntent || null;
+  return {
+    committedIntent: lastGood,
+    nextIntent: null,
+    rearmed: Boolean(lastGood),
+    reason: given.reason || null,
+    code: lastGood ? 'prefetch_intent_rearmed' : STREAM_HOLD.NO_INTENT,
+  };
 }
 
 /**
@@ -2268,6 +2510,14 @@ function extendTrail() {
  * One request at a time (`state.fetching`), and the conditions are frozen before the
  * request leaves: a sentence typed while this is in flight lands on the segment
  * *after* this one (`nextSegmentIntent`).
+ *
+ * The request carries its own deadline (`state.fetchStartedAt` +
+ * `PREFETCH_TIMEOUT_MS`, read by `shouldPrefetch` in the render loop) and its own
+ * `AbortController`, so abandoning it releases the socket rather than leaving a
+ * promise outstanding on a server that is not going to answer. Every way this can
+ * end is **named**: a timeout, a non-2xx, a body that is not JSON, and a network
+ * refusal all become `state.lastPrefetchError` and a `console.warn` in the client
+ * log, and all of them leave the next frame free to try again.
  */
 async function pullSegment(options) {
   const given = options || {};
@@ -2287,6 +2537,11 @@ async function pullSegment(options) {
   if (plan.commit) state.committedIntent = plan.commit;
   state.fetching = true;
   const requestId = ++state.requestId;
+  // The deadline is measured from here, not from the frame the loop noticed: this is
+  // when the request actually left.
+  state.fetchStartedAt = performance.now();
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  state.fetchAbort = controller;
   if (first) {
     state.busy = true;
     els.generate.disabled = true;
@@ -2305,21 +2560,39 @@ async function pullSegment(options) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      ...(controller ? { signal: controller.signal } : {}),
     });
     if (requestId !== state.requestId) return null;
     payload.__intentVersion = intent.version;
     showBubble(bubbleFromPlan(payload));
     announceContinuation(payload);
     if (payload.kind === 'hold') {
-      // No action was started and no clip is drawn: the queue keeps what it has, the
-      // intent is *not* committed (so the same conditions are not re-sent forever),
-      // and the status line names the reading that held the clip.
-      state.committedIntent = null;
-      state.nextIntent = null;
-      setStatus(`保持当前动作 — ${payload.decision.reason}。`);
+      // No action was started and no clip is drawn: the queue keeps what it has. The
+      // sentence is dropped, but the *stream* is not: the conditions that are playing
+      // are re-armed so the queue keeps growing, and the page names what happened.
+      // Clearing both intents here is the second permanent wedge (`holdResolution`).
+      const resolution = holdResolution({
+        lastGoodIntent: state.lastGoodIntent,
+        reason: payload.decision && payload.decision.reason,
+      });
+      state.committedIntent = resolution.committedIntent;
+      state.nextIntent = resolution.nextIntent;
+      setStatus(
+        `保持当前动作 — ${resolution.reason}（${resolution.code}）`
+        + (resolution.rearmed ? '，这一段的话不生效，流继续用上一段的条件。' : '，且没有可继续的条件。'),
+      );
+      noteClientEvent(
+        'console.warn',
+        `prefetch hold ${resolution.code}: reason=${resolution.reason} rearmed=${resolution.rearmed}`,
+      );
       return null;
     }
     const segment = appendSegment(payload);
+    // The conditions this segment was generated with are what the stream continues
+    // with if the reader never types anything else.
+    state.lastGoodIntent = state.committedIntent;
+    state.retries = 0;
+    state.lastPrefetchError = null;
     if (!given.quiet) {
       const timing = payload.timing || {};
       const encoded = timing.encode_ms;
@@ -2332,18 +2605,93 @@ async function pullSegment(options) {
     syncPromptSelect(payload.embedding && payload.embedding.prompt_hash);
     return segment;
   } catch (error) {
+    // A request that is no longer current has already been reported by whoever
+    // abandoned it: reporting it again here would double-count a retry and, worse,
+    // overwrite the reason with an `AbortError` the page itself caused.
     if (requestId !== state.requestId) return null;
-    const name = error.errorName || 'request_failed';
+    const name = error.errorName
+      || (error.name === 'AbortError' ? STREAM_HOLD.TIMEOUT : STREAM_HOLD.FAILED);
+    notePrefetchFailure(name, error.message);
     showError(name, error.message, error.payload && error.payload.detail);
     showBubble({ state: 'error', text: '这次生成失败了。', meta: `error=${name}` });
-    setStatus(`失败：${name}（播放保持最后一帧，不循环）`, true);
+    setStatus(`失败：${name}（播放保持最后一帧，不循环；下一帧重试）`, true);
     if (first) els.hud.generate.textContent = fmtMs(performance.now());
     return null;
   } finally {
-    state.fetching = false;
-    state.busy = false;
-    els.generate.disabled = false;
+    // Only the request that is still the current one may clear the flag. An abandoned
+    // request settling late must not wipe the flag of the retry that replaced it --
+    // that race is the same class of bug as the flag that could never be cleared.
+    if (requestId === state.requestId) {
+      state.fetching = false;
+      state.busy = false;
+      state.fetchAbort = null;
+      els.generate.disabled = false;
+    }
   }
+}
+
+/**
+ * Drop whatever `/api/plan` is in flight, so a new one may leave. Returns whether
+ * there was one.
+ *
+ * Bumping `requestId` is what makes the abandoned answer harmless: `pullSegment`
+ * drops any response whose id no longer matches, so a late reply cannot append a
+ * segment after its replacement. The controller is aborted too, so the socket is
+ * released rather than held open against a server that is not answering.
+ */
+function releaseInFlight() {
+  const had = Boolean(state.fetching);
+  if (state.fetchAbort) {
+    try { state.fetchAbort.abort(); } catch { /* already settled */ }
+    state.fetchAbort = null;
+  }
+  state.requestId += 1;
+  state.fetching = false;
+  state.busy = false;
+  els.generate.disabled = false;
+  return had;
+}
+
+/** Record a named prefetch failure, report it, and leave the next frame free to retry. */
+function notePrefetchFailure(name, message) {
+  state.retries += 1;
+  const text = message === undefined || message === null ? '' : String(message);
+  state.lastPrefetchError = {
+    name,
+    message: clientLogText(text),
+    at: Math.round(performance.now()),
+    retries: state.retries,
+  };
+  // `console.warn` rather than a new kind: the server's vocabulary is closed on
+  // purpose, and the name is in the text, where `GET /api/client-log?kind=console.warn`
+  // plus a grep for `prefetch_timeout` finds it.
+  noteClientEvent('console.warn', `prefetch ${name} (retry ${state.retries}): ${text}`);
+  streamHudCache = { key: null, at: -Infinity };
+  updateStreamHud(true);
+}
+
+/**
+ * The manual **继续 / 重试下一段** button.
+ *
+ * It is deliberately not a reset (0009 §二: only Reload clears the run): it releases
+ * a stuck in-flight request and asks for the next segment *now*, with the conditions
+ * that are playing, so the reader has a way out of every stalled reading without
+ * losing what is on screen.
+ */
+function retryPrefetchNow() {
+  const released = releaseInFlight();
+  // Recorded, but *not* as a failure: the reader asking again is not the page failing.
+  noteClientEvent(
+    'console.warn',
+    `prefetch manual_retry: released_in_flight=${released} retries=${state.retries}`
+    + ` last=${state.lastPrefetchError ? state.lastPrefetchError.name : 'none'}`,
+  );
+  if (!state.timeline) {
+    // Nothing has ever been queued: this is just "generate the first clip".
+    planIfReady('retry');
+    return;
+  }
+  pullSegment({ quiet: false });
 }
 
 /** The sentence for a refused prefetch, by name. Never invents a reason. */
@@ -2351,6 +2699,9 @@ function streamHoldText(reason) {
   if (reason === STREAM_HOLD.GENERATING) return '正在生成下一段…';
   if (reason === STREAM_HOLD.NO_INTENT) return '还没有条件，无法继续下一段。';
   if (reason === STREAM_HOLD.BUFFERED) return '缓冲充足。';
+  if (reason === STREAM_HOLD.LOOPING) return '循环开：单段反复播，不再预取下一段。';
+  if (reason === STREAM_HOLD.TIMEOUT) return `预取超时（${STREAM_HOLD.TIMEOUT}）：已放弃在飞请求，下一帧重试。`;
+  if (reason === STREAM_HOLD.FAILED) return `预取失败（${STREAM_HOLD.FAILED}）：下一帧重试。`;
   return `没有预取下一段（${reason}）。`;
 }
 
@@ -2371,10 +2722,13 @@ function resetStream() {
   state.nextIntent = null;
   state.committedIntent = null;
   state.intentVersion = 0;
+  state.lastGoodIntent = null;
+  state.retries = 0;
+  state.lastPrefetchError = null;
   // Invalidate any fetch still in flight: a segment asked for *before* the reset must
-  // not be appended after it, or Reload would resurrect the run it just cleared.
-  state.requestId += 1;
-  state.fetching = false;
+  // not be appended after it, or Reload would resurrect the run it just cleared. The
+  // request is aborted too, so its socket does not stay open until its deadline.
+  releaseInFlight();
   if (state.rig) {
     state.rig.dispose();
     state.rig = null;
@@ -2485,6 +2839,11 @@ function updateStreamHud(force = false) {
     state.nextIntent ? state.nextIntent.version : -1,
     state.committedIntent ? state.committedIntent.version : -1,
     state.rig ? state.rig.trailPointCount() : -1,
+    // The prefetch controller's own readings, so the row repaints when it changes
+    // state rather than only when the frame counter moves.
+    state.fetching ? 1 : 0,
+    state.retries,
+    state.lastPrefetchError ? state.lastPrefetchError.name : 'none',
   ].join('|');
   const now = performance.now();
   if (!force && key === streamHudCache.key && now - streamHudCache.at < 250) return null;
@@ -2497,13 +2856,28 @@ function updateStreamHud(force = false) {
     loopSingleSegment: els.loopToggle.checked,
     runaheadFrames: RUNAHEAD_FRAMES,
   });
+  const prefetch = prefetchNote({
+    timeline,
+    playhead: state.playhead,
+    fps,
+    held: state.held,
+    runaheadFrames: RUNAHEAD_FRAMES,
+    fetching: state.fetching,
+    retries: state.retries,
+    lastPrefetchError: state.lastPrefetchError,
+    nextIntent: state.nextIntent,
+    committedIntent: state.committedIntent,
+    loopSingleSegment: els.loopToggle.checked,
+  });
   if (els.hud.stream) {
-    els.hud.stream.textContent = note.state === 'dry'
-      ? `缓冲耗尽（持帧）`
-      : `${depth} 帧 / ${(depth / fps).toFixed(1)} s · ${state.segments.length} 段`;
-    els.hud.stream.className = `hud-value ${note.state === 'dry' ? 'is-warn' : ''}`.trim();
-    els.hud.stream.title = note.text;
+    // 取 / 取失败 / 真的没料，plus the retry count and the last named failure: the
+    // reader can tell "it is working on it" from "it gave up" without a console.
+    els.hud.stream.textContent = prefetch.text;
+    els.hud.stream.className =
+      `hud-value ${[PREFETCH_STATE.DRY, PREFETCH_STATE.FAILED, PREFETCH_STATE.BLOCKED].includes(prefetch.state) ? 'is-warn' : ''}`.trim();
+    els.hud.stream.title = `${prefetch.title} ${note.text}`;
   }
+  if (els.streamRetryHelp) els.streamRetryHelp.textContent = prefetch.help;
   const intent = playbackIntentNote({
     nextIntent: state.nextIntent,
     committedIntent: state.committedIntent,
@@ -2633,6 +3007,8 @@ function clientSnapshotInput() {
     noise: els.noiseSelect ? els.noiseSelect.value : null,
     duration: els.durationInput ? Number(els.durationInput.value) : null,
     camera: cameraFollow,
+    prefetchRetries: state.retries,
+    prefetchError: state.lastPrefetchError ? state.lastPrefetchError.name : null,
     screen: projected ? [projected.x, projected.y, projected.depth] : null,
     root: target ? [target.x, target.y, target.z] : null,
     href: location.pathname,
@@ -2795,15 +3171,36 @@ function frame() {
   // Runahead: ask for the next segment while this one still has runway. The request
   // is deliberately *not* awaited -- playback continues while it is in flight, which
   // is the whole point of 0007's runahead rule.
-  if (state.playing && decision && decision.wantMore) {
+  //
+  // The decision is recomputed from `playhead`/`timeline` *every frame*. It is not
+  // remembered from the last frame and it does not depend on a flag that only one
+  // code path clears: a cached `lastDecision` plus a `fetching` flag that nothing
+  // could reset is how the page came to stop asking for segments and park on its last
+  // frame forever. The only thing that suppresses a request here is a request already
+  // in flight, and only until its deadline.
+  if (state.playing) {
     const plan = shouldPrefetch({
       fetching: state.fetching,
+      fetchAgeMs: state.fetching ? now - state.fetchStartedAt : 0,
+      timeoutMs: PREFETCH_TIMEOUT_MS,
       nextIntent: state.nextIntent,
       committedIntent: state.committedIntent,
       timeline: state.timeline,
-      lastDecision: decision,
+      playhead: state.playhead,
+      runaheadFrames: RUNAHEAD_FRAMES,
+      loopSingleSegment: els.loopToggle.checked,
     });
-    if (plan.fetch) {
+    if (plan.expired) {
+      // The request in flight has outlived its deadline. Named, aborted, and the next
+      // frame is free to ask again -- never a silent stop.
+      const released = releaseInFlight();
+      notePrefetchFailure(
+        STREAM_HOLD.TIMEOUT,
+        `no answer in ${(plan.ageMs / 1000).toFixed(1)} s`
+        + ` (deadline ${(plan.timeoutMs / 1000).toFixed(1)} s, released=${released})`,
+      );
+      setStatus(streamHoldText(STREAM_HOLD.TIMEOUT), true);
+    } else if (plan.fetch) {
       const first = state.segments.length === 0;
       pullSegment({ quiet: !first });
     }
@@ -2869,6 +3266,10 @@ els.composer.addEventListener('submit', (event) => event.preventDefault());
 // Every control that can plan a clip goes through `planIfReady`, so the guard is
 // one function that all of them share rather than a check each of them repeats.
 els.generate.addEventListener('click', () => planIfReady('generate'));
+// The manual way out of a stalled stream: release anything in flight and ask again.
+// It never resets the run (0009 §二: only Reload clears), so pressing it after a
+// failure continues from the frame on screen.
+els.retryPrefetch.addEventListener('click', () => retryPrefetchNow());
 // Enter is the whole interaction for the text box: type a prompt, press Enter.
 els.promptText.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;

@@ -87,8 +87,10 @@ function pureTimeline(source) {
 function loadTimeline(context = vm.createContext({})) {
   return vm.runInContext(
     `${pureRegion(SOURCE)}\n${pureBubble(SOURCE)}\n${pureTimeline(SOURCE)}\n`
-    + `({ RUNAHEAD_FRAMES, BUFFER_EMPTY_HINT, STREAM_HOLD, timelineOf, segmentBase, `
+    + `({ RUNAHEAD_FRAMES, PREFETCH_TIMEOUT_MS, PREFETCH_STATE, BUFFER_EMPTY_HINT, `
+    + `STREAM_HOLD, timelineOf, segmentBase, `
     + `segmentAtFrame, advancePlayhead, bufferDepth, nextSegmentIntent, shouldPrefetch, `
+    + `holdResolution, prefetchNote, `
     + `shouldFitCamera, playbackIntentNote, bufferNote, poseBounds, trailPoints, `
     + `trailUnderNaiveAppend, concatFloat32, concatUint8, `
     + `followFocus, followFocusInstant, focusTargetAt, fitFocusFromBounds, `
@@ -847,16 +849,20 @@ function playRun({ segments, frames = 140, runaheadFrames = 4, loopSingleSegment
       points: stream.trailPoints(queue).length,
       timelineFrames: tl.frameCount,
     });
-    // Runahead, exactly as the render loop does it: ask for one more segment while
-    // the current one still has runway.
-    if (decision.wantMore && queue.length < segments.length
-      && stream.shouldPrefetch({
-        fetching: false, nextIntent: { version: 1 }, committedIntent: null,
-        timeline: tl, lastDecision: decision,
-      }).fetch) {
+    // Runahead, exactly as the render loop does it: the decision is recomputed from
+    // the *playhead* every frame, and the conditions the last segment used are reused
+    // (`nextSegmentIntent`) rather than re-decided -- one sentence buys as many
+    // segments as the runway needs. The harness must mirror the shipped loop, or it
+    // would be playing a model the page does not have.
+    const runahead = stream.shouldPrefetch({
+      fetching: false, nextIntent: null, committedIntent: { version: 1 },
+      timeline: tl, playhead, runaheadFrames,
+    });
+    const intent = stream.nextSegmentIntent({
+      segments: queue, nextIntent: null, committedIntent: { version: 1 }, fetching: false,
+    });
+    if (runahead.fetch && intent.intent && queue.length < segments.length) {
       queue.push(segments[queue.length]);
-      // The harness must mirror the shipped loop, or it would be playing a model the
-      // page does not have.
       assertClock.push(SOURCE.includes('pullSegment({ quiet: !first });'));
     }
   }
@@ -1418,25 +1424,578 @@ test('criterion 4 negative control: the loop would hide the dry buffer', () => {
 
 test('runahead is the only thing that asks for a segment, and a miss is never a rewind', () => {
   const tl = stream.timelineOf(FIVE, JOINT_COUNT);
-  // With runway left, nothing is asked for...
+  // The playhead is the *only* input that decides. With runway left, nothing is asked
+  // for -- and no remembered "last decision" is consulted, because there is none.
   const buffered = stream.shouldPrefetch({
-    fetching: false, nextIntent: { version: 1 }, committedIntent: null,
-    timeline: tl, lastDecision: { wantMore: false },
+    fetching: false, nextIntent: null, committedIntent: { version: 1 },
+    timeline: tl, playhead: 0, runaheadFrames: 4,
   });
   assert.equal(buffered.fetch, false);
   assert.equal(buffered.reason, stream.STREAM_HOLD.BUFFERED);
+  assert.equal(buffered.wantMore, false);
   // ... and inside the runahead window it is.
   const low = stream.shouldPrefetch({
-    fetching: false, nextIntent: { version: 1 }, committedIntent: null,
-    timeline: tl, lastDecision: { wantMore: true },
+    fetching: false, nextIntent: null, committedIntent: { version: 1 },
+    timeline: tl, playhead: tl.maxFrame - 2, runaheadFrames: 4,
   });
   assert.equal(low.fetch, true);
-  // One request at a time.
-  assert.equal(stream.shouldPrefetch({
-    fetching: true, nextIntent: { version: 1 }, timeline: tl, lastDecision: { wantMore: true },
-  }).reason, stream.STREAM_HOLD.GENERATING);
+  assert.equal(low.reason, null);
+  // One request at a time -- but only until its deadline.
+  const inflight = stream.shouldPrefetch({
+    fetching: true, fetchAgeMs: 10, timeoutMs: 15000, nextIntent: null,
+    committedIntent: { version: 1 }, timeline: tl, playhead: tl.maxFrame - 2,
+    runaheadFrames: 4,
+  });
+  assert.equal(inflight.reason, stream.STREAM_HOLD.GENERATING);
+  assert.equal(inflight.expired, false);
+  // At the deadline the in-flight request stops being a reason to wait: `expired` is
+  // the shell's instruction to abandon it by name and let the next frame try again.
+  const stale = stream.shouldPrefetch({
+    fetching: true, fetchAgeMs: 15000, timeoutMs: 15000, nextIntent: null,
+    committedIntent: { version: 1 }, timeline: tl, playhead: tl.maxFrame - 2,
+    runaheadFrames: 4,
+  });
+  assert.equal(stale.expired, true);
+  assert.equal(stale.fetch, false);
+  assert.equal(stale.reason, stream.STREAM_HOLD.TIMEOUT);
+  assert.equal(stream.STREAM_HOLD.TIMEOUT, 'prefetch_timeout');
+  // No conditions at all is the one refusal that is not about buffering.
   assert.equal(stream.shouldPrefetch({ fetching: false, timeline: tl }).reason,
     stream.STREAM_HOLD.NO_INTENT);
+  // The explicit loop is not a stream and must not grow the queue behind the reader.
+  assert.equal(stream.shouldPrefetch({
+    fetching: false, nextIntent: null, committedIntent: { version: 1 },
+    timeline: tl, playhead: tl.maxFrame, loopSingleSegment: true,
+  }).reason, stream.STREAM_HOLD.LOOPING);
+});
+
+// ---------------------------------------------------------------------------
+// the prefetch controller: a stream that must never stop feeding itself
+// ---------------------------------------------------------------------------
+//
+// The reader's symptom was "角色彻底不动": `segments_generated`/`frames_generated`
+// frozen (10 segments / 800 frames, identical 4 s later), the process alive and still
+// answering `/api/health`, and **no further `POST /api/plan`**. The player was out of
+// material (`held: true`) and -- this is the bug -- it had no way left to ask for
+// more. Two independent wedges produced that, and neither is visible in a browser
+// without a human watching it:
+//
+//   1. `nextSegmentIntent` answered `intent: null` for *unchanged* conditions, and
+//      `pullSegment` refuses a null intent -- so one sentence bought exactly one
+//      segment, and after that the runahead path refused, quietly, every frame.
+//   2. `shouldPrefetch` read a remembered `lastDecision` and a `fetching` flag, so a
+//      request that never settled suppressed every future request forever.
+//
+// The harness below plays the stream with the **shipped pure functions** against a
+// **stub `/api/plan`** in plain `node`: no DOM, no fetch, no browser, no three.js.
+// Only the *network* is stubbed -- every decision is the page's own code. It advances
+// >= 20 segments and asserts the three things the reader could not see: the queue
+// keeps growing, the playhead never goes back, and no hold outlives a bounded window.
+//
+// Each assertion has a negative control that makes the **same verdict** go red --
+// prefetch switched off, the old `intent: null` restored, the in-flight flag wedged
+// with no deadline, and a mid-stream failure with the flag left set. A criterion that
+// cannot fail is not a criterion.
+
+/** A segment long enough to be a real clip: 40 frames = the 2.0 s minimum at 20 fps. */
+const SOAK_SEGMENT_FRAMES = 40;
+const SOAK_MS_PER_FRAME = 1000 / STREAM_FPS;
+
+/**
+ * `nextSegmentIntent`, with the shipped bug available as an explicit control.
+ *
+ * `reuseIntent: false` reproduces the exact line that froze the page -- `intent: null`
+ * for unchanged conditions -- so the negative control is a real alternative
+ * implementation and not a mock of one (the same technique the loop/wrap controls
+ * above use).
+ */
+function soakIntent({ queue, intent, committed, reuseIntent }) {
+  if (!reuseIntent && intent && committed && intent.version === committed.version) {
+    return { intent: null, commit: null, changed: false, reason: null };
+  }
+  return stream.nextSegmentIntent({
+    segments: queue, nextIntent: intent, committedIntent: committed, fetching: false,
+  });
+}
+
+/**
+ * Play a stream against a stub `/api/plan`, in the order the render loop uses: one
+ * `advancePlayhead` per frame, then one prefetch decision per frame, then the request
+ * settles after `latencyFrames` (or never, for the wedge controls).
+ *
+ * Options:
+ *   * `wedgedAttempts` -- the first N requests never settle at all. Only the deadline
+ *     can clear the flag, which is the failure the reader hit.
+ *   * `stuckFlag` -- the deadline fires but the release does *not* clear the in-flight
+ *     flag. This is the "永久卡住" case: a deadline that cannot release anything is
+ *     no better than no deadline, and it must make the soak go red.
+ *   * `stallAfterFailure` -- a *failed* request leaves the in-flight flag set forever.
+ *     With a finite `timeoutMs` the deadline recovers it; with `timeoutMs: 1e9` it
+ *     models the shipped page, which had no deadline at all.
+ *   * `prefetchEnabled: false` -- the page with the prefetch loop switched off.
+ *   * `reuseIntent: false` -- the shipped `intent: null`.
+ *   * `plan(attempt)` -- return `null` for a clip, or a named error string.
+ */
+function soakRun(options = {}) {
+  const given = options || {};
+  const maxFrames = given.maxFrames === undefined ? 2000 : given.maxFrames;
+  const latencyFrames = given.latencyFrames === undefined ? 3 : given.latencyFrames;
+  const timeoutMs = given.timeoutMs === undefined ? stream.PREFETCH_TIMEOUT_MS : given.timeoutMs;
+  const runaheadFrames = given.runaheadFrames === undefined
+    ? stream.RUNAHEAD_FRAMES : given.runaheadFrames;
+  const segmentFrames = given.segmentFrames === undefined ? SOAK_SEGMENT_FRAMES : given.segmentFrames;
+  const prefetchEnabled = given.prefetchEnabled !== false;
+  const reuseIntent = given.reuseIntent !== false;
+  const stallAfterFailure = given.stallAfterFailure === true;
+  const stuckFlag = given.stuckFlag === true;
+  const plan = given.plan || (() => null);
+  let wedgesLeft = given.wedgedAttempts === undefined ? 0 : given.wedgedAttempts;
+
+  const queue = [];
+  const trace = [];
+  const events = [];
+  const intent = { version: 1, body: { prompt: 'walk' } };
+  let committed = null;
+  let playhead = 0;
+  let held = false;
+  let heldStreak = 0;
+  let worstHeldStreak = 0;
+  let monotone = true;
+  let fetching = false;
+  let fetchStartedAt = 0;
+  let flight = null;            // {settleAt, error}; settleAt Infinity = never settles
+  let retries = 0;              // since the last appended segment
+  let totalRetries = 0;
+  let lastPrefetchError = null;
+  let attempt = 0;
+
+  const fail = (step, name) => {
+    retries += 1;
+    totalRetries += 1;
+    lastPrefetchError = { name, at: step * SOAK_MS_PER_FRAME, retries };
+    events.push({ step, kind: 'error', name });
+  };
+  const succeed = (step) => {
+    queue.push(fakeSegment({
+      frames: segmentFrames,
+      base: queue.length * segmentFrames,
+      version: committed ? committed.version : 1,
+    }));
+    retries = 0;
+    lastPrefetchError = null;
+    events.push({ step, kind: 'append', segments: queue.length });
+  };
+
+  for (let step = 0; step < maxFrames; step += 1) {
+    const now = step * SOAK_MS_PER_FRAME;
+    // 1. the answer to the request in flight, if it is due.
+    if (flight && flight.settleAt <= step) {
+      const settled = flight;
+      flight = null;
+      fetching = false;
+      if (settled.error) {
+        fail(step, settled.error);
+        if (stallAfterFailure) {
+          // The control: the failure is recorded and the flag is left set forever.
+          fetching = true;
+          fetchStartedAt = now;
+          flight = { settleAt: Infinity, error: null };
+        }
+      } else {
+        succeed(step);
+      }
+    }
+    // 2. one frame of playback.
+    const tl = queue.length ? stream.timelineOf(queue, JOINT_COUNT) : null;
+    const previous = playhead;
+    const decision = stream.advancePlayhead({
+      segments: queue, timeline: tl, playhead, deltaSeconds: 1 / STREAM_FPS,
+      fps: STREAM_FPS, runaheadFrames, loopSingleSegment: false,
+    });
+    playhead = decision.playhead;
+    held = decision.held;
+    if (playhead < previous) monotone = false;
+    heldStreak = held ? heldStreak + 1 : 0;
+    worstHeldStreak = Math.max(worstHeldStreak, heldStreak);
+    // 3. the prefetch controller, exactly the block the render loop runs.
+    if (prefetchEnabled) {
+      const controller = stream.shouldPrefetch({
+        fetching,
+        fetchAgeMs: fetching ? now - fetchStartedAt : 0,
+        timeoutMs,
+        nextIntent: intent,
+        committedIntent: committed,
+        timeline: tl,
+        playhead,
+        runaheadFrames,
+      });
+      if (controller.expired) {
+        // The deadline: release by name, and the next frame is free to ask again.
+        // `stuckFlag` models a release that does not actually clear the flag.
+        if (!stuckFlag) fetching = false;
+        flight = null;
+        attempt += 1;
+        fail(step, stream.STREAM_HOLD.TIMEOUT);
+        events.push({ step, kind: 'timeout' });
+      } else if (controller.fetch) {
+        const resolution = soakIntent({ queue, intent, committed, reuseIntent });
+        if (resolution && resolution.intent) {
+          if (resolution.commit) committed = resolution.commit;
+          attempt += 1;
+          fetching = true;
+          fetchStartedAt = now;
+          const wedged = wedgesLeft > 0;
+          if (wedged) wedgesLeft -= 1;
+          flight = wedged
+            ? { settleAt: Infinity, error: null }
+            : { settleAt: step + latencyFrames, error: plan(attempt) };
+        }
+      }
+    }
+    trace.push({ step, playhead, held, segments: queue.length, fetching, retries });
+  }
+
+  return {
+    segments: queue.length,
+    playhead,
+    steps: trace.length,
+    monotone,
+    worstHeldStreak,
+    heldFrames: trace.filter((entry) => entry.held).length,
+    retries,
+    totalRetries,
+    lastPrefetchError: lastPrefetchError ? lastPrefetchError.name : null,
+    attempts: attempt,
+    timeouts: events.filter((event) => event.kind === 'timeout').length,
+    errors: events.filter((event) => event.kind === 'error').length,
+    appends: events.filter((event) => event.kind === 'append').length,
+    events,
+    trace,
+  };
+}
+
+/**
+ * The soak criteria as a predicate, so every negative control can assert that *this*
+ * verdict goes red instead of re-implementing the check it is meant to falsify.
+ */
+function soakVerdict(result, options = {}) {
+  const given = options || {};
+  const targetSegments = given.targetSegments === undefined ? 24 : given.targetSegments;
+  const maxHeldStreak = given.maxHeldStreak === undefined
+    ? stream.RUNAHEAD_FRAMES : given.maxHeldStreak;
+  const reasons = [];
+  if (result.segments < targetSegments) {
+    reasons.push(`the queue only reached ${result.segments} segment(s), need ${targetSegments}`);
+  }
+  if (!result.monotone) reasons.push('the playhead went backwards');
+  if (result.worstHeldStreak > maxHeldStreak) {
+    reasons.push(`a hold lasted ${result.worstHeldStreak} frames, over ${maxHeldStreak}`);
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+test('soak: 24 segments of continuous playback, and the queue never stops growing', () => {
+  const result = soakRun({ maxFrames: 2000 });
+  const verdict = soakVerdict(result, { targetSegments: 24 });
+  assert.ok(verdict.ok, `the soak must pass: ${verdict.reasons.join('; ')}`);
+  assert.ok(result.segments >= 24, `${result.segments} segments`);
+  assert.equal(result.monotone, true, 'the playhead is monotone across every append');
+  assert.equal(result.worstHeldStreak, 0,
+    'with runahead 40 and a 3-frame request, playback must never run dry at all');
+  assert.equal(result.errors, 0);
+  assert.equal(result.appends, result.segments, 'every append is accounted for');
+  // The seam really is a continuation: each segment adds frames-1 global frames.
+  const tl = stream.timelineOf(
+    Array.from({ length: result.segments }, (_, i) => fakeSegment({
+      frames: SOAK_SEGMENT_FRAMES, base: i * SOAK_SEGMENT_FRAMES,
+    })),
+    JOINT_COUNT,
+  );
+  assert.equal(tl.frameCount, result.segments * SOAK_SEGMENT_FRAMES - (result.segments - 1),
+    'the dropped seam frame is one per seam, and only one');
+
+  // The shipped loop is the thing under test: the decision is recomputed from the
+  // playhead every frame, and no remembered decision may take part in it.
+  const loop = functionBody(SOURCE, 'frame');
+  assert.match(loop, /shouldPrefetch\(/, 'the render loop asks the controller');
+  assert.match(loop, /plan\.expired/, 'the deadline is read in the loop it protects');
+  assert.match(loop, /releaseInFlight\(\)/);
+  // The code may not *use* a remembered decision (the comments name the one that was
+  // removed, which is why this matches the property usage and not the bare word).
+  assert.doesNotMatch(loop, /lastDecision\s*[:,]/,
+    'no remembered decision may take part in the per-frame prefetch decision');
+  assert.doesNotMatch(loop, /decision\.wantMore/,
+    'the runahead rule is recomputed from the playhead, not read off the last frame');
+});
+
+test('soak: a mid-stream failure is named, retried, and costs a bounded hold', () => {
+  // Every seventh request fails. The failure is at the moment the buffer is thinnest,
+  // so this is the case where a page that does not retry goes dry -- and the retry has
+  // to happen without a human pressing anything.
+  const result = soakRun({
+    maxFrames: 2000,
+    latencyFrames: 20,
+    plan: (attempt) => (attempt % 7 === 0 ? stream.STREAM_HOLD.FAILED : null),
+  });
+  const verdict = soakVerdict(result, { targetSegments: 24, maxHeldStreak: stream.RUNAHEAD_FRAMES });
+  assert.ok(verdict.ok, `a retried failure must still stream: ${verdict.reasons.join('; ')}`);
+  assert.ok(result.errors >= 1, `the fixture must really fail (got ${result.errors})`);
+  assert.equal(result.lastPrefetchError, null, 'a recovered stream must not still say it failed');
+  assert.ok(result.totalRetries >= 1, `${result.totalRetries} retries`);
+  assert.equal(result.monotone, true);
+});
+
+test('soak: the deadline is what makes a wedged request recoverable', () => {
+  // The first request never settles at all -- the flag can only be cleared by the
+  // deadline -- and a later failure leaves the flag set the same way. With the
+  // deadline (20 frames here, 15 s by default) the stream recovers and keeps growing.
+  const result = soakRun({
+    maxFrames: 2600,
+    timeoutMs: 20 * SOAK_MS_PER_FRAME,
+    wedgedAttempts: 1,
+    stallAfterFailure: true,
+    plan: (attempt) => (attempt % 5 === 0 ? stream.STREAM_HOLD.FAILED : null),
+  });
+  const verdict = soakVerdict(result, { targetSegments: 24, maxHeldStreak: stream.RUNAHEAD_FRAMES });
+  assert.ok(verdict.ok, `the deadline must recover the stream: ${verdict.reasons.join('; ')}`);
+  assert.ok(result.timeouts >= 1, `the deadline must actually fire (got ${result.timeouts})`);
+  assert.equal(stream.PREFETCH_TIMEOUT_MS, 15000,
+    'the shipped default is the documented 15 s deadline');
+});
+
+test('negative control: with prefetch switched off the stream is at a standstill', () => {
+  // The "no prefetch" page. It must fail the growth criterion -- or the soak is
+  // measuring something other than the prefetch controller.
+  const result = soakRun({ prefetchEnabled: false, maxFrames: 600 });
+  assert.equal(result.segments, 0, 'nothing can be appended if nothing is asked for');
+  const verdict = soakVerdict(result, { targetSegments: 24 });
+  assert.equal(verdict.ok, false, 'the growth criterion must be able to fail');
+  assert.match(verdict.reasons.join(' '), /only reached 0 segment/);
+});
+
+test('negative control: the shipped "unchanged intent" refusal buys exactly one segment', () => {
+  // Wedge 1, verbatim: `intent: null` for unchanged conditions. One segment, then a
+  // silent refusal every frame while `/api/health` keeps being polled -- the reader's
+  // "10 segments then frozen", reproduced in four lines.
+  const result = soakRun({ reuseIntent: false, maxFrames: 2000 });
+  assert.equal(result.segments, 1, 'the old answer buys exactly one segment');
+  const verdict = soakVerdict(result, { targetSegments: 24 });
+  assert.equal(verdict.ok, false, 'and the same verdict must notice');
+  assert.ok(result.trace.filter((entry) => entry.segments === 1).length > 100,
+    'the stream sits at one segment for the rest of the run: no growth, no error, no stop');
+
+  // The shipped function reuses the committed conditions instead, and commits nothing.
+  const committed = { version: 3 };
+  const reused = stream.nextSegmentIntent({
+    segments: [fakeSegment({})], nextIntent: { version: 3 }, committedIntent: committed,
+    fetching: false,
+  });
+  assert.equal(reused.intent, committed, 'the conditions that are playing are returned');
+  assert.equal(reused.commit, null, 'nothing new is committed: no mid-clip condition change');
+  assert.equal(reused.changed, false);
+  // ... and the same when nothing is pending at all (the state a `hold` leaves).
+  assert.equal(stream.nextSegmentIntent({
+    segments: [fakeSegment({})], nextIntent: null, committedIntent: committed, fetching: false,
+  }).intent, committed);
+  assert.match(functionBody(SOURCE, 'nextSegmentIntent'),
+    /return \{ intent: committed, commit: null, changed: false, reason: null \};/,
+    'the reuse branch is the shipped line, not a test-only copy');
+});
+
+test('negative control: an in-flight flag that can never be cleared stops the stream forever', () => {
+  // Wedge 2: a request that never settles, with no deadline to abandon it. `fetching`
+  // stays true, so `shouldPrefetch` answers `stream_segment_in_flight` on every frame
+  // for the rest of the run -- the exact "process alive, health polled, no
+  // `POST /api/plan`" state. `timeoutMs: 1e9` models the page as it shipped.
+  const wedged = soakRun({ wedgedAttempts: Infinity, timeoutMs: 1e9, maxFrames: 600 });
+  assert.equal(wedged.segments, 0);
+  assert.equal(wedged.attempts, 1, 'exactly one request ever leaves');
+  assert.equal(soakVerdict(wedged, { targetSegments: 24 }).ok, false);
+
+  const stalled = soakRun({
+    stallAfterFailure: true, timeoutMs: 1e9, maxFrames: 2000, latencyFrames: 20,
+    plan: (attempt) => (attempt % 3 === 0 ? stream.STREAM_HOLD.FAILED : null),
+  });
+  const verdict = soakVerdict(stalled, { targetSegments: 24 });
+  assert.equal(verdict.ok, false, 'a stuck flag must be visible to the soak');
+  assert.ok(stalled.segments < 24, `the queue must stall (reached ${stalled.segments})`);
+  assert.ok(stalled.worstHeldStreak > stream.RUNAHEAD_FRAMES,
+    `and it must sit held, not merely slow (${stalled.worstHeldStreak} frames)`);
+});
+
+test('negative control: a deadline that cannot clear the flag is still a permanent hold', () => {
+  // "永久卡住" in its purest form: the deadline fires on every frame and the release
+  // never actually clears the flag, so no request can ever leave. A deadline that
+  // cannot release anything is no better than no deadline -- and the soak must say so.
+  const stuck = soakRun({
+    stuckFlag: true, stallAfterFailure: true, maxFrames: 1500,
+    timeoutMs: 20 * SOAK_MS_PER_FRAME, latencyFrames: 3,
+    plan: (attempt) => (attempt % 4 === 0 ? stream.STREAM_HOLD.FAILED : null),
+  });
+  const verdict = soakVerdict(stuck, { targetSegments: 24 });
+  assert.equal(verdict.ok, false, 'a stuck flag must be visible to the soak');
+  assert.ok(stuck.segments < 24, `the queue must stall (reached ${stuck.segments})`);
+  assert.ok(stuck.segments >= 1, 'the stall must happen mid-stream, not before anything played');
+  assert.ok(stuck.timeouts > 10, `the deadline keeps firing (${stuck.timeouts} times)`);
+  assert.ok(stuck.worstHeldStreak > stream.RUNAHEAD_FRAMES,
+    `and the player sits held (${stuck.worstHeldStreak} frames)`);
+
+  // With a release that really clears the flag, the same wedge recovers: that pair is
+  // the whole value of requirement 2.
+  const recovered = soakRun({
+    wedgedAttempts: 1, maxFrames: 2600, timeoutMs: 20 * SOAK_MS_PER_FRAME,
+  });
+  assert.equal(soakVerdict(recovered, { targetSegments: 24 }).ok, true);
+});
+
+test('the stream row tells 取 / 取失败 / 真的没料 apart, with the count and the name', () => {
+  const tl = stream.timelineOf(
+    Array.from({ length: 4 }, (_, i) => fakeSegment({ frames: 40, base: i * 40 })), JOINT_COUNT,
+  );
+  // Playhead positions are chosen so that exactly one reading is the true one: `thin`
+  // is inside the runahead window with runway left, `dry` is the last buffered frame.
+  const base = {
+    timeline: tl, fps: STREAM_FPS, runaheadFrames: stream.RUNAHEAD_FRAMES,
+    nextIntent: { version: 2 },
+  };
+  const thin = { ...base, playhead: tl.maxFrame - 10 };
+  const dryBase = { ...base, playhead: tl.maxFrame };
+
+  const fetching = stream.prefetchNote({ ...thin, fetching: true, retries: 0 });
+  assert.equal(fetching.state, stream.PREFETCH_STATE.FETCHING);
+  assert.match(fetching.text, /正在取下一段/);
+
+  const failed = stream.prefetchNote({
+    ...thin, retries: 3, lastPrefetchError: { name: 'prefetch_timeout' },
+  });
+  assert.equal(failed.state, stream.PREFETCH_STATE.FAILED);
+  assert.match(failed.text, /取下一段失败，正在重试/);
+  assert.match(failed.text, /prefetch_timeout/, 'the named reason must be on the row');
+  assert.match(failed.text, /重试 3 次/, 'and so must the count');
+
+  const dry = stream.prefetchNote({
+    ...dryBase, held: true, retries: 2, lastPrefetchError: { name: 'prefetch_failed' },
+  });
+  assert.equal(dry.state, stream.PREFETCH_STATE.DRY);
+  assert.match(dry.text, /缓冲耗尽（持帧）/, 'the honest "no material" reading is kept');
+  assert.match(dry.text, /prefetch_failed/, 'with the last failure named beside it');
+  assert.match(dry.text, /重试 2 次/);
+
+  const blocked = stream.prefetchNote({ timeline: tl, playhead: tl.maxFrame, fps: STREAM_FPS });
+  assert.equal(blocked.state, stream.PREFETCH_STATE.BLOCKED);
+  assert.match(blocked.text, /没有可预取的条件/);
+
+  const loop = stream.prefetchNote({ ...dryBase, loopSingleSegment: true });
+  assert.equal(loop.state, stream.PREFETCH_STATE.LOOP);
+  assert.match(loop.text, /不是连续流/);
+
+  const idle = stream.prefetchNote({
+    ...base, playhead: 0, retries: 1, lastPrefetchError: { name: 'prefetch_failed' },
+  });
+  assert.equal(idle.state, stream.PREFETCH_STATE.IDLE,
+    'plenty of runway is not a failure reading even when the last attempt failed');
+  assert.match(idle.text, /帧 \/ .* s/);
+  assert.match(idle.text, /最后失败 prefetch_failed/, 'the last failure is still named');
+
+  // The small print carries the numbers, so a reading is auditable after the fact.
+  assert.match(failed.help, /重试 3 次/);
+  assert.match(failed.help, /最后一次失败：prefetch_timeout/);
+  assert.match(failed.help, /在飞 否/);
+  assert.match(stream.prefetchNote({ ...thin, fetching: true }).help, /在飞 是/);
+});
+
+test('the hold path re-arms the stream instead of clearing it, and says which', () => {
+  // A `hold` is "that sentence did not ask for motion", not "stop the stream". The
+  // shipped page nulled both intents here, which is the second wedge: no intent means
+  // no request can ever leave again.
+  const rearmed = stream.holdResolution({
+    lastGoodIntent: { version: 2, text: 'walk' }, reason: 'non_motion',
+  });
+  assert.equal(rearmed.rearmed, true);
+  assert.equal(rearmed.committedIntent.version, 2, 'the playing conditions are re-armed');
+  assert.equal(rearmed.nextIntent, null, 'the sentence itself is dropped');
+  assert.equal(rearmed.code, 'prefetch_intent_rearmed');
+
+  const first = stream.holdResolution({ lastGoodIntent: null, reason: 'non_motion' });
+  assert.equal(first.rearmed, false);
+  assert.equal(first.committedIntent, null);
+  assert.equal(first.code, stream.STREAM_HOLD.NO_INTENT,
+    'a hold on the very first request has no stream to continue, and says so by name');
+
+  // ... and the branch that used to clear both intents is the one that now re-arms.
+  const body = functionBody(SOURCE, 'pullSegment');
+  assert.match(body, /holdResolution\(/);
+  assert.doesNotMatch(body, /state\.committedIntent = null/);
+  assert.doesNotMatch(body, /state\.nextIntent = null/);
+  assert.match(body, /prefetch hold/);
+});
+
+test('the manual retry releases the wedge and asks again without resetting the run', () => {
+  const body = functionBody(SOURCE, 'retryPrefetchNow');
+  assert.match(body, /releaseInFlight\(\)/);
+  assert.match(body, /pullSegment\(\{ quiet: false \}\)/);
+  assert.doesNotMatch(body, /resetStream/, 'retry must never clear what is on screen');
+  assert.match(SOURCE, /els\.retryPrefetch\.addEventListener\('click', \(\) => retryPrefetchNow\(\)\)/);
+  assert.match(INDEX_SOURCE, /id="retry-prefetch"/);
+  assert.match(INDEX_SOURCE, /id="stream-retry-help"/);
+  assert.match(SOURCE, /els\.streamRetryHelp\.textContent = prefetch\.help/);
+
+  // `releaseInFlight` is the one place the flag is cleared by hand, and it invalidates
+  // the outstanding request so a late answer cannot append after its replacement.
+  const release = functionBody(SOURCE, 'releaseInFlight');
+  assert.match(release, /state\.requestId \+= 1/);
+  assert.match(release, /state\.fetching = false/);
+  assert.match(release, /state\.fetchAbort\.abort\(\)/);
+});
+
+test('every way a prefetch can end is named, and none of them is a silent stop', () => {
+  const body = functionBody(SOURCE, 'pullSegment');
+  // The deadline is measured from when the request left, not from when the loop
+  // noticed it.
+  assert.match(body, /state\.fetchStartedAt = performance\.now\(\)/);
+  assert.match(body, /signal: controller\.signal/);
+  // A failure is named, recorded and reported -- never swallowed.
+  assert.match(body, /notePrefetchFailure\(name, error\.message\)/);
+  assert.match(body, /error\.name === 'AbortError' \? STREAM_HOLD\.TIMEOUT : STREAM_HOLD\.FAILED/);
+  // The flag may only be cleared by the request that owns it: an abandoned request
+  // settling late must not wipe its replacement's flag.
+  assert.match(body, /if \(requestId === state\.requestId\) \{/);
+
+  const note = functionBody(SOURCE, 'notePrefetchFailure');
+  assert.match(note, /state\.retries \+= 1/);
+  assert.match(note, /state\.lastPrefetchError = \{/);
+  assert.match(note, /noteClientEvent\('console\.warn'/,
+    'the named failure must reach /api/client-log, or the server cannot see it');
+  assert.doesNotMatch(note, /state\.fetching = false/,
+    'the failure path does not clear the flag itself: releaseInFlight does, once');
+
+  // The render loop treats an expired request as an instruction to release and retry.
+  const loop = functionBody(SOURCE, 'frame');
+  assert.match(loop, /notePrefetchFailure\(\s*STREAM_HOLD\.TIMEOUT/);
+  assert.match(loop, /setStatus\(streamHoldText\(STREAM_HOLD\.TIMEOUT\), true\)/);
+});
+
+test('the snapshot carries the prefetch readings, so a stall is answerable from the log', () => {
+  // Loaded here rather than shared with the client-log section below: this test is
+  // about the two fields the *prefetch* controller added, and it must not depend on
+  // where in this file the other region happens to be defined.
+  const log = loadClientLog();
+  const snapshot = log.clientSnapshot({
+    playhead: 800, timelineFrames: 800, segments: 10, buffered: 0, held: true,
+    prefetchRetries: 4, prefetchError: 'prefetch_timeout', href: '/viewer',
+  });
+  assert.equal(snapshot.segments, 10);
+  assert.equal(snapshot.held, true);
+  assert.equal(snapshot.buffered, 0);
+  assert.equal(snapshot.prefetch_retries, 4);
+  assert.equal(snapshot.prefetch_error, 'prefetch_timeout');
+  // ... and they are declared on both sides of the wire, not merely emitted.
+  for (const field of ['prefetch_retries', 'prefetch_error']) {
+    assert.ok(log.CLIENT_LOG_SNAPSHOT_FIELDS.includes(field), `${field} declared`);
+  }
+  // The server's allowed kinds are what a named prefetch failure is reported under.
+  assert.ok(log.CLIENT_LOG_KINDS.includes('console.warn'));
+  assert.match(SOURCE, /prefetchError: state\.lastPrefetchError \? state\.lastPrefetchError\.name : null/);
 });
 
 test('a new intent waits for the next segment boundary (0007 3)', () => {

@@ -1051,7 +1051,7 @@ vocabulary is the bubble's; the timeline region is loaded with both because it n
 
 ```sh
 node --check viewer/app.js                      # the page parses (ESM, no bundler)
-node tests/viewer_js_guard.test.mjs             # 72 cases; also: node --test <file>
+node tests/viewer_js_guard.test.mjs             # 84 cases; also: node --test <file>
 ./.venv/bin/python -m pytest -q                 # the same run, via
                                                 # test_viewer_http.py::test_the_pages_prompt_guard_runs_under_node
 ```
@@ -1084,6 +1084,36 @@ The thirteen added this round cover the chatbox itself:
   the dropdown sends (`planIfReady('select')`), and the noise that is sent comes from
   the decision rather than from the control — with a negative control that mutates all
   four and requires every check to go red.
+
+Twelve of the cases were added with the prefetch controller (`§11.4`), because the
+symptom they exist for — "角色彻底不动", with a live process and a frozen
+`segments_generated` — is invisible without a harness that can play 20+ segments
+without a browser:
+
+* a **soak**: 24 segments of continuous playback driven by the shipped pure functions
+  (`advancePlayhead`, `shouldPrefetch`, `nextSegmentIntent`) against a **stub
+  `/api/plan`** in plain `node`, asserting the queue keeps growing, the playhead never
+  goes backwards, and **no hold outlives one runahead window**. Only the *network* is
+  stubbed; every decision is the page's own code;
+* **four negative controls**, each making the *same* `soakVerdict` go red: prefetch
+  switched off; the shipped `intent: null` restored (which really does buy exactly one
+  segment); an in-flight flag that can never be cleared with no deadline
+  (`timeoutMs: 1e9`, the page as it shipped); and a deadline that fires but cannot
+  actually release the flag. The pair "same wedge, with and without a working
+  deadline" is the whole argument for `PREFETCH_TIMEOUT_MS`;
+* the two wedges are also pinned to the **shipped lines**, so removing the fix fails
+  the test even if the harness is left alone: the reuse branch in
+  `nextSegmentIntent`, and `plan.expired` + `releaseInFlight()` in `frame()`;
+* `prefetchNote` tells 取 / 取失败 / 真的没料 / 没有条件 / 循环 apart with the retry count
+  and the named reason on every reading; `holdResolution` re-arms instead of clearing;
+  `retryPrefetchNow` releases and re-asks without touching `resetStream`; and the
+  snapshot's two new fields are declared on both sides of the wire.
+
+The server half of the same symptom is `tests/test_viewer_stream_growth.py`: over real
+HTTP, `stream.segments_generated` / `frames_generated` are strictly monotone across a
+sequence of plans (1 → 20 segments, 40 → 800 frames), and do not move at all when no
+plan is sent. A frozen counter is only a bug when the client is still asking, which is
+why the client half is measured separately.
 
 Six of the cases are **negative controls**, because a check that cannot fail is not a
 check. `node` is a build-time tool, not a Python dependency: the pytest bridge skips
@@ -1637,7 +1667,73 @@ says what it is in the label and in the HUD, and it is the negative control the
 monotonicity criterion is falsified by — with it on, the position readout goes
 backwards, which is why it is labelled rather than hidden.
 
-### 11.4 What this costs
+### 11.4 The prefetch controller, and the deadline that makes a stall recoverable
+
+The reader's report was "跑一段后角色彻底不动": `/api/health`'s
+`stream.segments_generated` / `frames_generated` **frozen** (10 segments / 800 frames,
+the same numbers four seconds later), the process alive and still answering
+`/api/health`, and **no further `POST /api/plan`**. The page's own snapshot from that
+run says the same thing in one line — `segments: 1`, `timelineFrames: 40`,
+`playhead: 39`, `buffered: 0`, `held: true`, `playing: true` — read back from the live
+`GET /api/client-log` while the stalled page was still open. The player was out of
+material, and it had no way left to ask for more.
+
+Two independent wedges produced that, and both are now closed:
+
+1. **One sentence bought exactly one segment.** `nextSegmentIntent` answered
+   `intent: null` for *unchanged* conditions, and `pullSegment` refuses a null intent.
+   So after the first segment of a sentence the runahead path refused — quietly, via
+   the `quiet: true` path, every frame. A continuous stream **is** the same sentence
+   continued, so unchanged conditions now reuse the committed intent (committing
+   nothing new): `return { intent: committed, commit: null, changed: false, reason: null };`
+2. **An in-flight request could suppress prefetch forever.** `shouldPrefetch` read a
+   remembered `lastDecision` and a `fetching` flag, and a `fetch` that never settled
+   left the flag true. The decision is now recomputed from `playhead`/`timeline`
+   **every frame**, and the only thing that holds a request back is a request already
+   in flight **and still inside its deadline**.
+
+The deadline is `PREFETCH_TIMEOUT_MS = 15000`, sized against `§7` rather than picked:
+the slowest observed request is 1.4 s (a 2.0 s clip with a cold 4-bit encoder
+subprocess), a 4.0 s clip is p50 257 ms, and a warm cached prompt is p50 111 ms — so
+15 s is ~10× the slowest *observed* request, and a real timeout means the request is
+genuinely wedged rather than slow. At the deadline the page:
+
+* abandons the request by name (`prefetch_timeout`), aborts its `AbortController` so
+  the socket is released, and bumps the request id so a late answer cannot append a
+  segment after its replacement;
+* records the reason in `state.lastPrefetchError`, counts the retry, and writes a
+  `console.warn` (`prefetch prefetch_timeout (retry N): no answer in 15.0 s …`) that
+  reaches `POST /api/client-log`;
+* lets the **next frame** ask again. Every other ending is named and retried the same
+  way: a non-2xx (`error.errorName`), a body that is not JSON (`not_json`), a network
+  refusal (`prefetch_failed`). None of them is a silent stop.
+
+Two smaller holes in the same wall:
+
+* a **`hold`** (the server saying the sentence did not ask for motion) used to null
+  *both* intents, so no request could ever leave again. It now re-arms the conditions
+  that are playing (`holdResolution` → `prefetch_intent_rearmed`) and drops only the
+  sentence. With nothing to re-arm it says so by name (`no_stream_intent`);
+* the **manual 继续 / 重试下一段** button releases anything in flight and asks again
+  immediately, with the conditions that are playing. It is not a reset: only `Reload`
+  clears the run (`0009` §二), so pressing it continues from the frame on screen.
+
+The HUD's `stream` row now separates the readings that used to look identical from the
+sofa (`0007` ⑤ — a stall must be *said*):
+
+| reading | the row says |
+|---|---|
+| a request is out | `正在取下一段…` |
+| the last attempt ended by name | `取下一段失败，正在重试 · 最后失败 prefetch_timeout · 重试 3 次` |
+| nothing buffered, nothing in flight | `缓冲耗尽（持帧）…` |
+| no conditions at all | `没有可预取的条件` |
+| the explicit loop | `循环开（单段反复）——不是连续流` |
+
+The retry count and the last named failure are appended to every reading, and the small
+print under the transport repeats them with the runway in frames, so "it stopped" is
+never again a report with no number behind it.
+
+### 11.5 What this costs
 
 * **The camera follows the character, and that is a change from the first shipping
   version of this section.** "Frame once, then never move" was correct about
@@ -1741,6 +1837,7 @@ What the log can answer, that the server's own logs cannot:
 | was the character on screen? | `snapshot.screen` (NDC), `snapshot.root` |
 | was the camera about to jump? | `snapshot.camera.clamped`, `.max_step_m` |
 | was playback holding on a dry buffer? | `snapshot.held`, `snapshot.buffered` |
+| did prefetch stop asking, and why? | `snapshot.prefetch_retries`, `snapshot.prefetch_error` (`prefetch_timeout` / `prefetch_failed`) |
 | what was the router's last verdict? | `snapshot.route`, `snapshot.route_probability` |
 | which conditions was the page on? | `snapshot.intent_version` |
 | was the stream actually advancing? | `snapshot.playhead`, `snapshot.timelineFrames`, `snapshot.segments` |

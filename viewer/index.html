@@ -94,6 +94,11 @@
           <input id="frame-slider" type="range" min="0" max="0" step="1" value="0"
                  aria-label="Scrub to frame">
         </div>
+        <div class="buttons">
+          <button id="retry-prefetch" class="ghost" type="button"
+                  title="立刻再要一段：清掉可能卡住的在飞请求，然后马上重试（不会重置已播出的段）">继续 / 重试下一段</button>
+        </div>
+        <p class="help" id="stream-retry-help">—</p>
         <label class="checkline"><input id="loop-toggle" type="checkbox">
           Loop — <b>this repeats one clip</b> (not the default)</label>
         <p class="help" id="loop-help">—</p>
