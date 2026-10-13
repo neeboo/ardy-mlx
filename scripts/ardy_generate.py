@@ -11,8 +11,12 @@ precomputed text embedding in, one whole motion clip out.
 
 Defaults follow the contract: ``--diffusion-steps`` falls back to
 ``num_base_steps`` (10), ``--cfg-weight`` defaults to ``[2.0, 2.0]``, and
-``--history-frames`` defaults to the **batch** history (the *maximum*), 160 frames
-for Core/20fps/H40 -- not the GUI slider's minimum of one patch (S5.2).
+``--history-frames`` unset resolves to the model preset's own
+``default_history_frames`` -- the **batch** history (the *maximum*), 160 frames
+for Core/20fps/H40, not the GUI slider's minimum of one patch (S5.2). It is
+resolved to a number rather than left ``None``: A's batch path reads ``None`` as
+``crop_history_length=None``, which silently drops cropping, the heading refresh
+and the chunked decode (contract S11 N16).
 
 Post-processing: contract S6.4 and decision 0002 ruling 2 pin the v1 policy at
 "**both sides skip post-processing**". The reference Core path *does* run
@@ -43,6 +47,7 @@ from ardy_mlx.io import (  # noqa: E402
 import mlx.core as mx  # noqa: E402
 import numpy as np  # noqa: E402
 
+from ardy_mlx.model.skeleton import posed_joints_from_features  # noqa: E402
 from ardy_mlx.sampling.autoregressive import (  # noqa: E402
     ArdyAutoregressiveConfig,
     ArdySampler,
@@ -50,11 +55,13 @@ from ardy_mlx.sampling.autoregressive import (  # noqa: E402
 from ardy_mlx.sampling.demo import make_demo_denoise_fn, sanitize_placeholder_output  # noqa: E402
 from ardy_mlx.sampling.diffusion import resolve_num_steps  # noqa: E402
 from ardy_mlx.sampling.pipeline import (  # noqa: E402
+    POSED_JOINTS_SOURCE,
     compute_feature_layout,
     duration_to_frames,
     load_text_embedding,
+    resolve_history_frames,
+    resolve_noise_windows,
     save_outputs,
-    synthesize_posed_joints,
 )
 
 BACKENDS = ("placeholder", "mlx")
@@ -127,7 +134,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "history crop length; must be a multiple of "
-            f"{NUM_FRAMES_PER_TOKEN}; default = batch max (160 for Core/20fps/H40)"
+            f"{NUM_FRAMES_PER_TOKEN}; default = the model preset's own "
+            "default_history_frames (160 for Core/20fps/H40, 196 for G1/25fps/H52)"
         ),
     )
     parser.add_argument(
@@ -141,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="placeholder",
         help=(
             "placeholder = random-weight stand-in, shape-correct but meaningless "
-            "(default); mlx = A's converted weights, not wired yet"
+            "(default); mlx = A's converted weights via ArdyBatch (the standard path)"
         ),
     )
     parser.add_argument(
@@ -165,8 +173,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--noise-file",
         default=None,
         help=(
-            "inject the initial noise from a .npy file (one window per leading axis, or a "
-            "single window for a one-window run); used to reproduce the reference x_T"
+            "inject the initial noise from a .npy file; either one window's x_T "
+            "(only for a one-window run) or a stack with one entry per window, "
+            "shape (n_windows,) + (batch, gen_tokens, dim_token). A mismatch fails "
+            "loudly rather than falling back to the MLX RNG"
         ),
     )
     parser.add_argument(
@@ -197,8 +207,14 @@ def main(argv=None) -> int:
     cfg_weight = _resolve_cfg_weight(args.cfg_weight)
     num_steps = resolve_num_steps(args.diffusion_steps, NUM_BASE_STEPS)
 
+    # ``--history-frames`` unset must resolve to the preset's batch default
+    # (contract S5.2). Forwarding the raw ``None`` reaches A's batch path as
+    # ``crop_history_length=None``, which silently disables cropping, the
+    # ``first_heading_angle`` refresh and the chunked decode (contract S11 N16).
+    history_frames = resolve_history_frames(args.model, args.history_frames)
+
     layout, init_history_len, plan_steps = compute_feature_layout(
-        args.model, duration_to_frames(args.duration, PRESETS[args.model].fps), args.history_frames
+        args.model, duration_to_frames(args.duration, PRESETS[args.model].fps), history_frames
     )
     total_frames = duration_to_frames(args.duration, layout.fps)
 
@@ -227,6 +243,29 @@ def main(argv=None) -> int:
 
     prompt = args.prompt if args.prompt is not None else Path(args.embedding).stem
 
+    # ``--noise-file`` is validated at the CLI boundary, before any weight loads.
+    # A wrong x_T still produces plausible-looking motion, so a shape mismatch, a
+    # short file or one window's noise for a multi-window run must fail loudly:
+    # silently falling back to MLX's RNG put the whole 80-frame clip 4.42 away
+    # from golden with no message at all (contract S11 N16).
+    windows = max(plan_steps, 1)
+    window_shape = (
+        embedding.batch_size,
+        layout.horizon // NUM_FRAMES_PER_TOKEN,
+        layout.dim_token,
+    )
+    noise_windows = None
+    if args.noise_file is not None and args.backend == "mlx":
+        raw_noise = np.load(args.noise_file, allow_pickle=False).astype(np.float32)
+        print(f"[ardy_generate] noise injected from {args.noise_file} shape={raw_noise.shape}")
+        try:
+            noise_windows = resolve_noise_windows(
+                raw_noise, window_shape, windows, source="--noise-file"
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
     print(
         f"[ardy_generate] model={args.model} fps={layout.fps} horizon={layout.horizon} "
         f"D={layout.motion_rep_dim} J={layout.nbjoints}"
@@ -238,7 +277,17 @@ def main(argv=None) -> int:
     )
 
     if args.backend == "mlx":
-        result = _run_mlx_backend(args, layout, embedding, total_frames, num_steps, tuple(cfg_weight))
+        result = _run_mlx_backend(
+            args,
+            layout,
+            embedding,
+            total_frames,
+            num_steps,
+            tuple(cfg_weight),
+            history_frames,
+            windows,
+            noise_windows,
+        )
     else:
         # The local loop seeds a context block *before* generating, so its clip is
         # seed + chunks; the requested frame count has to cover the seed too.
@@ -252,7 +301,14 @@ def main(argv=None) -> int:
             )
             return 2
         result = _run_placeholder_backend(
-            args, layout, embedding, total_frames, init_history_len, num_steps, tuple(cfg_weight)
+            args,
+            layout,
+            embedding,
+            total_frames,
+            init_history_len,
+            num_steps,
+            tuple(cfg_weight),
+            history_frames,
         )
 
     npz_path, json_path = save_outputs(
@@ -288,21 +344,29 @@ def main(argv=None) -> int:
 
 
 def _common_outputs(frames, layout):
-    """Root positions, contacts and joints derived from the contract feature rows."""
+    """Root positions, contacts and joints derived from the contract feature rows.
+
+    ``posed_joints`` is the real ``CoreSkeleton27`` forward kinematics over the
+    ``global_rot_data`` + ``root_pos`` blocks (contract S11 N14), not the
+    pre-FK placeholder: the placeholder was ``0.132`` / ``0.236`` away from the
+    golden npz, this is ``~5e-06``, the same order as the clip's own residue.
+    """
     return {
         "frames": frames,
         "root_positions": frames[..., layout.slices["root_pos"]],
         "foot_contacts": frames[..., layout.slices["foot_contacts"]] > 0.5,
-        "posed_joints": synthesize_posed_joints(frames, layout),
+        "posed_joints": posed_joints_from_features(frames),
     }
 
 
-def _run_placeholder_backend(args, layout, embedding, total_frames, init_history_len, num_steps, cfg_weight):
+def _run_placeholder_backend(
+    args, layout, embedding, total_frames, init_history_len, num_steps, cfg_weight, history_frames
+):
     config = ArdyAutoregressiveConfig(
         layout=layout,
         num_frames=total_frames,
         batch_size=args.batch_size,
-        history_frames=args.history_frames,
+        history_frames=history_frames,
         num_steps=num_steps,
         cfg_weight=cfg_weight,
         seed=args.seed,
@@ -321,14 +385,14 @@ def _run_placeholder_backend(args, layout, embedding, total_frames, init_history
             "num_autoregressive_steps": len(sampled.offsets) - 1,
             "global_transl": [float(v) for v in sampled.global_transl[0]],
             "first_heading_angle": float(sampled.first_heading_angle[0]),
-            "posed_joints_source": (
-                "local_joints_positions (root-local) + root_pos; real FK not implemented"
-            ),
+            "posed_joints_source": POSED_JOINTS_SOURCE,
         },
     }
 
 
-def _run_mlx_backend(args, layout, embedding, total_frames, num_steps, cfg_weight):
+def _run_mlx_backend(
+    args, layout, embedding, total_frames, num_steps, cfg_weight, history_frames, windows, noise_windows
+):
     """Real weights: A's ``src/ardy_mlx/model/**`` assembled as ``ArdyBatch``.
 
     The window loop, recentring, requantisation and detokenisation all live in
@@ -339,7 +403,8 @@ def _run_mlx_backend(args, layout, embedding, total_frames, num_steps, cfg_weigh
 
     ``x_T`` is drawn here with MLX's RNG: CUDA's Philox stream is not
     reproducible in MLX (A's module docstring), so absolute equality with the
-    reference needs the reference's own ``x_T`` (the align harness injects it).
+    reference needs the reference's own ``x_T`` (the align harness injects it, or
+    ``--noise-file`` supplies one entry per window, validated in :func:`main`).
     """
     from ardy_mlx.model.ardy import ArdyBatch
     from ardy_mlx.model.denoiser import AutoLatentTwostageDenoiser
@@ -368,28 +433,25 @@ def _run_mlx_backend(args, layout, embedding, total_frames, num_steps, cfg_weigh
     batch_pipe = ArdyBatch(tokenizer, denoiser, motion_rep)
 
     base_key = mx.random.key(int(args.seed)) if args.seed is not None else mx.random.key(0)
-    windows = max(plan_steps_of(args, layout), 1)
     step_keys = list(mx.random.split(base_key, windows))
-
-    injected = None
-    if args.noise_file is not None:
-        injected = np.load(args.noise_file, allow_pickle=False).astype(np.float32)
-        print(f"[ardy_generate] noise injected from {args.noise_file} shape={injected.shape}")
+    window_shape = (
+        embedding.batch_size,
+        layout.horizon // NUM_FRAMES_PER_TOKEN,
+        layout.dim_token,
+    )
 
     def noise_fn(step, shape):
-        # ``--noise-file`` reproduces the reference x_T. A file may hold one window
-        # per leading axis, or a single window for a one-window run (the aligned
-        # case); later windows then fall back to MLX's RNG.
-        if injected is not None:
-            if injected.shape == shape:
-                if windows > 1:
-                    print(
-                        f"[ardy_generate] warning: --noise-file holds one window but this run "
-                        f"has {windows}; steps >= 1 use the MLX RNG"
-                    )
-                return mx.array(injected)
-            if step < injected.shape[0] and injected.shape[1:] == shape[1:]:
-                return mx.array(injected[step])
+        # ``--noise-file`` reproduces the reference x_T: one entry per window
+        # (single-window files are only accepted for single-window runs). A shape
+        # mismatch or a short file already raised in ``main``; it must never fall
+        # back to MLX's RNG, because that error is O(1) and silent (contract S11 N16).
+        if noise_windows is not None:
+            if tuple(shape) != window_shape:
+                raise ValueError(
+                    f"model asked for noise shape {tuple(shape)} but this run was validated "
+                    f"for {window_shape}; refusing to inject a mismatched x_T"
+                )
+            return mx.array(noise_windows[min(step, len(noise_windows) - 1)])
         return mx.random.normal(shape, key=step_keys[min(step, len(step_keys) - 1)]).astype(
             mx.float32
         )
@@ -401,7 +463,7 @@ def _run_mlx_backend(args, layout, embedding, total_frames, num_steps, cfg_weigh
         num_steps=num_steps,
         cfg_weight=cfg_weight,
         first_heading_angle=mx.zeros((embedding.batch_size,)),
-        crop_history_length=args.history_frames,
+        crop_history_length=history_frames,
         noise_fn=noise_fn,
     )
     frames = out["frames"].astype(mx.float32)
@@ -410,28 +472,13 @@ def _run_mlx_backend(args, layout, embedding, total_frames, num_steps, cfg_weigh
         "offsets": list(out["offsets"]),
         "extra": {
             "mode": "dense",
-            "init_history_frames": args.history_frames
-            if args.history_frames is not None
-            else layout.default_history_frames,
+            "init_history_frames": history_frames,
             "num_autoregressive_steps": max(len(out["offsets"]) - 1, 0),
-            "posed_joints_source": (
-                "local_joints_positions (root-local) + root_pos; real FK not implemented"
-            ),
+            "posed_joints_source": POSED_JOINTS_SOURCE,
             "noise": "mlx.random (CUDA Philox x_T is not reproducible; align injects the reference x_T)",
             "checkpoint_dir": str(ckpt),
         },
     }
-
-
-def plan_steps_of(args, layout):
-    """How many autoregressive windows this run will take (for the RNG keys)."""
-    _layout, init_history_len, _ = compute_feature_layout(
-        args.model,
-        duration_to_frames(args.duration, layout.fps),
-        args.history_frames,
-    )
-    total_frames = duration_to_frames(args.duration, layout.fps)
-    return int(-(-(total_frames - init_history_len) // layout.horizon))
 
 
 if __name__ == "__main__":

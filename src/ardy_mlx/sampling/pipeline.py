@@ -42,6 +42,7 @@ from ..io import (
 )
 
 __all__ = [
+    "POSED_JOINTS_SOURCE",
     "REFERENCE",
     "TextEmbedding",
     "compute_feature_layout",
@@ -51,6 +52,8 @@ __all__ = [
     "output_stem",
     "prompt_hash",
     "prompt_hash_bytes",
+    "resolve_history_frames",
+    "resolve_noise_windows",
     "save_outputs",
     "sha256_file",
     "synthesize_posed_joints",
@@ -58,6 +61,11 @@ __all__ = [
 
 #: The reference implementation the contract was read from (contract S7 sidecar).
 REFERENCE = {"repo": "nv-tlabs/ardy", "commit": "693f74d"}
+
+#: ``extra.posed_joints_source`` for the real-FK path. The npz's ``posed_joints``
+#: is now A's ``CoreSkeleton27`` FK over ``global_rot_data`` + ``root_pos``
+#: (contract S11 N14); the old placeholder wording was "real FK not implemented".
+POSED_JOINTS_SOURCE = "skeleton FK (CoreSkeleton27) on global_rot_data + root_pos"
 
 
 @dataclass(frozen=True)
@@ -192,6 +200,88 @@ def duration_to_frames(duration_s: float, fps: float) -> int:
     return int(math.ceil(duration_s * fps))
 
 
+def resolve_history_frames(model: str, history_frames: Optional[int] = None) -> int:
+    """Resolve ``--history-frames`` to a concrete crop length (contract S5.2).
+
+    ``None`` means "the caller did not pass the flag" and resolves to the
+    preset's batch-path default -- ``PRESETS[model].default_history_frames``,
+    which is 160 for Core/20fps/H40 and 196 for G1/25fps/H52. The value is read
+    from the preset, never hardcoded, so every checkpoint gets its own default.
+
+    The distinction matters because ``None`` must **not** be forwarded to the
+    model: A's batch path reads it as ``crop_history_length=None``, which
+    silently disables history cropping, the ``first_heading_angle`` refresh and
+    the chunked decode -- measured ``4.42e-02`` from the golden clip, 44x the
+    frozen ``1e-3`` tolerance (contract S11 N16).
+    """
+    if model not in PRESETS:
+        raise KeyError(f"unknown model {model!r}; known presets: {sorted(PRESETS)}")
+    if history_frames is None:
+        return int(PRESETS[model].default_history_frames)
+    return int(history_frames)
+
+
+def resolve_noise_windows(
+    injected: np.ndarray,
+    window_shape: Sequence[int],
+    windows: int,
+    source: str = "--noise-file",
+) -> list:
+    """Validate an injected ``x_T`` against this run's per-window noise shape.
+
+    ``window_shape`` is what the model actually asks the RNG for, e.g.
+    ``(1, 10, 148)`` for Core (batch, generation tokens, token dim). Accepted
+    layouts:
+
+    * ``window_shape`` exactly -- a single window, valid only when the run has
+      exactly one autoregressive window;
+    * ``(W,) + window_shape`` -- one entry per window, sliced by step index.
+
+    Everything else raises, and so does a file that carries fewer windows than
+    the run: **silently falling back to MLX's RNG is forbidden in this repo**.
+    The old check compared ``injected.shape[1:]`` against ``shape[1:]``, so a
+    stacked per-window file (``(2, 1, 10, 148)``) never matched and every window
+    quietly used random noise -- the whole clip landed ``4.42`` from golden
+    (contract S11 N16). A wrong noise draw produces plausible-looking motion, so
+    a warning is not enough; the run must fail.
+
+    Returns the per-window arrays in step order (a one-element list for the
+    single-window form).
+    """
+    shape = tuple(int(v) for v in window_shape)
+    held = tuple(int(v) for v in np.shape(injected))
+    if windows < 1:
+        raise ValueError(f"windows must be >= 1, got {windows}")
+
+    if held == shape:
+        if windows > 1:
+            raise ValueError(
+                f"{source} holds one window of shape {held} but this run has {windows} "
+                f"windows; refusing to inject only window 0 (the rest would silently use "
+                f"MLX's RNG). Pass a stacked array of shape ({windows},) + {shape}."
+            )
+        return [np.asarray(injected)]
+
+    if len(held) == len(shape) + 1 and held[1:] == shape:
+        if held[0] < windows:
+            raise ValueError(
+                f"{source} holds {held[0]} windows of shape {held} but this run has "
+                f"{windows}; refusing a partial injection (the missing windows would "
+                f"silently use MLX's RNG)."
+            )
+        if held[0] > windows:
+            print(
+                f"[ardy_generate] note: {source} holds {held[0]} windows; "
+                f"using the first {windows}"
+            )
+        return [np.asarray(injected[i]) for i in range(windows)]
+
+    raise ValueError(
+        f"{source} has shape {held}, expected {shape} (one window) or "
+        f"({windows},) + {shape} (one entry per autoregressive window)."
+    )
+
+
 def compute_feature_layout(
     model: str,
     num_frames: int,
@@ -218,11 +308,7 @@ def compute_feature_layout(
     if num_frames < 1:
         raise ValueError(f"num_frames must be >= 1, got {num_frames}")
     layout = PRESETS[model]
-    resolved_history = (
-        layout.default_history_frames
-        if history_frames is None
-        else int(history_frames)
-    )
+    resolved_history = resolve_history_frames(model, history_frames)
     if resolved_history % NUM_FRAMES_PER_TOKEN != 0:
         raise ValueError(
             f"history frames must be a multiple of {NUM_FRAMES_PER_TOKEN}, got {resolved_history}"
@@ -237,16 +323,17 @@ def synthesize_posed_joints(
 ) -> mx.array:
     """Recover ``posed_joints (T, J, 3)`` from ``local_joints_positions`` (contract S1.5).
 
-    The contract puts ``posed_joints`` -- **world** joint positions -- in the npz
-    "so downstream does not have to redo FK". Recovering them exactly needs
-    forward kinematics over ``local_rot_mats`` plus the skeleton offsets, which
-    lives on A's side (``src/ardy_mlx/model/**``) and is not available yet.
+    **This is the pre-FK placeholder, kept only as a diagnostic / negative
+    control.** It is what the npz carried before A's skeleton FK landed, and it
+    is ``0.132`` (2 s) / ``0.236`` (4 s) away from the golden ``posed_joints``.
+    The CLI now exports :func:`ardy_mlx.model.skeleton.posed_joints_from_features`
+    instead (contract S11 N14); A's alignment harness still calls this to show the
+    comparison can fail.
 
-    This function therefore returns only the *root-local* joint positions that
-    are already stored in the feature vector, with the root joint inserted as
-    zeros, and the caller surfaces that limitation in the sidecar as
-    ``posed_joints_source``. It is a **placeholder**, not the contract's
-    ``posed_joints``; recorded as open in ``docs/status-claude.md``.
+    It returns only the *root-local* joint positions that are already stored in
+    the feature vector, with the root joint inserted as zeros; recovering the
+    contract's **world** joints needs forward kinematics over the skeleton
+    offsets, which is A's side.
     """
     joints = layout.nbjoints
     local = frames[..., layout.slices["local_joints_positions"]].reshape(
@@ -311,7 +398,7 @@ def _sidecar(
     payload["extra"] = {
         "text_embedding_source": embedding_source,
         "backend": backend,
-        "posed_joints_source": "local_joints_positions (root-local); real FK not implemented yet",
+        "posed_joints_source": POSED_JOINTS_SOURCE,
     }
     if extra:
         payload["extra"].update(extra)

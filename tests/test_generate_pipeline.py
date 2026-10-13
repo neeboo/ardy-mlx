@@ -23,6 +23,8 @@ from ardy_mlx.sampling.pipeline import (  # noqa: E402
     load_text_embedding,
     output_stem,
     prompt_hash,
+    resolve_history_frames,
+    resolve_noise_windows,
     save_outputs,
     sha256_file,
     synthesize_posed_joints,
@@ -176,6 +178,110 @@ def test_synthesize_posed_joints_shape_and_root_column():
     assert joints.shape == (1, 3, CORE.nbjoints, 3)
     # Joint 0 is the root position; the rest come from local_joints_positions.
     assert joints[0, 0, 0].tolist() == [1.0, 0.0, 0.0]
+
+
+# --------------------------------------------------------------------------
+# CLI default resolution: --history-frames and --noise-file (contract S11 N16)
+# --------------------------------------------------------------------------
+def test_resolve_history_frames_default_is_the_preset_value_not_a_constant():
+    """Unset must resolve to *that preset's* batch default, never ``None``.
+
+    Forwarding ``None`` reaches A's batch path as ``crop_history_length=None``,
+    which disables cropping, the heading refresh and the chunked decode: 4.42e-02
+    from golden (contract S11 N16). The four presets have four different defaults,
+    so this test also proves the number is not hardcoded to 160.
+    """
+    defaults = {name: resolve_history_frames(name) for name in PRESETS}
+    assert defaults["ARDY-Core-RP-20FPS-Horizon40"] == 160
+    assert defaults["ARDY-Core-RP-20FPS-Horizon8"] == 192
+    assert defaults["ARDY-G1-RP-25FPS-Horizon52"] == 196
+    assert defaults["ARDY-G1-RP-25FPS-Horizon8"] == 240
+    for name, value in defaults.items():
+        assert value == PRESETS[name].default_history_frames
+        assert value % 4 == 0
+        assert value > 0
+    assert len(set(defaults.values())) > 1  # not one hardcoded number
+
+    # An explicit value passes through untouched; a bad model name still raises.
+    assert resolve_history_frames("ARDY-Core-RP-20FPS-Horizon40", 8) == 8
+    with pytest.raises(KeyError):
+        resolve_history_frames("not-a-model")
+
+
+def test_resolve_history_frames_feeds_compute_feature_layout():
+    _layout, plain, _ = compute_feature_layout("ARDY-Core-RP-20FPS-Horizon40", 240)
+    _layout, explicit, _ = compute_feature_layout(
+        "ARDY-Core-RP-20FPS-Horizon40", 240, resolve_history_frames("ARDY-Core-RP-20FPS-Horizon40")
+    )
+    assert plain == explicit == 160
+
+
+def test_resolve_noise_windows_accepts_one_window_and_a_per_window_stack():
+    shape = (1, 10, 148)
+    single = np.zeros(shape, dtype=np.float32)
+    assert len(resolve_noise_windows(single, shape, 1)) == 1
+
+    stacked = np.arange(2 * 1 * 10 * 148, dtype=np.float32).reshape(2, *shape)
+    windows = resolve_noise_windows(stacked, shape, 2)
+    assert len(windows) == 2
+    np.testing.assert_array_equal(windows[0], stacked[0])
+    np.testing.assert_array_equal(windows[1], stacked[1])
+
+
+def test_resolve_noise_windows_slices_the_run_s_own_window_count_and_warns_on_extras(capsys):
+    shape = (1, 10, 148)
+    stacked = np.zeros((3, *shape), dtype=np.float32)
+    windows = resolve_noise_windows(stacked, shape, 2, source="--noise-file")
+    assert len(windows) == 2
+    assert "holds 3 windows" in capsys.readouterr().out
+
+
+def test_negative_control_the_pre_fix_comparison_silently_mismatched():
+    """The exact shape that used to be compared wrongly: ``(W,1,10,148)``.
+
+    The old check was ``injected.shape[1:] == shape[1:]``, i.e. ``(1,10,148)``
+    against ``(10,148)``: never equal, so a 2-window file for a 2-window run
+    silently used MLX's RNG for every window (4.42 from golden, no output at all).
+    That per-window form is now the *supported* one for a 2-window run; the
+    dangerous direction -- one window's worth of noise for a multi-window run --
+    raises instead.
+    """
+    shape = (1, 10, 148)
+    stacked = np.zeros((2, *shape), dtype=np.float32)
+    windows = resolve_noise_windows(stacked, shape, 2)
+    assert len(windows) == 2
+    np.testing.assert_array_equal(windows[1], stacked[1])
+
+
+def test_negative_control_a_single_window_file_cannot_silently_cover_two_windows():
+    """One window of noise + a silent RNG fallback for window 1 is the old bug."""
+    shape = (1, 10, 148)
+    with pytest.raises(ValueError, match="refusing to inject only window 0"):
+        resolve_noise_windows(np.zeros(shape, dtype=np.float32), shape, 2)
+
+
+def test_negative_control_a_short_per_window_file_is_rejected():
+    shape = (1, 10, 148)
+    short = np.zeros((1, *shape), dtype=np.float32)
+    with pytest.raises(ValueError, match="refusing a partial injection"):
+        resolve_noise_windows(short, shape, 2)
+
+
+@pytest.mark.parametrize(
+    "bad_shape",
+    [
+        (1, 10, 147),  # wrong token width
+        (1, 9, 148),  # wrong token count
+        (2, 1, 10, 148, 1),  # one axis too many
+        (10, 148),  # batch axis missing
+        (1, 10, 148, 1),  # trailing axis
+    ],
+)
+def test_negative_control_wrong_shapes_raise_instead_of_falling_back(bad_shape):
+    """A wrong ``--noise-file`` must fail, not quietly use MLX's RNG."""
+    shape = (1, 10, 148)
+    with pytest.raises(ValueError, match="expected"):
+        resolve_noise_windows(np.zeros(bad_shape, dtype=np.float32), shape, 1)
 
 
 # --------------------------------------------------------------------------

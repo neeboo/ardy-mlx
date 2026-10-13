@@ -330,6 +330,72 @@ def test_cli_mlx_backend_reproduces_the_golden_clip(tmp_path):
     assert residue < 1e-3, f"golden residue {residue:.3e} exceeds the 1e-3 tolerance"
 
 
+def test_cli_rejects_a_single_window_noise_file_for_a_two_window_run(tmp_path):
+    """The exact pre-fix silent fallback: one window's noise, two windows to fill.
+
+    The check runs before any weight is loaded, so this needs no checkpoint: a
+    wrong x_T still produces plausible-looking motion, and the pre-fix code
+    printed nothing at all (contract S11 N16).
+    """
+    embedding = write_embedding(tmp_path)
+    noise = tmp_path / "one_window.npy"
+    np.save(noise, np.zeros((1, 10, 148), dtype=np.float32))  # reference x_T is (1,10,148)
+    completed = subprocess.run(
+        [
+            str(PYTHON),
+            str(SCRIPT),
+            "--embedding",
+            str(embedding),
+            "--duration",
+            "4.0",
+            "--backend",
+            "mlx",
+            "--noise-file",
+            str(noise),
+            "--no-postprocess",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO),
+        timeout=300,
+    )
+    assert completed.returncode != 0
+    assert "refusing to inject only window 0" in completed.stderr
+
+
+def test_cli_rejects_a_structurally_wrong_noise_file(tmp_path):
+    """A shape that is neither one window nor a per-window stack fails too."""
+    embedding = write_embedding(tmp_path)
+    noise = tmp_path / "wrong.npy"
+    np.save(noise, np.zeros((1, 10, 147), dtype=np.float32))  # token width off by one
+    completed = subprocess.run(
+        [
+            str(PYTHON),
+            str(SCRIPT),
+            "--embedding",
+            str(embedding),
+            "--duration",
+            "2.0",
+            "--backend",
+            "mlx",
+            "--noise-file",
+            str(noise),
+            "--no-postprocess",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO),
+        timeout=300,
+    )
+    assert completed.returncode != 0
+    assert "expected" in completed.stderr
+    assert "(1, 10, 148)" in completed.stderr
+
+
 def test_cli_honours_diffusion_steps_and_cfg_weight(tmp_path):
     completed = run_cli(
         tmp_path, "--diffusion-steps", "4", "--cfg-weight", "1.5", "0.5"
@@ -366,3 +432,94 @@ def test_cli_rejects_out_of_range_diffusion_steps(tmp_path):
     )
     assert completed.returncode != 0
     assert "num_base_steps" in (completed.stderr + completed.stdout)
+
+
+GOLDEN4 = REPO / "artifacts" / "golden-run-4s"
+
+
+@pytest.mark.skipif(
+    not (GOLDEN4 / "raw" / "motion_normalized.npy").exists()
+    or not (GOLDEN4 / "raw" / "randn_0.npy").exists()
+    or not (GOLDEN4 / "raw" / "randn_1.npy").exists()
+    or not CHECKPOINT.exists(),
+    reason="4 s golden run artifacts or converted checkpoint not present",
+)
+def test_cli_defaults_and_multi_window_noise_reproduce_the_4s_golden(tmp_path):
+    """Two contract-S11-N16 fixes at once, on the shipped multi-window workload.
+
+    * ``--history-frames`` is **omitted**: the CLI must resolve it to the preset's
+      ``default_history_frames`` (160) instead of forwarding ``None``, which would
+      disable cropping, the heading refresh and the chunked decode (4.42e-02).
+    * ``--noise-file`` is the reference's per-window stack ``(2, 1, 10, 148)`` --
+      the shape the old ``injected.shape[1:] == shape[1:]`` check could never
+      match, so every window silently fell back to MLX's RNG (also 4.42).
+
+    It also locks task 1: the npz's ``posed_joints`` must now be the skeleton FK,
+    i.e. agree with the golden npz's ``posed_joints`` (pre-FK it was 0.236).
+    """
+    import mlx.core as mx
+
+    from ardy_mlx.model.motion_rep import MotionRep
+
+    raw = GOLDEN4 / "raw"
+    npz_path = tmp_path / "golden4_embedding.npz"
+    np.savez(
+        npz_path,
+        embedding=np.load(raw / "text_feat.npy"),
+        mask=np.load(raw / "text_pad_mask.npy"),
+    )
+    noise_path = tmp_path / "x_t_4s.npy"
+    np.save(noise_path, np.stack([np.load(raw / "randn_0.npy"), np.load(raw / "randn_1.npy")]))
+
+    completed = subprocess.run(
+        [
+            str(PYTHON),
+            str(SCRIPT),
+            "--embedding",
+            str(npz_path),
+            "--model",
+            "ARDY-Core-RP-20FPS-Horizon40",
+            "--duration",
+            "4.0",
+            "--seed",
+            "0",
+            "--backend",
+            "mlx",
+            "--checkpoint-dir",
+            str(CHECKPOINT),
+            "--prompt",
+            "A person walks forward.",
+            "--noise-file",
+            str(noise_path),
+            "--no-postprocess",
+            "--out",
+            str(tmp_path / "out"),
+            # no --history-frames: the default must be the preset's 160
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO),
+        timeout=900,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "shape=(2, 1, 10, 148)" in completed.stdout
+
+    produced = next((tmp_path / "out").rglob("*.npz"))
+    sidecar = json.loads(produced.with_suffix(".json").read_text(encoding="utf-8"))
+    assert sidecar["extra"]["init_history_frames"] == CORE.default_history_frames == 160
+    assert sidecar["extra"]["posed_joints_source"].startswith("skeleton FK")
+
+    motion_rep = MotionRep(CHECKPOINT / "stats" / "motion")
+    expected = np.asarray(
+        motion_rep.unnormalize(mx.array(np.load(raw / "motion_normalized.npy")))
+    )
+    golden_joints = np.load(GOLDEN4 / "out" / "golden_core_h40_4s_seed0.npz")["posed_joints"]
+    with np.load(produced, allow_pickle=False) as data:
+        frames = data["frames"]
+        joints = data["posed_joints"]
+    assert frames.shape == (1, 80, CORE.motion_rep_dim)
+    residue = float(np.abs(frames - expected).max())
+    joint_residue = float(np.abs(joints - golden_joints).max())
+    assert residue < 1e-3, f"golden residue {residue:.3e} exceeds the 1e-3 tolerance"
+    # Task 1: the FK output, not the placeholder (which was 2.4e-01 here).
+    assert joint_residue < 1e-4, f"posed_joints residue {joint_residue:.3e} is not the FK"
