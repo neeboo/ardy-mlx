@@ -1209,3 +1209,93 @@ $ ./.venv/bin/python -m pytest -q     # 423 passed, 1 xfailed        （上轮 4
 * **队列不裁剪**：长跑时内存随段数增长。裁剪会让全局帧号回退，而那正是判据 1 要禁止的；
   所以这里选择"诚实增长"，并写进 §11.4，而不是偷偷重编号。
 * 浏览器观感仍需人眼；本轮**没有**用 CGEvent/AX/osascript 合成输入。
+
+## 20. 第 12 轮（2026-10-13）· 跟随相机 ＋ 页面自己的日志（0011 提案）
+
+**触发**：用户说"**似乎不太对，你再看看**"，并让我看日志。
+
+### 20.1 日志读出来的结论：服务端清白，问题在客户端
+
+* 48 行日志里 **43 个 200、零 4xx/5xx、零 traceback**；序列 `GET /` → 静态资源 →
+  `/api/health` → `/api/plan` → …（页面确实在**连续流**）。
+* `segments_generated: 8`、`frames_generated: 680`（约 34 秒动作）、`continuation_active: true`、
+  `continue_ready: true`、`last_windows: 4`；router `ok`（6 次调用、0 超时）。
+* → **服务端没有故障**。而 `0009` §二 的"相机只在第一段或点 Fit 时才取景"被实现成
+  "取景一次后永不移动"，于是角色在 **第 75 帧**就走出了画面，剩下的 394 帧是一块空地板。
+  这正是上一轮 §19.5 第一条自己写下的"诚实边界"——本轮把它修了。
+
+### 20.2 一、相机改成平滑跟随（判据写得更准，不是放宽）
+
+* 新增 `pure-timeline` 内的相机决策：`followFocus(current, target, dt)`（指数阻尼，
+  `FOCUS_TAU_S = 0.30 s`）、`followFocusInstant`（**负对照**，出货的瞬时实现）、
+  `focusTargetAt`、`fitFocusFromBounds`、`fitDistanceFromBounds`、`fitPlacement`、
+  `cameraPositionFor`、`projectPoint`（手写 three.js 等价投影：对称透视 ＋ `lookAt`）。
+* 渲染循环每帧 `applyFollow(delta)`：**只改 `focus`**，`distance`/`yaw`/`pitch` 仍只归用户
+  （Fit / 拖拽 / 滚轮）→ `0009` §二 的"没有用户操作时不得重新取景"**原样成立**。
+* **Fit 落在角色身上**（`fitPlacement({userRequested: true, target})`），
+  **开场取景**才落在首段包围盒中心。理由：Fit 是"我要看清角色"；把 focus 扔到 34 米跑的
+  中心（离角色 10 米以上）是跳变，不是重新取景。
+* **判据从"相机矩阵逐位不变"改成"不得跳变"**：每帧 focus 位移 `< CAMERA_MAX_STEP_M = 0.5 m`、
+  每帧**相机世界坐标**位移 `< 0.5 m`、阻尼**从不**触发钳位；阈值依据写在
+  `docs/decisions/0011` §一.5（20 fps ⇒ 0.05 s/帧；2 m/s 走 ⇒ 0.10 m/帧；最小的意外跳变
+  ≈ 半段长度 1 m ⇒ 0.5 m 是意图运动的 5×、最小意外跳变的 1/2）。
+* **可测**：`projectPoint` 让"角色在不在画面里"能在裸 `node:vm` 里算，不需要浏览器。
+
+实测（`tests/viewer_js_guard.test.mjs`，23.4 m 的走 / 469 帧）：
+
+| 策略 | focus 单帧最大位移 | 相机单帧最大位移 | 钳位帧数 | 画面外帧数 |
+|---|---|---|---|---|
+| 跟随（出货） | **0.168 m** | 0.168 m | **0** | **0** |
+| 瞬时对齐（负对照） | 1.097 m | 1.097 m | 0 | 0 |
+| 不跟随（负对照） | 0 | 0 | 0 | **394**（第 75 帧起） |
+
+### 20.3 二、页面自己的错误送到服务端
+
+新增 `POST /api/client-log` ＋ `GET /api/client-log?kind=&limit=`（仅回环、同一路由白名单）。
+
+* 页面捕获 `window.onerror` / `unhandledrejection` / `console.error`/`warn`（**照样透传**到真正的
+  console），最近 **≤ 50** 条批量上报；文本超 500 字符**带标记**截断；丢掉的计数不隐藏。
+* 随每条上报带**语义化快照**：播放头/总帧数/段数/缓冲/**是否持帧**/是否在播/fps/**意图版本**/
+  **最后一次 route 与概率**/**相机跟随统计**（钳位次数、单帧最大位移）/**角色 NDC 与根世界坐标**。
+  后两项是这轮专为"人是否走出画面"加的：日志里能**直接读出**当时角色在画面哪个位置。
+* 服务端**具名**写日志（不静默丢）：`client-log <kind> <text>`、`client-log snapshot <json>`、
+  `client-log refused <error>: <message>`；保留最近 **200** 条，挤出的计入 `dropped`。
+* `/api/health` 新增 `client_log` 块：`received`/`rejected`/`dropped`/`kept`/`last_at`/`last_kind`/
+  `snapshot`/`endpoint`/`note`。
+* **上限都是具名错误**：`client_log_too_many_events`(413) / `client_log_text_too_long`(413) /
+  `client_log_snapshot_too_large`(413) / `client_log_body_too_large`(413，本路由自己的 64 KiB) /
+  `client_log_unknown_kind`(400) / `client_log_invalid_event`(400) / `client_log_invalid_snapshot`(400)。
+* **key / 环境变量绝不入库**：每条字符串过两遍打码 —— ①本进程 secret 形态环境变量的**字面值**
+  ②**形态**（`ts_…`/`sk-…`/`jev_…`/`xox…`/`gh[pousr]_…`/`AKIA…`/`Bearer …`/JWT），替换文本具名
+  （`[redacted:typesafe-key]`、`[redacted:env-secret]`），**不含原值也不含变量名**。
+  页面侧同样先打一遍形态码（错误信息是页面没写过的文本；失败的 `fetch('…?key=…')` 会把整个 URL
+  放进 rejection），且快照是**白名单投影**（逐字段构造，绝不 spread），URL **只取 path**。
+* **负对照**：塞 `ts_test_key_do_not_use_0123456789` → 必须被打码，并断言 POST 响应、
+  `GET /api/client-log`、`/api/health`、服务端 **stderr** 四处**都搜不到**；同时正对照断言
+  这个 key 确实在发出去的原文里（否则泄漏检查是空转）。页面侧另一条：`{...state}` 式快照**必须**
+  带上 key，出货的白名单版本**必须**不带。
+
+### 20.4 本轮数字
+
+* `pytest -q`：**482 passed + 1 xfailed**（上一轮 469 + 1；新增 13 条，未减）。
+* `node tests/viewer_js_guard.test.mjs`：**72 passed**（上一轮 52；新增 20 条，未减）。
+* `node --check viewer/app.js`：通过。
+* **变异测试**（证明判据能红）：相机 10 个故障注入、client-log 9 个故障注入，**全部 RED**。
+* 权重/向量未入库；`viewer/**` 里没有任何 key 值或 key 变量名字面量（`grep` 无命中）。
+* 改动文件：`viewer/app.js`、`scripts/ardy_viewer.py`、`tests/viewer_js_guard.test.mjs`、
+  `tests/test_viewer_http.py`、`docs/VIEWER.md`、`docs/decisions/0011-follow-camera-and-client-log.md`、
+  本文件。
+* **未**改：`src/ardy_mlx/{model,sampling,io,control,router}/**` 的既有语义、
+  `scripts/ardy_{generate,align}.py`、`tests/test_model_*.py`、`tests/test_io_*.py`、`NOTICE`、
+  `LICENSE`、`pyproject.toml`、根 `.gitignore`、`~/dev/llm2vec-mlx`。
+
+### 20.5 本轮的诚实边界
+
+* **修正 §19.5 第一条**：相机现在跟随角色，"走得远了角色会出画"不再成立；
+  改成"**标签页被冻住**（`dt` 被上游钳到 0.1 s）时阻尼一步会走 0.28 倍间隙，由钳位兜住并计数"。
+* 阈值是**每帧**的，隐含假定渲染真按 20 fps 走；`camera.clamped > 0` 读作"相机本来要跳，被兜住了"，
+  不是"一切正常"。
+* 快照是**页面自述、未经服务端验证**（`note` 里写明）；它是独立字段，不参与任何服务端判定。
+* 心跳 **30 s** 一次，所以"读者说不太对之前"最多缺 30 s 上下文；更密会让日志变噪。
+* `at` 是整毫秒，`performance.now()` 的小数在传输时被舍掉。
+* 浏览器观感仍需人眼；本轮**没有**用 CGEvent/AX/osascript 合成输入。

@@ -47,6 +47,9 @@ Usage
 ``POST /api/plan``                      sample one clip (JSON body)
 ``GET  /api/plan``                      the same, from query parameters
 ``GET  /api/reference``                 the golden clip for one exact duration
+``POST /api/client-log``                the page reports its own errors (bounded,
+                                        redacted, named)
+``GET  /api/client-log``                read them back, ``?kind=`` to filter
 ======================================  ==========================================
 
 ``POST /api/plan`` body::
@@ -55,6 +58,13 @@ Usage
      "noise": "golden" | "random", "diffusion_steps": 10, "cfg_weight": [2.0, 2.0],
      "include_frames": false}
 
+``POST /api/client-log`` body::
+
+    {"events": [{"kind": "error", "text": "...", "at": 12.5, "source": "<url>",
+                 "line": 3, "col": 9}],
+     "snapshot": {"playhead": 411, "segments": 6, "buffered": 12, "held": false,
+                  "route": "compose", "route_probability": 0.81}}
+
 See ``docs/VIEWER.md`` for the full response schema.
 """
 
@@ -62,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import collections
 import json
 import mimetypes
 import os
@@ -74,7 +85,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from collections import OrderedDict
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
@@ -1067,6 +1078,17 @@ class ViewerApp:
         self.stream_frames: int = 0
         self.stream_last_ms: Optional[float] = None
         self.stream_last_windows: Optional[int] = None
+        #: What the *page* reported about itself (see `POST /api/client-log`). The
+        #: page is the only component that can see a renderer error, so this is the
+        #: server's only window into "the browser is unhappy" -- without it, a
+        #: front-end fault and a healthy run look identical from here.
+        self.client_log: "deque[dict]" = collections.deque(maxlen=CLIENT_LOG_KEEP)
+        self.client_log_received: int = 0
+        self.client_log_rejected: int = 0
+        self.client_log_dropped: int = 0
+        self.client_log_last_at: Optional[float] = None
+        self.client_log_last_kind: Optional[str] = None
+        self.client_log_snapshot: dict = {}
         self.lock = threading.Lock()
         self.runner = None
         self.error: Optional[str] = None
@@ -1350,6 +1372,94 @@ class ViewerApp:
         return entry, {"kind": "encoded", "encode_ms": encode_ms}
 
     # -- endpoints -------------------------------------------------------
+    # -- the page's own log ----------------------------------------------
+    def record_client_log(self, events: List[dict], snapshot: Optional[dict] = None) -> dict:
+        """Keep what the page reported, **name it in the server's log**, and count it.
+
+        The stderr line is the point of the endpoint. A browser exception that only
+        ever reached a JSON document nobody polls would be as invisible as no endpoint
+        at all, so every event is written as ``[ardy_viewer] client-log <kind>
+        <text>`` -- with the text already redacted by :func:`parse_client_log`, so a
+        key the page accidentally echoed is masked before it reaches the terminal.
+
+        The snapshot is logged too, but only when it changes: it is a state report, and
+        a line per frame would bury the events it is meant to explain.
+        """
+        now = time.time()
+        recorded: List[dict] = []
+        for event in events:
+            if len(self.client_log) >= CLIENT_LOG_KEEP:
+                self.client_log_dropped += 1
+            entry = {
+                "kind": event["kind"],
+                "text": event["text"],
+                "at": event.get("at"),
+                "source": event.get("source"),
+                "line": event.get("line"),
+                "col": event.get("col"),
+                "count": event.get("count"),
+                "received_at": now,
+            }
+            self.client_log.append(entry)
+            recorded.append(entry)
+            sys.stderr.write("[ardy_viewer] client-log %s %s\n" % (entry["kind"], entry["text"]))
+        if snapshot and snapshot != self.client_log_snapshot:
+            self.client_log_snapshot = snapshot
+            sys.stderr.write(
+                "[ardy_viewer] client-log snapshot %s\n" % json.dumps(snapshot, sort_keys=True)
+            )
+        elif snapshot:
+            self.client_log_snapshot = snapshot
+        if events:
+            self.client_log_last_at = now
+            self.client_log_last_kind = events[-1]["kind"]
+        self.client_log_received += len(events)
+        return {
+            "accepted": len(recorded),
+            "kinds": sorted({entry["kind"] for entry in recorded}),
+            "received_at": self.client_log_last_at,
+            "snapshot": self.client_log_snapshot,
+            "kept": len(self.client_log),
+        }
+
+    def client_log_report(self, kind: Optional[str] = None, limit: Optional[int] = None) -> dict:
+        """The retained page log, oldest first, filtered by ``kind`` when asked.
+
+        ``kind`` is the "query it by name" half of the endpoint: after a report of
+        "似乎不太对", `?kind=error` answers "was there a page exception?" without
+        reading past the console noise.
+        """
+        if kind is not None and kind not in CLIENT_LOG_KINDS:
+            raise ViewerError(
+                "client_log_unknown_kind",
+                f"unknown client-log kind {kind!r}; the page may report {', '.join(CLIENT_LOG_KINDS)}",
+            )
+        matching = [entry for entry in self.client_log if kind is None or entry["kind"] == kind]
+        cap = CLIENT_LOG_KEEP if limit is None else max(0, min(int(limit), CLIENT_LOG_KEEP))
+        entries = matching[-cap:] if cap else []
+        return {
+            "owner": "page",
+            "received": int(self.client_log_received),
+            "rejected": int(self.client_log_rejected),
+            "dropped": int(self.client_log_dropped),
+            "kept": len(self.client_log),
+            "keep_limit": CLIENT_LOG_KEEP,
+            "kinds": list(CLIENT_LOG_KINDS),
+            "filter": kind,
+            "matching": len(matching),
+            "returned": len(entries),
+            "truncated": len(entries) < len(matching),
+            "last_at": self.client_log_last_at,
+            "last_kind": self.client_log_last_kind,
+            "snapshot": self.client_log_snapshot,
+            "events": entries,
+            "note": (
+                "everything here was reported by the browser page and is untrusted: the "
+                "server neither raised these events nor verified them. Text has been "
+                "redacted, never truncated."
+            ),
+        }
+
     def health(self) -> dict:
         self.embeddings.refresh()
         entries = self.embeddings.list()
@@ -1484,6 +1594,28 @@ class ViewerApp:
                     "continuation state, so it reports what the next plan would continue "
                     "from and how the last segment was generated. It does not report a "
                     "queue depth: that number belongs to the page."
+                ),
+            },
+            # The page's own report about itself. The server cannot see a renderer
+            # exception, so this is the only place a browser-side fault is visible at
+            # all -- which is why it is a count and a timestamp in *health*, not only
+            # a log file somebody has to know to open.
+            "client_log": {
+                "received": int(self.client_log_received),
+                "rejected": int(self.client_log_rejected),
+                "dropped": int(self.client_log_dropped),
+                "kept": len(self.client_log),
+                "keep_limit": CLIENT_LOG_KEEP,
+                "last_at": self.client_log_last_at,
+                "last_kind": self.client_log_last_kind,
+                "kinds": list(CLIENT_LOG_KINDS),
+                "snapshot": self.client_log_snapshot,
+                "endpoint": "POST /api/client-log, GET /api/client-log?kind=&limit=",
+                "note": (
+                    "reported by the browser page, not observed by this server. `rejected` "
+                    "counts reports the server refused by name (too many events, text over "
+                    "the limit, an unknown kind); `dropped` counts the oldest entries that "
+                    f"fell out of the {CLIENT_LOG_KEEP}-entry ring."
                 ),
             },
             "limits": {
@@ -2156,16 +2288,249 @@ class ViewerApp:
 
 
 # --------------------------------------------------------------------------- #
+# the page's own log: `POST /api/client-log`
+# --------------------------------------------------------------------------- #
+# Why this exists
+# ---------------
+# The page has no terminal. When it misbehaves -- a `TypeError` in a rAF callback, a
+# rejected fetch, a `console.error` from three.js -- the *server* sees nothing: no
+# 4xx, no traceback, nothing but a break in the request sequence. Diagnosing "似乎不
+# 太对" then means guessing about a renderer nobody can read.
+#
+# So the page reports what it knows, by name, and the server keeps the last few:
+#
+# * three event families, bounded to :data:`CLIENT_LOG_MAX_EVENTS` per request --
+#   `error`, `unhandledrejection`, and `console` (the page sends `console.error` /
+#   `console.warn`, and nothing else);
+# * plus a **semantic snapshot** of what the page was doing: playhead, segment count,
+#   buffer depth, whether playback is holding, the intent version, and the last route
+#   the router returned with its probability. "The character walked out of frame" and
+#   "the buffer ran dry at frame 300" are different reports, and this is the field
+#   that tells them apart.
+#
+# Two hard rules:
+#
+# 1. **nothing here is trusted to be small or safe.** Every text field is length
+#    capped (named refusal, never a silent truncation), the event count is capped,
+#    and the whole body is capped at :data:`CLIENT_LOG_MAX_BODY` before it is read.
+# 2. **no secret reaches the log.** Every string is passed through
+#    :func:`redact_client_text`, which masks API-key-shaped tokens *and* the literal
+#    value of any environment variable whose name looks like a secret. The redaction
+#    is named (`[redacted:api-key]`), so a masked field is visible rather than
+#    silently empty.
+
+#: How many events one `POST /api/client-log` may carry. The page batches at or below
+#: this; a request over it is refused by name rather than truncated.
+CLIENT_LOG_MAX_EVENTS = 50
+
+#: How many characters any one event text may carry.
+CLIENT_LOG_MAX_TEXT = 600
+
+#: How many characters the whole semantic snapshot may serialise to.
+CLIENT_LOG_MAX_SNAPSHOT = 4000
+
+#: The largest `POST /api/client-log` body. Deliberately far below the shared 1 MiB
+#: JSON limit: this endpoint's whole input is a page's error log.
+CLIENT_LOG_MAX_BODY = 64 * 1024
+
+#: How many events the server keeps for `GET /api/client-log` and `/api/health`.
+CLIENT_LOG_KEEP = 200
+
+#: The event kinds the page may report. Anything else is a named refusal: an open
+#: vocabulary here would make `GET /api/client-log?kind=` useless for triage.
+CLIENT_LOG_KINDS = ("error", "unhandledrejection", "console.error", "console.warn")
+
+#: The snapshot fields the server keeps. A whitelist, because this endpoint must not
+#: become a general-purpose file: a page that posts its whole state would eventually
+#: post something the server has no business writing down.
+#:
+#: **This tuple and `CLIENT_LOG_SNAPSHOT_FIELDS` in ``viewer/app.js`` must be the same
+#: list**, and a test asserts it (`test_client_log_snapshot_fields_match_the_page`).
+#: Two hand-written whitelists drift, and the failure mode of drift here is a field the
+#: page carefully sends and the server silently drops -- which is exactly the kind of
+#: silence this endpoint exists to remove.
+CLIENT_LOG_SNAPSHOT_FIELDS = (
+    "playhead", "timelineFrames", "segments", "buffered", "held", "playing", "fps",
+    "intent_version", "intent_state", "route", "route_probability", "noise", "duration",
+    "camera", "screen", "root", "url",
+)
+
+#: Environment variable names whose *values* are secrets. `_API_KEY` and friends.
+_SECRET_ENV_NAME = re.compile(
+    r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)(?:_|$)",
+    re.IGNORECASE,
+)
+
+#: Shapes that are an API key whatever they were called. Each entry is
+#: ``(label, pattern)``; the label is what appears in the redaction marker, so a
+#: masked field still says *what* it looked like.
+_SECRET_SHAPES = (
+    ("typesafe-key", re.compile(r"\bts_[A-Za-z0-9][A-Za-z0-9_\-]{7,}")),
+    ("openai-key", re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{7,}")),
+    ("jev-key", re.compile(r"\bjev_[A-Za-z0-9][A-Za-z0-9_\-]{7,}")),
+    ("slack-token", re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{8,}")),
+    ("github-token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}")),
+    ("aws-key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("bearer-token", re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{12,}")),
+    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{4,}")),
+)
+
+
+def _secret_env_values(environ: Optional[Mapping[str, str]] = None) -> List[Tuple[str, str]]:
+    """The literal values of this process's secret-looking environment variables.
+
+    Only names matching :data:`_SECRET_ENV_NAME` are considered, and only values long
+    enough to be a credential (a one-character "key" would redact the letter "a"
+    everywhere and tell nobody anything). Values are never returned to a client; they
+    exist here only so :func:`redact_client_text` can find them in the page's text.
+    """
+    source = os.environ if environ is None else environ
+    found: List[Tuple[str, str]] = []
+    for name, value in source.items():
+        if not _SECRET_ENV_NAME.search(name):
+            continue
+        if not value or len(value) < 8:
+            continue
+        found.append((name, value))
+    return found
+
+
+def redact_client_text(text: object, secrets: Optional[List[Tuple[str, str]]] = None) -> str:
+    """The page's text, with anything that looks like a credential masked. **Named.**
+
+    Two passes, because either one alone is a hole:
+
+    * the **literal values** of this process's secret environment variables. This is
+      the case that matters -- a page that echoes a key it was accidentally handed is
+      exactly the leak this endpoint could otherwise create;
+    * **key-shaped tokens** regardless of where they came from, so a key that is *not*
+      this process's (a pasted key, a key in a different environment) is masked too.
+
+    The replacement names the rule (`[redacted:api-key]`), never the value and never
+    the variable: a masked field has to stay diagnosable, and the *identity* of the
+    secret is not part of that.
+    """
+    if secrets is None:
+        secrets = _secret_env_values()
+    out = str(text)
+    for _name, value in secrets:
+        if value and value in out:
+            out = out.replace(value, "[redacted:env-secret]")
+    for label, pattern in _SECRET_SHAPES:
+        out = pattern.sub(f"[redacted:{label}]", out)
+    return out
+
+
+def _client_log_event(raw: object) -> dict:
+    """One event from the page, validated, redacted and bounded. Raises by name."""
+    if not isinstance(raw, dict):
+        raise ViewerError(
+            "client_log_invalid_event",
+            "each client-log event must be a JSON object",
+            detail="an event is {kind, text, at?, source?, line?, col?}",
+        )
+    kind = raw.get("kind")
+    if kind not in CLIENT_LOG_KINDS:
+        raise ViewerError(
+            "client_log_unknown_kind",
+            f"unknown client-log kind {kind!r}; the page may report {', '.join(CLIENT_LOG_KINDS)}",
+            detail="An open vocabulary would make ?kind= useless for triage.",
+        )
+    text = redact_client_text(raw.get("text", ""))
+    if len(text) > CLIENT_LOG_MAX_TEXT:
+        raise ViewerError(
+            "client_log_text_too_long",
+            f"a {kind} event carries {len(text)} characters, over the {CLIENT_LOG_MAX_TEXT} limit",
+            status=413,
+            detail=(
+                "The page truncates before sending; a longer field is a different page, "
+                "or a payload that is not an event at all."
+            ),
+        )
+    event = {"kind": kind, "text": text}
+    for field in ("source", "message"):
+        if raw.get(field) is not None:
+            event[field] = redact_client_text(raw[field])[:CLIENT_LOG_MAX_TEXT]
+    for field in ("at", "line", "col", "count"):
+        if raw.get(field) is not None:
+            try:
+                event[field] = int(raw[field])
+            except (TypeError, ValueError):
+                raise ViewerError(
+                    "client_log_invalid_event",
+                    f"{field} must be an integer, got {raw[field]!r}",
+                ) from None
+    return event
+
+
+def _client_log_snapshot(raw: object) -> dict:
+    """The page's semantic state, redacted, bounded and shape-checked. Raises by name."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ViewerError(
+            "client_log_invalid_snapshot",
+            "the client-log snapshot must be a JSON object",
+            detail="It is the page's own state, reported as data.",
+        )
+    labelled = {key: value for key, value in raw.items() if key in CLIENT_LOG_SNAPSHOT_FIELDS}
+    try:
+        encoded = json.dumps(labelled, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        raise ViewerError(
+            "client_log_invalid_snapshot",
+            f"the client-log snapshot is not JSON-serialisable: {exc}",
+        ) from None
+    if len(encoded) > CLIENT_LOG_MAX_SNAPSHOT:
+        raise ViewerError(
+            "client_log_snapshot_too_large",
+            f"the snapshot serialises to {len(encoded)} characters, over {CLIENT_LOG_MAX_SNAPSHOT}",
+            status=413,
+            detail="The page sends named scalars, not a dump of its whole state.",
+        )
+    return json.loads(redact_client_text(encoded))
+
+
+def parse_client_log(payload: object) -> Tuple[List[dict], dict]:
+    """A whole `POST /api/client-log` body -> ``(events, snapshot)``. Raises by name.
+
+    Every bound is a named refusal. That is the point: a page that sends too much
+    must find out, at the boundary, with a reason it can print -- not have the extra
+    quietly dropped somewhere the reader cannot see.
+    """
+    if not isinstance(payload, dict):
+        raise ViewerError("invalid_json", "the request body must be a JSON object")
+    events = payload.get("events")
+    if events is None:
+        events = []
+    if not isinstance(events, list):
+        raise ViewerError(
+            "client_log_invalid_event",
+            "`events` must be a list",
+            detail="Send events:[...]; an object would silently lose the ordering.",
+        )
+    if len(events) > CLIENT_LOG_MAX_EVENTS:
+        raise ViewerError(
+            "client_log_too_many_events",
+            f"{len(events)} events in one request, over the {CLIENT_LOG_MAX_EVENTS} limit",
+            status=413,
+            detail="The page batches at or below the limit; a bigger batch is refused, not trimmed.",
+        )
+    snapshot = _client_log_snapshot(payload.get("snapshot"))
+    return [_client_log_event(event) for event in events], snapshot
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 class ViewerHandler(BaseHTTPRequestHandler):
     server_version = "ardy-mlx-viewer/1.0"
     protocol_version = "HTTP/1.0"
 
-    # The URL space is a whitelist: `/` plus the five viewer files plus the three
-    # API routes. Nothing else is reachable, so the static handler cannot be
-    # walked out of `viewer/`.
-    ROUTES = ("/api/health", "/api/plan", "/api/reference")
+    # The URL space is a whitelist: `/` plus the viewer files plus the API routes.
+    # Nothing else is reachable, so the static handler cannot be walked out of
+    # `viewer/`.
+    ROUTES = ("/api/health", "/api/plan", "/api/reference", "/api/client-log")
 
     def log_message(self, fmt, *args):  # noqa: A003 - stdlib signature
         sys.stderr.write("[ardy_viewer] %s - %s\n" % (self.address_string(), fmt % args))
@@ -2188,12 +2553,23 @@ class ViewerHandler(BaseHTTPRequestHandler):
             status=error.status,
         )
 
-    def _read_json_body(self) -> dict:
+    def _read_json_body(self, limit: Optional[int] = None) -> dict:
+        """The request body, parsed. ``limit`` is this route's own byte ceiling."""
+        ceiling = 1 << 20 if limit is None else int(limit)
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             return {}
-        if length > 1 << 20:
-            raise ViewerError("body_too_large", "request body over 1 MiB", status=413)
+        if length > ceiling:
+            # The shared 1 MiB refusal keeps its historical name; a tighter ceiling is
+            # this route's own, and says which route and which number.
+            if limit is None:
+                raise ViewerError("body_too_large", "request body over 1 MiB", status=413)
+            raise ViewerError(
+                "client_log_body_too_large",
+                f"request body over {ceiling} bytes",
+                status=413,
+                detail="POST /api/client-log carries a bounded batch of page events.",
+            )
         raw = self.rfile.read(length)
         try:
             body = json.loads(raw.decode("utf-8"))
@@ -2257,6 +2633,37 @@ class ViewerHandler(BaseHTTPRequestHandler):
                         include_frames=_opt_bool(params.get("include_frames")),
                         reset=_opt_bool(params.get("reset")),
                     ))
+                elif parsed.path == "/api/client-log":
+                    # GET reads the retained log back (this is the "query the page's
+                    # errors by name" half); POST is the page reporting.
+                    if method == "POST":
+                        try:
+                            events, snapshot = parse_client_log(
+                                self._read_json_body(limit=CLIENT_LOG_MAX_BODY),
+                            )
+                        except ViewerError as exc:
+                            # Counted *and* named in the log: "the page tried to report
+                            # and the server refused" is itself a finding, and an
+                            # unnamed 400 in the access log would not say which wall it
+                            # hit.
+                            app.client_log_rejected += 1
+                            sys.stderr.write(
+                                "[ardy_viewer] client-log refused %s: %s\n"
+                                % (exc.name, exc.message)
+                            )
+                            raise
+                        self._send_json(app.record_client_log(events, snapshot))
+                    elif method == "GET":
+                        self._send_json(app.client_log_report(
+                            kind=query.get("kind", [None])[-1],
+                            limit=_opt_int(query.get("limit", [None])[-1], "limit"),
+                        ))
+                    else:
+                        raise ViewerError(
+                            "method_not_allowed",
+                            f"{method} is not allowed on /api/client-log; use GET or POST",
+                            status=405,
+                        )
                 else:  # /api/reference
                     if method != "GET":
                         raise ViewerError("method_not_allowed", "use GET /api/reference", status=405)

@@ -816,3 +816,310 @@ def test_reset_over_http_is_a_real_switch_not_a_comment(live_server):
     assert with_reset["requested"] is False
     assert with_reset["reason"] == "reset_requested"
     assert with_reset["applied"] is False
+
+
+# --------------------------------------------------------------------------- #
+# the page's own log: POST/GET /api/client-log
+# --------------------------------------------------------------------------- #
+# The page has no terminal. Before this endpoint, a renderer exception and a healthy
+# run looked identical from the server -- 200s all the way -- which is why diagnosing
+# "似乎不太对" meant guessing. These tests exercise the real wire path, the named
+# refusals, and the one thing this endpoint could itself get wrong: becoming the leak.
+
+CLIENT_LOG_SENTINEL = "ts_test_key_do_not_use_0123456789"
+
+
+def _client_event(text="boom", kind="error", **extra):
+    event = {"kind": kind, "text": text}
+    event.update(extra)
+    return event
+
+
+def _all_text(value):
+    """Every string anywhere in a decoded JSON payload."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _all_text(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _all_text(item)
+
+
+def test_client_log_round_trip_records_and_is_queryable_by_kind(live_server):
+    base, app = live_server
+    payload = {
+        "events": [
+            _client_event("TypeError: x is not a function", at=1200.0, source="app.js", line=3, col=9),
+            _client_event("three.js: context lost", kind="console.warn", at=1300.0),
+        ],
+        "snapshot": {"playhead": 411, "segments": 6, "buffered": 12, "held": False,
+                     "route": "compose", "route_probability": 0.81,
+                     # The two fields that say *where the character was*: without them
+                     # "the character walked out of frame" is a guess, and they are the
+                     # reason this snapshot is worth sending at all.
+                     "screen": [0.12, -0.303, 5.1], "root": [0.0, 0.9, 20.4],
+                     "camera": {"follow_frames": 400, "clamped": 0, "max_step_m": 0.168},
+                     "url": "/"},
+    }
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST", payload)
+    assert status == 200, body
+    assert body["accepted"] == 2
+    assert body["kinds"] == ["console.warn", "error"]
+    assert body["snapshot"]["playhead"] == 411
+    assert body["snapshot"]["screen"] == [0.12, -0.303, 5.1]
+    assert body["snapshot"]["root"] == [0.0, 0.9, 20.4]
+    assert body["snapshot"]["camera"]["clamped"] == 0
+    assert body["received_at"] is not None
+
+    # ... and it is readable back, by name.
+    status, body, _ = jrequest(f"{base}/api/client-log")
+    assert status == 200
+    assert body["received"] == 2
+    assert body["returned"] == 2
+    assert [event["kind"] for event in body["events"]] == ["error", "console.warn"]
+    assert body["last_kind"] == "console.warn"
+    assert body["last_at"] is not None
+    assert body["snapshot"]["route"] == "compose"
+
+    status, body, _ = jrequest(f"{base}/api/client-log?kind=error")
+    assert status == 200
+    assert body["matching"] == 1
+    assert [event["kind"] for event in body["events"]] == ["error"]
+    assert body["events"][0]["line"] == 3
+
+    # A kind with nothing in it returns nothing -- it does not fall back to "all".
+    status, body, _ = jrequest(f"{base}/api/client-log?kind=unhandledrejection")
+    assert status == 200
+    assert body["matching"] == 0
+    assert body["events"] == []
+
+    # `limit` trims from the newest end and says so, rather than pretending.
+    status, body, _ = jrequest(f"{base}/api/client-log?limit=1")
+    assert status == 200
+    assert body["returned"] == 1
+    assert body["truncated"] is True
+    assert body["events"][0]["kind"] == "console.warn"
+
+
+def test_client_log_appears_in_health_with_a_count_and_a_timestamp(live_server):
+    base, app = live_server
+    before = app.health()["client_log"]
+    assert before["received"] == 0
+    assert before["last_at"] is None
+    assert before["last_kind"] is None
+    assert before["kept"] == 0
+
+    jrequest(f"{base}/api/client-log", "POST", {"events": [_client_event("nope")]})
+    status, body, _ = jrequest(f"{base}/api/health")
+    assert status == 200
+    block = body["client_log"]
+    assert block["received"] == 1
+    assert block["last_kind"] == "error"
+    assert isinstance(block["last_at"], float) and block["last_at"] > 0
+    assert block["kept"] == 1
+    assert block["keep_limit"] == ardy_viewer.CLIENT_LOG_KEEP
+
+
+def test_client_log_is_named_in_the_server_log_not_silently_stored(live_server, capsys):
+    # The endpoint's whole reason for existing is that the server's *log* is where a
+    # reader looks. An event kept only in a JSON document nobody polls is as invisible
+    # as no endpoint at all.
+    base, _ = live_server
+    jrequest(f"{base}/api/client-log", "POST", {
+        "events": [_client_event("Uncaught ReferenceError: fitCameraToClip is not defined")],
+    })
+    captured = capsys.readouterr()
+    assert "client-log error" in captured.err
+    assert "fitCameraToClip is not defined" in captured.err
+
+    # The snapshot is named too, because it is what says *what the page was doing*.
+    jrequest(f"{base}/api/client-log", "POST", {
+        "events": [], "snapshot": {"playhead": 411, "segments": 6, "held": False},
+    })
+    captured = capsys.readouterr()
+    assert "client-log snapshot" in captured.err
+    assert '"playhead": 411' in captured.err
+
+
+def test_client_log_negative_control_a_key_shaped_string_never_reaches_the_log(
+    live_server, capsys, monkeypatch,
+):
+    """This endpoint is the one that could *create* a leak, so it must not.
+
+    Both halves run. The positive half shows the leak check can go red (the key is
+    really in the text that was sent); the negative half shows that nothing which
+    reaches a reader -- the POST response, `GET /api/client-log`, `/api/health`, or
+    the server's own stderr -- carries it.
+    """
+    monkeypatch.setenv("TYPESAFE_API_KEY", CLIENT_LOG_SENTINEL)
+    base, _ = live_server
+    shape_only = "sk-live_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+    text = f"failed to call https://api.example with key {CLIENT_LOG_SENTINEL}"
+    payload = {
+        "events": [_client_event(text, source=f"https://x/?k={CLIENT_LOG_SENTINEL}")],
+        "snapshot": {"url": f"/?token={CLIENT_LOG_SENTINEL}", "playhead": 1},
+    }
+    # The check can fail: the sentinel really is in what was posted.
+    assert CLIENT_LOG_SENTINEL in json.dumps(payload)
+
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST", payload)
+    assert status == 200, body
+    stderr_after_post = capsys.readouterr().err
+
+    status, listing, _ = jrequest(f"{base}/api/client-log")
+    assert status == 200
+    status_h, health, _ = jrequest(f"{base}/api/health")
+    assert status_h == 200
+
+    surfaces = {
+        "POST /api/client-log": json.dumps(body),
+        "GET /api/client-log": json.dumps(listing),
+        "GET /api/health": json.dumps(health),
+        "stderr": stderr_after_post,
+    }
+    for name, blob in surfaces.items():
+        for text_field in _all_text(json.loads(blob)) if name != "stderr" else [blob]:
+            assert CLIENT_LOG_SENTINEL not in text_field, f"the key leaked into {name}"
+
+    # Masked, not dropped: the marker names the rule, so the field stays diagnosable.
+    stored = listing["events"][0]["text"]
+    assert "[redacted:" in stored
+    assert "failed to call" in stored
+    stderr_after_post = stderr_after_post  # already checked above
+
+    # A key-shaped token that is *not* this process's environment still gets masked:
+    # a pasted key is the case the env sweep cannot see.
+    jrequest(f"{base}/api/client-log", "POST", {"events": [_client_event(f"paste {shape_only}")]})
+    status, listing, _ = jrequest(f"{base}/api/client-log?kind=error")
+    assert status == 200
+    assert shape_only not in json.dumps(listing)
+    assert "[redacted:openai-key]" in listing["events"][-1]["text"]
+
+
+def test_client_log_refuses_too_many_events_by_name(live_server):
+    base, app = live_server
+    over = ardy_viewer.CLIENT_LOG_MAX_EVENTS + 1
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST",
+                               {"events": [_client_event(str(i)) for i in range(over)]})
+    assert status == 413
+    assert body["error"] == "client_log_too_many_events"
+    assert str(over) in body["message"] and str(ardy_viewer.CLIENT_LOG_MAX_EVENTS) in body["message"]
+    # Refused, not trimmed: the request left nothing behind.
+    assert app.client_log_report()["received"] == 0
+    # ... and the refusal itself is counted, because it is also a finding.
+    assert app.health()["client_log"]["rejected"] == 1
+
+
+def test_client_log_refuses_an_over_long_text_by_name(live_server):
+    base, app = live_server
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST", {
+        "events": [_client_event("x" * (ardy_viewer.CLIENT_LOG_MAX_TEXT + 1))],
+    })
+    assert status == 413
+    assert body["error"] == "client_log_text_too_long"
+    assert app.client_log_report()["received"] == 0
+
+    # Exactly at the limit is accepted: the boundary is inclusive, and a page that
+    # truncates to the documented number must not be refused for it.
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST", {
+        "events": [_client_event("y" * ardy_viewer.CLIENT_LOG_MAX_TEXT)],
+    })
+    assert status == 200, body
+    assert app.client_log_report()["received"] == 1
+
+
+def test_client_log_refuses_its_own_body_limit_by_name(live_server):
+    """A body over this route's 64 KiB ceiling is refused as *this route's* error.
+
+    The shared 1 MiB refusal keeps its own name and its own test
+    (`test_plan_rejects_an_oversized_body`); what matters here is that the tighter
+    ceiling is named after the route rather than reported as the shared one, so a page
+    reading ``{"error": ...}`` knows which limit it hit.
+    """
+    base, app = live_server
+    filler = "z" * (ardy_viewer.CLIENT_LOG_MAX_BODY + 1024)
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST",
+                               {"events": [], "snapshot": {"url": filler}})
+    assert status == 413
+    assert body["error"] == "client_log_body_too_large"
+    assert str(ardy_viewer.CLIENT_LOG_MAX_BODY) in body["message"]
+    assert app.client_log_report()["received"] == 0
+    # The tighter ceiling is genuinely tighter, i.e. it is the one that fires first.
+    assert ardy_viewer.CLIENT_LOG_MAX_BODY < (1 << 20)
+
+
+def test_client_log_refuses_an_unknown_kind_by_name(live_server):
+    base, app = live_server
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST",
+                               {"events": [_client_event("hi", kind="console.log")]})
+    assert status == 400
+    assert body["error"] == "client_log_unknown_kind"
+    assert "console.log" in body["message"]
+    # The filter is the same closed vocabulary: an unknown name is a refusal, not an
+    # empty list that would read as "there were none".
+    status, body, _ = jrequest(f"{base}/api/client-log?kind=console.log")
+    assert status == 400
+    assert body["error"] == "client_log_unknown_kind"
+    assert app.client_log_report()["received"] == 0
+
+
+@pytest.mark.parametrize("snapshot, expected", [
+    ("not an object", "client_log_invalid_snapshot"),
+    ({"url": "u" * (ardy_viewer.CLIENT_LOG_MAX_SNAPSHOT + 1)}, "client_log_snapshot_too_large"),
+])
+def test_client_log_refuses_a_bad_snapshot_by_name(live_server, snapshot, expected):
+    base, app = live_server
+    status, body, _ = jrequest(f"{base}/api/client-log", "POST",
+                               {"events": [], "snapshot": snapshot})
+    assert status == 413 if expected.endswith("too_large") else status == 400
+    assert body["error"] == expected
+    assert app.client_log_report()["received"] == 0
+
+
+def test_client_log_keeps_a_bounded_ring_and_counts_what_fell_out(live_server):
+    base, app = live_server
+    total = ardy_viewer.CLIENT_LOG_KEEP + 7
+    sent = 0
+    while sent < total:
+        batch = min(ardy_viewer.CLIENT_LOG_MAX_EVENTS, total - sent)
+        status, body, _ = jrequest(f"{base}/api/client-log", "POST", {
+            "events": [_client_event(f"event {sent + i}") for i in range(batch)],
+        })
+        assert status == 200, body
+        sent += batch
+    report = app.client_log_report()
+    assert report["received"] == total
+    assert report["kept"] == ardy_viewer.CLIENT_LOG_KEEP
+    assert report["dropped"] == total - ardy_viewer.CLIENT_LOG_KEEP
+    # The ring drops the *oldest*, so the newest event is still there.
+    assert report["events"][-1]["text"] == f"event {total - 1}"
+    assert report["events"][0]["text"] == f"event {total - ardy_viewer.CLIENT_LOG_KEEP}"
+
+
+def test_client_log_rejects_the_verbs_it_does_not_have(live_server):
+    base, _ = live_server
+    for method in ("PUT", "PATCH", "DELETE"):
+        status, body, _ = jrequest(f"{base}/api/client-log", method, {"events": []})
+        assert status == 405, method
+        assert body["error"] == "method_not_allowed"
+        assert "client-log" in body["message"]
+
+
+def test_client_log_never_writes_a_secret_into_the_health_snapshot(live_server, monkeypatch, capsys):
+    # The snapshot is echoed back by `/api/health` *and* written to stderr, so it is
+    # the other place a key could land. It goes through the same redaction.
+    monkeypatch.setenv("JEV_API_KEY", CLIENT_LOG_SENTINEL)
+    base, _ = live_server
+    jrequest(f"{base}/api/client-log", "POST", {
+        "events": [], "snapshot": {"url": f"/?key={CLIENT_LOG_SENTINEL}", "playhead": 7},
+    })
+    err = capsys.readouterr().err
+    status, health, _ = jrequest(f"{base}/api/health")
+    assert status == 200
+    assert CLIENT_LOG_SENTINEL not in err
+    assert CLIENT_LOG_SENTINEL not in json.dumps(health)
+    assert health["client_log"]["snapshot"]["playhead"] == 7
+    assert "[redacted:env-secret]" in health["client_log"]["snapshot"]["url"]

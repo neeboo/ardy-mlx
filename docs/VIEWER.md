@@ -84,7 +84,7 @@ checkpoint on this machine. Do not expose the port.
 
 ## 2. The HTTP interface
 
-Three routes plus static files. Every failure carries a stable machine-readable
+Four routes plus static files. Every failure carries a stable machine-readable
 `error` name, and `POST /api/plan` covers the whole generation path.
 
 ### `GET /api/health`
@@ -168,6 +168,16 @@ Three routes plus static files. Every failure carries a stable machine-readable
     "continue_ready": true,             // the next plan without reset would continue
     "history_frames": 160,              // the checkpoint's own crop budget
     "note": "the page owns playback and the runahead queue; this server owns the …"},
+  "client_log": {                       // §12.2. What the PAGE reported about itself --
+    "received": 2,                      //        the only window onto a renderer fault.
+    "rejected": 1,                      // reports the server refused by name
+    "dropped": 0,                       // oldest entries that fell out of the ring
+    "kept": 2, "keep_limit": 200,
+    "last_at": 1791896112.136, "last_kind": "unhandledrejection",
+    "kinds": ["error", "unhandledrejection", "console.error", "console.warn"],
+    "snapshot": {"playhead": 411, "held": false, "camera": {"clamped": 0, …}, …},
+    "endpoint": "POST /api/client-log, GET /api/client-log?kind=&limit=",
+    "note": "reported by the browser page, not observed by this server. …"},
   "router": {                           // §9. The same six names a plan carries.
     "enabled": true, "available": true,
     "state": "ok",                      // "router_disabled" | "router_unavailable" | "ok"
@@ -363,6 +373,71 @@ shape as `/api/plan` but with `"kind": "golden"`, `npz_path`, `npz_sha256` and a
 from that prompt and answers `golden_reference_prompt_mismatch` (404) if not —
 comparing two different prompts would not be a comparison.
 
+### `POST /api/client-log` and `GET /api/client-log?kind=&limit=`
+
+The page has no terminal, so anything the renderer throws is invisible from here: a
+`TypeError` in a rAF callback and a healthy run produce the *same* access log. The
+page therefore reports its own errors, and this endpoint keeps the last few. See
+`§12` for the page side and `docs/decisions/0011` for the ruling.
+
+```jsonc
+// POST — the page reporting. `snapshot` rides along with every report.
+{"events": [{"kind": "error",             // error | unhandledrejection |
+             "text": "Uncaught TypeError: x is not a function",  // console.error | console.warn
+             "at": 41200,                 // whole ms since page load
+             "source": "/app.js", "line": 2410, "col": 5}],
+ "snapshot": {"playhead": 411, "timelineFrames": 680, "segments": 6, "buffered": 12,
+              "held": false, "playing": true, "fps": 19.8, "intent_version": 3,
+              "route": "compose", "route_probability": 0.81, "noise": "golden",
+              "duration": 2.0,
+              "camera": {"follow_frames": 400, "clamped": 0, "max_step_m": 0.17,
+                         "last_step_m": 0.05, "user_jumps": 0},
+              "screen": [0.12, -0.30, 5.10],   // the character's NDC + camera depth
+              "root": [0.0, 0.9, 20.4],        // and its world root
+              "url": "/"}}                     // path only: never a query string
+```
+
+```jsonc
+// 200 — the POST's answer, and the same object `GET` returns.
+{"owner": "page", "received": 2, "rejected": 0, "dropped": 0,
+ "kept": 2, "keep_limit": 200,
+ "kinds": ["error", "unhandledrejection", "console.error", "console.warn"],
+ "filter": "unhandledrejection",   // the ?kind= that was asked for, or null
+ "matching": 1, "returned": 1, "truncated": false,
+ "last_at": 1791896112.136, "last_kind": "unhandledrejection",
+ "snapshot": { /* the most recent snapshot the server holds */ },
+ "events": [{"kind": "unhandledrejection", "text": "…?key=[redacted:typesafe-key]",
+             "at": 42100, "source": null, "line": null, "col": null, "count": null,
+             "received_at": 1791896112.136}],
+ "note": "everything here was reported by the browser page and is untrusted: …"}
+```
+
+`GET` answers with the retained ring, oldest first. `?kind=` filters by *name* — the
+vocabulary is closed (`CLIENT_LOG_KINDS`), so an unknown name is a refusal rather than
+an empty list that would read as "there were none". `?limit=` trims from the newest
+end and sets `truncated`.
+
+`/api/health` carries a `client_log` block with `received`, `rejected`, `dropped`,
+`kept`, `last_at`, `last_kind` and the current `snapshot`, so a reader does not have to
+know this endpoint exists to notice that the page has been complaining.
+
+**Every string is redacted before it is stored, logged or returned.** Two passes:
+the literal values of this process's secret-shaped environment variables
+(`*_API_KEY`, `*_TOKEN`, `*_SECRET`, …), then key *shapes* (`ts_…`, `sk-…`, `jev_…`,
+`xox[abprs]-…`, `gh[pousr]_…`, `AKIA…`, `Bearer …`, JWT). The replacement names the
+rule (`[redacted:typesafe-key]`, `[redacted:env-secret]`) and never the value — and
+never the variable name. The page masks the same shapes before sending, because an
+error message is text the page did not write: a failed `fetch('https://…?key=…')`
+rejects with the whole URL in it.
+
+The server writes what it keeps to its own log, by name, rather than only storing it:
+
+```
+[ardy_viewer] client-log error Uncaught TypeError: x is not a function
+[ardy_viewer] client-log snapshot {"buffered": 12, "held": false, "playhead": 411, …}
+[ardy_viewer] client-log refused client_log_unknown_kind: unknown client-log kind 'console.log'; …
+```
+
 ### Error names
 
 | `error` | status | when |
@@ -383,6 +458,13 @@ comparing two different prompts would not be a comparison.
 | `not_found` | 404 | unknown path (static files are an exact whitelist) |
 | `method_not_allowed` | 405 | anything but `GET`/`POST` |
 | `body_too_large` | 413 | request body over 1 MiB |
+| `client_log_body_too_large` | 413 | `POST /api/client-log` body over 64 KiB (a tighter ceiling, named after the route) |
+| `client_log_too_many_events` | 413 | more than 50 events in one report. Refused, never trimmed |
+| `client_log_text_too_long` | 413 | one event's text over 600 characters. The page truncates (and marks it) below this |
+| `client_log_snapshot_too_large` | 413 | the snapshot serialises to over 4000 characters |
+| `client_log_unknown_kind` | 400 | an event kind outside the closed vocabulary — also returned by `?kind=` for a name that is not one of the four |
+| `client_log_invalid_event` | 400 | an event that is not an object, or a field of the wrong type |
+| `client_log_invalid_snapshot` | 400 | the snapshot is not a JSON object, or is not serialisable |
 | `model_unavailable` | 503 | the checkpoint is not loaded; `/api/health` has the reason |
 | `internal_error` | 500 | anything unforeseen, with a traceback in `detail` |
 
@@ -959,15 +1041,17 @@ The page has no browser test harness, so the parts of it that *decide* something
 whether to send a request, which noise source is possible, whether the drawer starts
 open, what the status line says — would otherwise be untestable. They live instead in
 marker-delimited regions of pure functions inside `viewer/app.js`
-(`// --- pure-prompt-guard`, `// --- pure-bubble` and `// --- pure-chat`), and those
+(`// --- pure-prompt-guard`, `// --- pure-bubble`, `// --- pure-chat`,
+`// --- pure-timeline` and `// --- pure-client-log`), and those
 regions are loaded out of the **shipped file** — not copied — and executed in a bare
 `node:vm` context by `tests/viewer_js_guard.test.mjs` (the chat region is loaded
 together with the bubble's, because the status line names a route and the route
-vocabulary is the bubble's):
+vocabulary is the bubble's; the timeline region is loaded with both because it names
+`planBody` and `clip`):
 
 ```sh
 node --check viewer/app.js                      # the page parses (ESM, no bundler)
-node tests/viewer_js_guard.test.mjs             # 33 cases; also: node --test <file>
+node tests/viewer_js_guard.test.mjs             # 72 cases; also: node --test <file>
 ./.venv/bin/python -m pytest -q                 # the same run, via
                                                 # test_viewer_http.py::test_the_pages_prompt_guard_runs_under_node
 ```
@@ -1004,6 +1088,19 @@ The thirteen added this round cover the chatbox itself:
 Six of the cases are **negative controls**, because a check that cannot fail is not a
 check. `node` is a build-time tool, not a Python dependency: the pytest bridge skips
 with a reason when it is not on `PATH`.
+
+Later rounds added the playback model (`// --- pure-timeline`, `§11`) and then the
+follow camera and the client log (`§12`). Those are the interesting ones to read,
+because both exist to make a *symptom* falsifiable:
+
+* the camera criteria are stated as "the character is inside the frustum on every
+  frame" and "no frame moves the camera by 0.5 m or more", and each is paired with a
+  real alternative implementation that must fail it — no follow at all, a refit per
+  segment, an instant snap, and a follow that reads the wrong frame;
+* the client-log criteria are "the queue is bounded and the losses are counted", "an
+  unnameable event is refused rather than relabelled", "the snapshot is exactly the
+  declared whitelist", and "a key in an error message is masked before it leaves the
+  page" — the last with a positive half proving the leak check can go red.
 
 ### 8.2 A 400 `no_prompt_given` that came from the page
 
@@ -1542,9 +1639,14 @@ backwards, which is why it is labelled rather than hidden.
 
 ### 11.4 What this costs
 
-* **The camera does not follow the character.** With no refit and no user input the
-  camera stays where it was, so a walk that crosses the viewport leaves it. That is the
-  ruled behaviour (only *Fit* may reframe); press **Fit clip**.
+* **The camera follows the character, and that is a change from the first shipping
+  version of this section.** "Frame once, then never move" was correct about
+  *re-fitting* and wrong about *tracking*: a walk longer than a few metres left the
+  picture, and the reader was left looking at an empty floor while the position
+  readout kept climbing. The camera now moves the focus toward the character's root
+  every frame, damped, and *only* the focus — distance and orbit are still the
+  reader's (Fit, drag, wheel), so "no re-framing without a user action" is unchanged.
+  See `§12.1` and `docs/decisions/0011`.
 * The **golden overlay is still bound to one clip** and is not re-fetched per segment.
   It is a study aid for a single clip, not a stream feature.
 * Runahead keeps **two** clips: the one playing and the one being generated. A third is
@@ -1552,3 +1654,94 @@ backwards, which is why it is labelled rather than hidden.
   memory is bounded by what is on screen plus one segment — the queue itself is never
   trimmed, because trimming it would move the global frame numbers that the "only goes
   up" criterion is about.
+
+---
+
+## 12. The follow camera, and the page's own log
+
+Both of this section's subjects exist because of one report: *"似乎不太对"*. The
+server was clean — 43 of 48 log lines were `200`, no 4xx, no 5xx, no traceback, the
+stream counters showed 8 segments and 680 frames, the router answered 6 times with no
+timeouts. A healthy server and a wrong-looking page is the case neither the access log
+nor `/api/health` could describe, so the page had to start describing itself.
+
+### 12.1 The camera follows
+
+`0009 §二` ruled that the camera may be framed once, or when the reader presses **Fit**
+— correct, because re-framing per segment is a jump. What shipped was the other half of
+that sentence: *frame once, then never move*. A character who walks 30 m walks out of
+the picture, and the reader sees an empty floor.
+
+The camera now **follows**:
+
+* every rendered frame moves `focus` toward the character's **root position**, with
+  exponential damping (`FOCUS_TAU_S = 0.30 s`), so the focus starts moving the instant
+  the character does and never overshoots;
+* **only the focus.** `distance`, `yaw` and `pitch` change when the reader presses Fit
+  or drags or scrolls, and at no other time — so the "no re-framing without a user
+  action" rule is exactly as strong as it was;
+* a reader's **Fit** lands on the character; the **opening** framing lands on the first
+  clip's bounds centre. A Fit that framed the whole run would put a 30 m run's centre
+  ten metres from the character and then have to chase it back — a jump, not a re-frame.
+
+The criterion is not "the camera matrix is bit-identical" (that is what forbade the
+follow in the first place). It is **"the camera does not jump"**:
+
+| | threshold | why |
+|---|---|---|
+| focus displacement, per frame | `< 0.5 m` | 20 fps ⇒ 0.05 s/frame; a 2 m/s walk moves the root 0.10 m/frame, and the damping only reaches 0.5 m/frame from a ≥ 3 m gap |
+| camera position, per frame | `< 0.5 m` | the same, and it is what the reader actually sees move |
+| damping clamps | never | a clamped frame means the camera *was* about to jump; the count is reported rather than hidden |
+
+0.5 m is 5× the intended per-frame motion and 2× *below* the smallest accidental jump
+(re-framing around one clip moves the focus half a clip's length, ~1 m).
+
+Measured over a 23.4 m walk (469 frames) in `tests/viewer_js_guard.test.mjs`:
+
+| policy | worst focus step | worst camera step | clamped | frames off screen |
+|---|---|---|---|---|
+| follow (shipped) | **0.168 m** | 0.168 m | **0** | **0** |
+| instant snap | 1.097 m | 1.097 m | 0 | 0 |
+| no follow | 0 | 0 | 0 | **394** (from frame 75) |
+
+Each is a real alternative implementation, not a mock: `followFocusInstant` ships as a
+function so the test can run it, and "no follow" is one flag on the same harness. The
+"is the character on screen?" half is computed by a hand-written three.js-equivalent
+projection (`projectPoint`) so it can be evaluated in a bare `node:vm` — answering it
+with three.js would make the criterion untestable exactly where it matters.
+
+The page also reports the follow in every client-log snapshot (`camera.clamped`,
+`camera.max_step_m`) **and where the character projected to** (`screen`, `root`), so
+"the character walked out of frame" is readable from the log instead of guessed at.
+
+### 12.2 The page reports its own errors
+
+`POST /api/client-log` (`§2`) keeps the browser's last 200 reports, writes each one to
+the server's log by name, and exposes a count and a timestamp in `/api/health`. The page:
+
+* captures `window.onerror`, `unhandledrejection` and `console.error` / `console.warn`
+  and **passes the console calls through** — this adds a reporter, it does not replace
+  the console;
+* holds at most **50** events per flush, truncates text at 500 characters *with a
+  marker* (an unmarked half-message reads as the whole one), and counts what the bound
+  drops;
+* sends a **snapshot every 30 s** while a clip is on screen. Without a heartbeat a
+  report only ever exists *after* something threw, which is no help at all for a
+  symptom that threw nothing;
+* masks key-shaped tokens before sending, and builds the snapshot as a whitelist —
+  named scalars, constructed field by field, never spread. The URL is reduced to its
+  **path**: a query string is the one place a value from outside the page could ride
+  along.
+
+What the log can answer, that the server's own logs cannot:
+
+| question | field |
+|---|---|
+| did the page throw? | `events[].kind` / `text`, and `client_log.received` in health |
+| was the character on screen? | `snapshot.screen` (NDC), `snapshot.root` |
+| was the camera about to jump? | `snapshot.camera.clamped`, `.max_step_m` |
+| was playback holding on a dry buffer? | `snapshot.held`, `snapshot.buffered` |
+| what was the router's last verdict? | `snapshot.route`, `snapshot.route_probability` |
+| which conditions was the page on? | `snapshot.intent_version` |
+| was the stream actually advancing? | `snapshot.playhead`, `snapshot.timelineFrames`, `snapshot.segments` |
+| was the page even rendering? | `snapshot.fps`, and the heartbeat's own existence |

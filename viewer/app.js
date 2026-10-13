@@ -157,26 +157,85 @@ const cameraView = {
 };
 const desiredCamera = new THREE.Vector3();
 
+/**
+ * What the follow did, for the page's own client log (see `clientSnapshot`).
+ *
+ * A number the reader cannot see and the test cannot reach is a number nobody can
+ * diagnose with. `clamped` is the one that matters: it counts frames where the gap
+ * was so large that the camera was about to jump, which is exactly the "不太对"
+ * symptom this round is about.
+ */
+const cameraFollow = { frames: 0, clamped: 0, maxStep: 0, lastStep: 0, userJumps: 0 };
+
+/** Place the focus outright (a reader action) and record whether that was a jump. */
+function placeFocus(x, y, z) {
+  const moved = Math.hypot(x - cameraView.focus.x, y - cameraView.focus.y, z - cameraView.focus.z);
+  cameraView.focus.set(x, y, z);
+  if (moved >= CAMERA_MAX_STEP_M) cameraFollow.userJumps += 1;
+  return moved;
+}
+
+/** The focus target for the current playhead, or `null` before a clip exists. */
+function followTargetNow() {
+  const timeline = state.timeline;
+  if (!timeline || !timeline.roots || !timeline.frameCount) return null;
+  return focusTargetAt({
+    roots: timeline.roots,
+    frame: Math.round(state.playhead),
+    frameCount: timeline.frameCount,
+  });
+}
+
+/** One damped follow step, recorded for the client log. */
+function applyFollow(dt) {
+  const target = followTargetNow();
+  if (!target) return null;
+  const step = followFocus(cameraView.focus, target, dt);
+  cameraView.focus.set(step.focus.x, step.focus.y, step.focus.z);
+  cameraFollow.frames += 1;
+  cameraFollow.lastStep = step.distance;
+  if (step.distance > cameraFollow.maxStep) cameraFollow.maxStep = step.distance;
+  if (step.clamped) cameraFollow.clamped += 1;
+  return step;
+}
+
 function resetCameraView() {
   cameraView.yaw = 0.7;
   cameraView.pitch = 0.22;
   cameraView.distance = 4.6;
-  cameraView.focus.set(0, 0.75, 0);
+  // Reset is a reader action, so it may place the focus outright: snapping is what
+  // was asked for. It lands on the character when there is one, because putting the
+  // camera back on the origin would just make the follow drag it across the floor.
+  const target = followTargetNow();
+  placeFocus(target ? target.x : 0, target ? target.y : 0.75, target ? target.z : 0);
 }
 
-function fitCameraToClip() {
+/**
+ * Re-frame the camera.
+ *
+ * `userRequested` distinguishes the reader pressing Fit from the opening frame.
+ *
+ * * The **opening** frame frames the whole first clip: the centre of its bounds is
+ *   the natural opening shot, and the follow closes the half-clip gap to the
+ *   character over the next handful of frames, damped and under the threshold.
+ * * A **Fit** keeps the focus on the character -- the reader pressing Fit wants to
+ *   see the character better, and a Fit that framed the whole run would put a
+ *   30 m run's centre metres away from a character the follow then has to chase.
+ *
+ * Either way only `focus` and `distance` are written; `yaw`/`pitch` are the drag.
+ */
+function fitCameraToClip(options) {
+  const given = options || {};
   const timeline = state.timeline;
   if (!timeline || !timeline.jointCount || !timeline.frameCount || !timeline.bounds) return;
-  const box = new THREE.Box3(
-    new THREE.Vector3().fromArray(timeline.bounds.min),
-    new THREE.Vector3().fromArray(timeline.bounds.max),
-  );
-  if (box.isEmpty()) return;
-  box.getCenter(cameraView.focus);
-  cameraView.focus.y = Math.max(0.45, cameraView.focus.y);
-  const size = box.getSize(new THREE.Vector3());
-  const reach = Math.max(size.x, size.y, size.z, 0.6);
-  cameraView.distance = THREE.MathUtils.clamp(reach * 2.6, 2.2, 24);
+  const placed = fitPlacement({
+    userRequested: Boolean(given.userRequested),
+    bounds: timeline.bounds,
+    target: followTargetNow(),
+  });
+  if (!placed) return;
+  if (placed.distance !== null) cameraView.distance = placed.distance;
+  placeFocus(placed.focus.x, placed.focus.y, placed.focus.z);
 }
 
 function resize() {
@@ -245,6 +304,9 @@ const state = {
   committedIntent: null, // the conditions the last segment queued was fetched with
   playing: true,
   lastTime: performance.now(),
+  // The last routing decision the server reported, kept for the client log's
+  // snapshot: "what did the router decide while the reader was watching?"
+  lastRoute: null,       // {name, probability, at}
   fpsWindow: [],
   fps: 0,
   busy: false,
@@ -881,6 +943,240 @@ function referenceDecision(input) {
 }
 // --- pure-prompt-guard: end --------------------------------------------------
 
+// --- pure-client-log: start (no DOM, no fetch, no state) ---------------------
+//
+// The page's error report, as plain data.
+//
+// The page has no terminal. A `TypeError` in a rAF callback, a rejected fetch, a
+// `console.error` from three.js -- none of it is visible to the server, which sees
+// only a gap in its access log. Diagnosing "似乎不太对" then means guessing about a
+// renderer nobody can read, so the page reports what it knows to
+// `POST /api/client-log`, and the server keeps it.
+//
+// Three properties, and each is a test in `tests/viewer_js_guard.test.mjs`:
+//
+//   * **bounded.** At most `CLIENT_LOG_MAX_EVENTS` events are held, text is capped
+//     at `CLIENT_LOG_TEXT_CHARS`, and what falls out is *counted*, not forgotten.
+//     A page whose logging is unbounded is a page that can OOM while apologising.
+//   * **named.** Every event carries one of `CLIENT_LOG_KINDS`; the server refuses
+//     anything else, so a typo is a refusal rather than a log line nobody can grep.
+//   * **a whitelist.** The snapshot is a projection of named scalar fields. It
+//     cannot carry a key, a token or an environment variable, because it cannot
+//     carry anything it was not written to name -- and the page has none of those
+//     to begin with. The URL is reduced to its *path*: a query string is the one
+//     place a secret could ride along from outside the page.
+//
+// The server is the boundary that actually enforces redaction (a page cannot be
+// trusted about this), but a page that never builds such a field is the cheaper
+// half of the same rule.
+
+/** The most events held for one flush. Mirrors the server's `CLIENT_LOG_MAX_EVENTS`. */
+const CLIENT_LOG_MAX_EVENTS = 50;
+
+/** The longest text one event may carry. Below the server's limit, so the page is
+    the one that truncates -- visibly, with a marker -- rather than being refused. */
+const CLIENT_LOG_TEXT_CHARS = 500;
+
+/** How long the page waits before sending a batch. Long enough to coalesce a burst
+    (one broken frame usually produces several errors), short enough to arrive while
+    the reader still remembers what they saw. */
+const CLIENT_LOG_FLUSH_MS = 1500;
+
+/** How often a snapshot is sent with no events attached. The page has no terminal, so
+    this is the only way the server learns what the page was doing *before* the reader
+    said "不太对" -- and a report that only ever exists after an exception cannot
+    explain a symptom that threw nothing. */
+const CLIENT_LOG_HEARTBEAT_MS = 30000;
+
+/** The event names the server accepts. */
+const CLIENT_LOG_KINDS = ['error', 'unhandledrejection', 'console.error', 'console.warn'];
+
+/**
+ * What the snapshot may contain: named scalars, and nothing else.
+ *
+ * **This list and `CLIENT_LOG_SNAPSHOT_FIELDS` in `scripts/ardy_viewer.py` must be
+ * the same**, and a test asserts it. Two hand-written whitelists drift, and the
+ * failure mode of drift is a field the page carefully builds and the server silently
+ * drops -- which is exactly the kind of silence this endpoint exists to remove.
+ */
+const CLIENT_LOG_SNAPSHOT_FIELDS = [
+  'playhead', 'timelineFrames', 'segments', 'buffered', 'held', 'playing', 'fps',
+  'intent_version', 'intent_state', 'route', 'route_probability', 'noise', 'duration',
+  'camera', 'screen', 'root', 'url',
+];
+
+/**
+ * Key-shaped tokens, masked *before* anything leaves the page.
+ *
+ * Not because the page has a key -- it has none, and is never given one -- but
+ * because an error message is text the page did not write. A failed
+ * `fetch('https://…?key=…')` puts the whole URL in the rejection, and a report that
+ * faithfully relays it would be the leak. The server masks again on arrival (a page
+ * cannot be trusted about this); this is the half that means the secret never
+ * crosses the socket at all.
+ */
+const CLIENT_LOG_SECRET_SHAPES = [
+  ['typesafe-key', /\bts_[A-Za-z0-9][A-Za-z0-9_-]{7,}/g],
+  ['openai-key', /\bsk-[A-Za-z0-9][A-Za-z0-9_-]{7,}/g],
+  ['jev-key', /\bjev_[A-Za-z0-9][A-Za-z0-9_-]{7,}/g],
+  ['slack-token', /\bxox[abprs]-[A-Za-z0-9-]{8,}/g],
+  ['github-token', /\bgh[pousr]_[A-Za-z0-9]{16,}/g],
+  ['aws-key', /\bAKIA[0-9A-Z]{16}\b/g],
+  ['bearer-token', /\bBearer\s+[A-Za-z0-9._-]{12,}/g],
+  ['jwt', /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g],
+];
+
+/** Mask every key-shaped token in `text`. **Pure.** */
+function clientLogRedact(text) {
+  let out = String(text);
+  for (const [label, pattern] of CLIENT_LOG_SECRET_SHAPES) {
+    out = out.replace(pattern, `[redacted:${label}]`);
+  }
+  return out;
+}
+
+/** Text as a log field: one line, no control characters, redacted, bounded and marked. **Pure.** */
+function clientLogText(value, limit) {
+  const cap = Number(limit) > 0 ? Number(limit) : CLIENT_LOG_TEXT_CHARS;
+  let text;
+  if (value instanceof Error) {
+    text = value.stack || value.message || String(value);
+  } else if (value && typeof value === 'object') {
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = Object.prototype.toString.call(value);
+    }
+  } else {
+    text = String(value === undefined ? '' : value);
+  }
+  // Redact before anything else: a control character inside a token must not be able
+  // to break the pattern that would have caught it.
+  text = clientLogRedact(text);
+  // Control characters would let a log line forge a second line; collapse them.
+  text = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (text.length <= cap) return text;
+  // A truncation is *said*, not silent: a half-message with no marker reads as the
+  // whole message, which is exactly how a log lies.
+  return `${text.slice(0, cap)}…[+${text.length - cap} chars]`;
+}
+
+/**
+ * One event, shaped the way the server validates it. **Pure.**
+ *
+ * Returns `null` for a kind outside `CLIENT_LOG_KINDS`. That is not a silent drop:
+ * the caller counts it, and the alternative -- relabelling it `error` -- would put a
+ * name on a report that does not fit it, which is worse than saying nothing.
+ */
+function clientLogEntry(input) {
+  const given = input || {};
+  if (!CLIENT_LOG_KINDS.includes(given.kind)) return null;
+  const entry = { kind: given.kind, text: clientLogText(given.text) };
+  const at = Number(given.at);
+  entry.at = Number.isFinite(at) ? Math.max(0, Math.round(at)) : 0;
+  if (given.source !== undefined && given.source !== null) {
+    entry.source = clientLogText(given.source, 200);
+  }
+  for (const field of ['line', 'col', 'count']) {
+    const value = Number(given[field]);
+    if (Number.isFinite(value)) entry[field] = Math.round(value);
+  }
+  return entry;
+}
+
+/**
+ * Push one event onto a bounded queue. **Pure.**
+ *
+ * Returns the new queue and how many events did not make it in. Dropping the *oldest*
+ * is deliberate: the newest events are the ones near the symptom the reader is about
+ * to describe. A `null` entry (an unnameable kind) is counted, not ignored.
+ */
+function clientLogPush(queue, entry, limit) {
+  const cap = Number(limit) > 0 ? Number(limit) : CLIENT_LOG_MAX_EVENTS;
+  const next = (Array.isArray(queue) ? queue : []).slice();
+  if (!entry) return { queue: next, dropped: 1 };
+  next.push(entry);
+  let dropped = 0;
+  while (next.length > cap) {
+    next.shift();
+    dropped += 1;
+  }
+  return { queue: next, dropped };
+}
+
+/** Where a URL string points, without the parts that can carry a secret. **Pure.** */
+function clientLogPath(href) {
+  const text = String(href === undefined || href === null ? '' : href);
+  if (!text) return null;
+  // Everything before the first `?` or `#`: a query string is the one place a value
+  // from outside the page could ride into this log, so it is not sent at all.
+  const cut = Math.min(
+    ...[text.indexOf('?'), text.indexOf('#')].map((index) => (index < 0 ? text.length : index)),
+  );
+  const path = text.slice(0, cut);
+  const scheme = path.indexOf('://');
+  const tail = scheme < 0 ? path : path.slice(path.indexOf('/', scheme + 3));
+  return (tail.startsWith('/') ? tail : `/${tail}`) || '/';
+}
+
+/**
+ * The semantic snapshot: **what the page was doing**, as a whitelist. **Pure.**
+ *
+ * This is the field that turns "似乎不太对" into an answer. `held` distinguishes "the
+ * buffer ran dry and playback parked" from "it is playing and something else is
+ * wrong"; `screen` is where the character projected to, so "the character walked out
+ * of frame" is readable from the report instead of guessed at; `route` +
+ * `route_probability` say what the router decided. Anything not named here is not
+ * sent, whatever it is.
+ */
+function clientSnapshot(input) {
+  const given = input || {};
+  const int = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.round(number) : null;
+  };
+  const num = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const words = (value, limit) => (value ? clientLogText(value, limit) : null);
+  const triple = (value) => (
+    Array.isArray(value) ? [num(value[0]), num(value[1]), num(value[2])] : null
+  );
+  const camera = given.camera || {};
+  // Built field by field, never spread: a spread is how an object the page did not
+  // write ends up in a report about the page.
+  const fields = {
+    playhead: int(given.playhead),
+    timelineFrames: int(given.timelineFrames),
+    segments: int(given.segments),
+    buffered: int(given.buffered),
+    held: Boolean(given.held),
+    playing: Boolean(given.playing),
+    fps: num(given.fps),
+    intent_version: int(given.intentVersion),
+    intent_state: words(given.intentState, 40),
+    route: words(given.route, 40),
+    route_probability: num(given.routeProbability),
+    noise: words(given.noise, 24),
+    duration: num(given.duration),
+    camera: {
+      follow_frames: int(camera.frames),
+      clamped: int(camera.clamped),
+      max_step_m: num(camera.maxStep),
+      last_step_m: num(camera.lastStep),
+      user_jumps: int(camera.userJumps),
+    },
+    screen: given.screen ? triple(given.screen) : null,
+    root: given.root ? triple(given.root) : null,
+    url: clientLogPath(given.href),
+  };
+  const out = {};
+  for (const field of CLIENT_LOG_SNAPSHOT_FIELDS) out[field] = fields[field];
+  return out;
+}
+// --- pure-client-log: end ----------------------------------------------------
+
 // --- pure-timeline: start (no DOM, no fetch, no three.js) --------------------
 //
 // The playback model, as plain data, because it is the part of this page that was
@@ -1311,6 +1607,287 @@ function trailUnderNaiveAppend(segments) {
   }
   return points;
 }
+
+// ---------------------------------------------------------------------------
+// the follow camera (0009 §二 fixed the refit; this is the other half)
+// ---------------------------------------------------------------------------
+//
+// `0009` §二 ruled that the camera may only be framed once, or when the reader
+// presses Fit -- correct, because re-framing per segment is a jump. But "frame
+// once, then never move" means a character who walks 30 m simply walks out of the
+// picture, and the reader is left looking at an empty floor. That is not a
+// framing bug the refit rule can fix: the character is *moving*, and the camera
+// has to move with it.
+//
+// So the camera **follows**: every rendered frame moves `focus` toward the
+// character's root position, damped, and nothing else. `distance` and
+// `yaw`/`pitch` remain the reader's (Fit, drag, wheel) and are not touched by the
+// follow, so "no user action -> no re-framing" still holds exactly.
+//
+// Three properties, and `tests/viewer_js_guard.test.mjs` has a control for each:
+//
+//   * **6 — the character stays in the picture.** A walk of any length keeps the
+//     root inside the frustum, on every frame. Negative control: switch the
+//     follow off and the root leaves the frame.
+//   * **7 — the focus never jumps.** No rendered frame moves it by
+//     `CAMERA_MAX_STEP_M` or more, and the damping never has to clamp. Negative
+//     controls: re-fit per segment (the focus / camera position jumps), and
+//     "instant follow" (the first step is the whole standing gap).
+//   * **8 — following moves the focus and nothing else.** Structurally: the only
+//     writes to `cameraView` outside the fit branch are to `cameraView.focus`.
+
+/**
+ * How fast the focus catches up, as an exponential time constant in seconds.
+ *
+ * At a 1 m/s walk the focus trails the root by `v * tau` = 0.30 m, which is a
+ * seventh of the ~2 m half-height of the frustum at the framing distance (see
+ * `fitDistanceFromBounds`): a visible, deliberate lead, not a loss of the subject.
+ */
+const FOCUS_TAU_S = 0.30;
+
+/**
+ * The largest single-frame camera movement that is not a jump, in metres.
+ *
+ * Why 0.5, because a threshold with no derivation is a threshold nobody can check:
+ *
+ * * playback runs at the clip's 20 fps, so one rendered frame is 0.05 s;
+ * * the fastest walk worth drawing is ~2 m/s, i.e. 0.10 m of root motion per frame;
+ * * so a healthy follow moves the focus by `v * dt` = 0.10 m per frame, and the
+ *   damping's whole remaining gap is closed at a rate of `gap / FOCUS_TAU_S`, which
+ *   is at most 0.5 m per frame only when the gap is already 3 m.
+ *
+ * 0.5 m is therefore 5x the intended per-frame motion, and 2x *below* the smallest
+ * jump the page can produce by accident (re-fitting around one clip moves the focus
+ * by half a clip's length, ~1 m). A jump is anything at or above it.
+ */
+const CAMERA_MAX_STEP_M = 0.5;
+
+/** The focus is never placed on the floor: a camera at y = 0 looks along the ground. */
+const FOCUS_MIN_Y = 0.45;
+
+/**
+ * The page's `PerspectiveCamera` field of view, in degrees.
+ *
+ * Mirrored here because the "is the character on screen?" criterion has to be
+ * computable in the bare `node:vm` context the test uses -- no three.js, no canvas.
+ */
+const CAMERA_FOV_DEG = 42;
+
+/** A plain `{x, y, z}` from anything vector-shaped. **Pure.** */
+function vec3Of(value) {
+  const given = value || {};
+  const x = Number(given.x);
+  const y = Number(given.y);
+  const z = Number(given.z);
+  return {
+    x: Number.isFinite(x) ? x : 0,
+    y: Number.isFinite(y) ? y : 0,
+    z: Number.isFinite(z) ? z : 0,
+  };
+}
+
+/**
+ * The focus a *fit* around `bounds` produces: the centre of the clip, lifted off
+ * the floor. **Pure.**
+ *
+ * This is the **opening** framing, not the follow. It is deliberately the centre of
+ * the clip rather than the character's first root, because the opening shot should
+ * show where the run happens; the follow takes over from the next frame, and the
+ * gap it starts from (half a clip's travel) is exactly what makes an instant-snap
+ * follow measurably a jump in the test file's third negative control.
+ */
+function fitFocusFromBounds(bounds) {
+  if (!bounds || !bounds.min || !bounds.max) return null;
+  const min = vec3Of({ x: bounds.min[0], y: bounds.min[1], z: bounds.min[2] });
+  const max = vec3Of({ x: bounds.max[0], y: bounds.max[1], z: bounds.max[2] });
+  return {
+    x: (min.x + max.x) / 2,
+    y: Math.max(FOCUS_MIN_Y, (min.y + max.y) / 2),
+    z: (min.z + max.z) / 2,
+  };
+}
+
+/**
+ * The distance a *fit* around `bounds` produces. **Pure.**
+ *
+ * Exactly the arithmetic the page has always used, lifted out of
+ * `fitCameraToClip` so the "did the camera jump?" criterion can be evaluated on
+ * the shipped numbers rather than on a copy of them.
+ */
+function fitDistanceFromBounds(bounds, options) {
+  if (!bounds || !bounds.min || !bounds.max) return null;
+  const given = options || {};
+  const span = [0, 1, 2].map((axis) => Math.abs(bounds.max[axis] - bounds.min[axis]));
+  const reach = Math.max(span[0], span[1], span[2], 0.6);
+  const nearest = Number(given.minDistance) || 2.2;
+  const furthest = Number(given.maxDistance) || 24;
+  return Math.min(furthest, Math.max(nearest, reach * 2.6));
+}
+
+/**
+ * The focus target for one frame: the character's root at `frame`. **Pure.**
+ *
+ * The root, not the bounding-box centre: the box centre of a long run drifts metres
+ * behind the character, and it is the character the reader is watching.
+ */
+function focusTargetAt(input) {
+  const given = input || {};
+  const roots = given.roots;
+  const frameCount = Number(given.frameCount) || 0;
+  if (!roots || frameCount <= 0) return null;
+  const frame = Math.min(frameCount - 1, Math.max(0, Math.round(Number(given.frame) || 0)));
+  const x = Number(roots[frame * 3]);
+  const y = Number(roots[frame * 3 + 1]);
+  const z = Number(roots[frame * 3 + 2]);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+  return { x, y: Math.max(FOCUS_MIN_Y, y), z };
+}
+
+/**
+ * Where a **fit** places the camera. **Pure.**
+ *
+ * The whole decision, in one place the test can run:
+ *
+ * * a **reader's** Fit (`userRequested`) lands on `target` -- the character. Framing
+ *   the whole run instead would put the camera metres from the character it is
+ *   supposed to be showing, which is a jump, not a re-frame.
+ * * the **opening** framing lands on the centre of `bounds`, i.e. the clip.
+ */
+function fitPlacement(input) {
+  const given = input || {};
+  const focus = given.userRequested && given.target
+    ? vec3Of(given.target)
+    : fitFocusFromBounds(given.bounds);
+  if (!focus) return null;
+  return { focus, distance: fitDistanceFromBounds(given.bounds) };
+}
+
+/**
+ * One damped step of the follow. **Pure.**
+ *
+ * Exponential damping on the gap, so the focus starts moving the instant the
+ * character does and never overshoots. The clamp is a **safety net, not the
+ * mechanism**: on a walk the damping alone keeps every frame 5x under the
+ * threshold. It is there so that a gap the follow did not create -- a stalled tab
+ * (`dt` is clamped to 0.1 s upstream), a resumed tab, a dropped frame -- cannot
+ * become a jump either. `clamped` is reported rather than hidden, because a clamped
+ * frame means the camera *was* about to jump.
+ */
+function followFocus(current, target, dt, options) {
+  const given = options || {};
+  const tau = Number(given.tau) > 0 ? Number(given.tau) : FOCUS_TAU_S;
+  const maxStep = Number(given.maxStep) > 0 ? Number(given.maxStep) : CAMERA_MAX_STEP_M;
+  const from = vec3Of(current);
+  const to = vec3Of(target);
+  const seconds = Number(dt);
+  const step0 = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  const alpha = step0 <= 0 ? 0 : 1 - Math.exp(-step0 / tau);
+  let dx = (to.x - from.x) * alpha;
+  let dy = (to.y - from.y) * alpha;
+  let dz = (to.z - from.z) * alpha;
+  let distance = Math.hypot(dx, dy, dz);
+  let clamped = false;
+  if (distance > maxStep) {
+    const scale = maxStep / distance;
+    dx *= scale;
+    dy *= scale;
+    dz *= scale;
+    distance = Math.hypot(dx, dy, dz);
+    clamped = true;
+  }
+  return {
+    focus: { x: from.x + dx, y: from.y + dy, z: from.z + dz },
+    step: { x: dx, y: dy, z: dz },
+    distance,
+    clamped,
+  };
+}
+
+/** Negative control: the same follow, snapping straight onto the target. */
+function followFocusInstant(current, target) {
+  const from = vec3Of(current);
+  const to = vec3Of(target);
+  const step = { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z };
+  return { focus: to, step, distance: Math.hypot(step.x, step.y, step.z), clamped: false };
+}
+
+/** Where the camera sits for a view state. **Pure.** Same convention as the render loop. */
+function cameraPositionFor(view) {
+  const given = view || {};
+  const focus = vec3Of(given.focus);
+  const distance = Number(given.distance) || 0;
+  const yaw = Number(given.yaw) || 0;
+  const pitch = Number(given.pitch) || 0;
+  return {
+    x: focus.x + distance * Math.cos(pitch) * Math.sin(yaw),
+    y: focus.y + distance * Math.sin(pitch),
+    z: focus.z + distance * Math.cos(pitch) * Math.cos(yaw),
+  };
+}
+
+/**
+ * Project one world point through a view, the way three.js does. **Pure.**
+ *
+ * A symmetric perspective frustum and a `lookAt` with the world up vector, written
+ * out rather than imported: the test needs to ask "is the character inside the
+ * picture?" in a context with no three.js, and answering that with three.js in the
+ * page would make the criterion untestable where it matters.
+ *
+ * Returns normalised device coordinates (`x`, `y` in [-1, 1] inside the frame) plus
+ * the camera-space depth, so a caller can distinguish "off to the side" from
+ * "behind the camera".
+ */
+function projectPoint(point, view, options) {
+  const given = options || {};
+  const aspect = Number(given.aspect) > 0 ? Number(given.aspect) : 1;
+  const fovDeg = Number(given.fovDeg) > 0 ? Number(given.fovDeg) : CAMERA_FOV_DEG;
+  const margin = Number.isFinite(Number(given.margin)) ? Number(given.margin) : 1;
+  const eye = cameraPositionFor(view);
+  const focus = vec3Of(view && view.focus);
+  const p = vec3Of(point);
+
+  // three.js's `lookAt` puts the camera's local +Z axis *behind* it (target -> eye).
+  const back = { x: eye.x - focus.x, y: eye.y - focus.y, z: eye.z - focus.z };
+  const backLen = Math.hypot(back.x, back.y, back.z);
+  if (!(backLen > 1e-9)) {
+    return { x: 0, y: 0, depth: 0, inFront: false, onScreen: false };
+  }
+  back.x /= backLen; back.y /= backLen; back.z /= backLen;
+
+  const up = { x: 0, y: 1, z: 0 };
+  // right = up x back, degenerate only when looking straight up or down (pitch is
+  // clamped to [-0.08, 1.15] rad by the drag handler, so this is belt and braces).
+  const right = {
+    x: up.y * back.z - up.z * back.y,
+    y: up.z * back.x - up.x * back.z,
+    z: up.x * back.y - up.y * back.x,
+  };
+  const rightLen = Math.hypot(right.x, right.y, right.z);
+  if (!(rightLen > 1e-9)) {
+    return { x: 0, y: 0, depth: 0, inFront: false, onScreen: false };
+  }
+  right.x /= rightLen; right.y /= rightLen; right.z /= rightLen;
+  const camUp = {
+    x: back.y * right.z - back.z * right.y,
+    y: back.z * right.x - back.x * right.z,
+    z: back.x * right.y - back.y * right.x,
+  };
+
+  const v = { x: p.x - eye.x, y: p.y - eye.y, z: p.z - eye.z };
+  const depth = -(v.x * back.x + v.y * back.y + v.z * back.z);
+  const tanHalf = Math.tan((fovDeg * Math.PI) / 360);
+  const half = Math.max(1e-6, depth) * tanHalf;
+  const x = (v.x * right.x + v.y * right.y + v.z * right.z) / (half * aspect);
+  const y = (v.x * camUp.x + v.y * camUp.y + v.z * camUp.z) / half;
+  const inFront = depth > 1e-3;
+  return {
+    x,
+    y,
+    depth,
+    inFront,
+    onScreen: inFront && Math.abs(x) <= margin && Math.abs(y) <= margin,
+  };
+}
 // --- pure-timeline: end ------------------------------------------------------
 function requestedPrompt() {
   return resolveRequest({ typed: els.promptText.value, entry: selectedEmbedding() });
@@ -1379,6 +1956,18 @@ function announceContinuation(payload) {
   els.continuationHelp.textContent = [note.text, note.meta].filter(Boolean).join(' · ');
   if (note.state === 'continue' || note.state === 'unsupported') {
     pushSystemNote(note.text, note.meta);
+  }
+  // Keep the route for the client log: when the reader says "不太对", "the router chose
+  // `compose` at p=0.81 three seconds earlier" is context the server cannot
+  // reconstruct on its own. The route and its probability live under `router` (the
+  // same six names `/api/health` reports), not under `decision`.
+  const router = (payload && payload.router) || null;
+  if (router && router.route) {
+    const probability = (router.probabilities || {})[router.route];
+    state.lastRoute = {
+      name: router.route,
+      probability: typeof probability === 'number' ? probability : null,
+    };
   }
   return note;
 }
@@ -1988,6 +2577,184 @@ function pushFpsSample(count) {
 }
 
 // ---------------------------------------------------------------------------
+// the client log: report this page's own errors to the server
+// ---------------------------------------------------------------------------
+//
+// The thin DOM/fetch shell around the `pure-client-log` region above. Its whole job
+// is to catch, bound and *send* -- every decision about shape and size lives in the
+// pure functions, which is what makes them testable in a bare `node:vm`.
+//
+// Two rules this shell has to respect:
+//
+//   * a logger that can throw is worse than no logger. Every hook is wrapped, and
+//     the page's own flush failures are counted rather than reported through the
+//     same path (`console.error` is one of the things being captured).
+//   * nothing is swallowed: `console.error` and `console.warn` still reach the real
+//     console. This add is *in addition to*, never instead of.
+
+const clientLog = {
+  queue: [],
+  dropped: 0,
+  sent: 0,
+  refused: null,
+  offline: 0,
+  timer: null,
+  flushing: false,
+  installed: false,
+};
+
+/** The snapshot's input, read out of the live page. */
+function clientSnapshotInput() {
+  const timeline = state.timeline;
+  const target = followTargetNow();
+  const view = {
+    yaw: cameraView.yaw, pitch: cameraView.pitch,
+    distance: cameraView.distance, focus: cameraView.focus,
+  };
+  const projected = target ? projectPoint(
+    { x: target.x, y: target.y + 0.85, z: target.z },
+    view,
+    { aspect: Math.max(1e-6, camera.aspect), fovDeg: CAMERA_FOV_DEG },
+  ) : null;
+  const intent = state.nextIntent || state.committedIntent || {};
+  const route = state.lastRoute || {};
+  return {
+    playhead: state.playhead,
+    timelineFrames: timeline ? timeline.frameCount : 0,
+    segments: state.segments.length,
+    buffered: timeline ? Math.max(0, timeline.maxFrame - Math.round(state.playhead)) : 0,
+    held: Boolean(state.held),
+    playing: Boolean(state.playing),
+    fps: state.fps,
+    intentVersion: intent.version,
+    intentState: intent.text ? 'pending' : null,
+    route: route.name || null,
+    routeProbability: route.probability,
+    noise: els.noiseSelect ? els.noiseSelect.value : null,
+    duration: els.durationInput ? Number(els.durationInput.value) : null,
+    camera: cameraFollow,
+    screen: projected ? [projected.x, projected.y, projected.depth] : null,
+    root: target ? [target.x, target.y, target.z] : null,
+    href: location.pathname,
+  };
+}
+
+/** Record one event and schedule a flush. Never throws. */
+function noteClientEvent(kind, text, extra) {
+  try {
+    const entry = clientLogEntry({ kind, text, at: performance.now(), ...(extra || {}) });
+    const pushed = clientLogPush(clientLog.queue, entry);
+    clientLog.queue = pushed.queue;
+    clientLog.dropped += pushed.dropped;
+    scheduleClientLogFlush();
+  } catch {
+    clientLog.dropped += 1;
+  }
+}
+
+function scheduleClientLogFlush() {
+  if (clientLog.timer !== null) return;
+  clientLog.timer = setTimeout(() => {
+    clientLog.timer = null;
+    flushClientLog();
+  }, CLIENT_LOG_FLUSH_MS);
+}
+
+/**
+ * Send what is queued, with the current snapshot. Never throws, never re-queues.
+ *
+ * A refused batch is **not** retried: if the server is refusing this page's reports,
+ * re-sending them in a loop is a worse fault than the one being reported. The refusal
+ * is kept in `clientLog.refused` -- deliberately *not* in the snapshot, which is a
+ * whitelist -- and the server counts every refusal in `/api/health`'s
+ * `client_log.rejected` and names it in its own log (`client-log refused <error>`).
+ * A page whose reports are being refused is therefore visible from both ends.
+ *
+ * `snapshotOnly` is the heartbeat: no events, just "here is what the page is doing".
+ * Without it a report only ever exists *after* something threw, which is no help at
+ * all for "it looks wrong and nothing errored".
+ */
+async function flushClientLog(options) {
+  const given = options || {};
+  if (clientLog.flushing) return null;
+  const events = clientLog.queue;
+  if (!events.length && !given.snapshotOnly) return null;
+  clientLog.queue = [];
+  clientLog.flushing = true;
+  const body = JSON.stringify({ events, snapshot: clientSnapshot(clientSnapshotInput()) });
+  try {
+    const response = await fetch('/api/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+    });
+    if (response.ok) {
+      clientLog.sent += events.length;
+    } else {
+      const detail = await response.json().catch(() => ({}));
+      clientLog.refused = {
+        error: detail.error || `http_${response.status}`,
+        at: Math.round(performance.now()),
+        count: events.length,
+      };
+    }
+  } catch (error) {
+    // The server is down or the page is being torn down; either way there is no
+    // channel to report *that* on.
+    clientLog.offline += 1;
+  } finally {
+    clientLog.flushing = false;
+  }
+  return { events: events.length };
+}
+
+/**
+ * The heartbeat: a snapshot every `CLIENT_LOG_HEARTBEAT_MS` while a clip is on
+ * screen, so the server's log has a "before" as well as an "after" around whatever
+ * the reader is about to describe. Idle pages send nothing.
+ */
+function startClientLogHeartbeat() {
+  setInterval(() => {
+    if (state.timeline) flushClientLog({ snapshotOnly: true });
+  }, CLIENT_LOG_HEARTBEAT_MS);
+}
+
+/** Capture the three families, and pass the console calls through untouched. */
+function installClientLog() {
+  if (clientLog.installed) return;
+  clientLog.installed = true;
+  for (const kind of ['console.error', 'console.warn']) {
+    const method = kind.split('.')[1];
+    const original = console[method].bind(console);
+    console[method] = (...args) => {
+      noteClientEvent(kind, args.map((arg) => clientLogText(arg)).join(' '));
+      original(...args);
+    };
+  }
+  window.addEventListener('error', (event) => {
+    noteClientEvent('error', event.message || String(event.error || 'unknown error'), {
+      source: event.filename,
+      line: event.lineno,
+      col: event.colno,
+    });
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    noteClientEvent(
+      'unhandledrejection',
+      reason instanceof Error ? (reason.stack || reason.message) : clientLogText(reason),
+    );
+  });
+  // A page being hidden or unloaded is the last chance to send; `keepalive` on the
+  // fetch is what makes it survive the unload.
+  window.addEventListener('pagehide', () => { flushClientLog(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushClientLog();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // render loop
 // ---------------------------------------------------------------------------
 let renderedFrames = 0;
@@ -2049,8 +2816,15 @@ function frame() {
     updateStreamHud();
   }
 
-  // Camera: orbit around the focus point with a fixed convention (yaw 0 looks
-  // down -Z, +Y up), so dragging behaves the same whatever the clip does.
+  // Camera: the focus *follows* the character's root, damped, so a walk of any
+  // length stays in the picture. Only `focus` moves here -- `distance`, `yaw` and
+  // `pitch` belong to the reader (Fit, drag, wheel) and to nobody else, which is
+  // what keeps 0009 §二's "no re-framing without a user action" true while the
+  // character is tracked.
+  applyFollow(delta);
+
+  // Orbit around the focus point with a fixed convention (yaw 0 looks down -Z, +Y
+  // up), so dragging behaves the same whatever the clip does.
   desiredCamera.set(
     cameraView.focus.x + cameraView.distance * Math.cos(cameraView.pitch) * Math.sin(cameraView.yaw),
     cameraView.focus.y + cameraView.distance * Math.sin(cameraView.pitch),
@@ -2176,7 +2950,7 @@ els.loopToggle.addEventListener('change', () => {
     : '循环已关：回到连续流，播放永不回头。');
 });
 els.resetCamera.addEventListener('click', resetCameraView);
-els.fitCamera.addEventListener('click', fitCameraToClip);
+els.fitCamera.addEventListener('click', () => fitCameraToClip({ userRequested: true }));
 els.contactsToggle.addEventListener('change', () => {
   if (state.rig) state.rig.setVisible(true);
   if (state.goldenRig) state.goldenRig.setVisible(els.goldenToggle.checked);
@@ -2223,6 +2997,11 @@ window.addEventListener('error', (event) => {
 });
 
 async function boot() {
+  // First, before anything that could throw: everything after this point is
+  // reportable. A page that installs its error handler after its first request has a
+  // blind spot exactly where the interesting failures are.
+  installClientLog();
+  startClientLogHeartbeat();
   resize();
   requestAnimationFrame(frame);
   try {

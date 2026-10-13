@@ -90,7 +90,10 @@ function loadTimeline(context = vm.createContext({})) {
     + `({ RUNAHEAD_FRAMES, BUFFER_EMPTY_HINT, STREAM_HOLD, timelineOf, segmentBase, `
     + `segmentAtFrame, advancePlayhead, bufferDepth, nextSegmentIntent, shouldPrefetch, `
     + `shouldFitCamera, playbackIntentNote, bufferNote, poseBounds, trailPoints, `
-    + `trailUnderNaiveAppend, concatFloat32, concatUint8 });`,
+    + `trailUnderNaiveAppend, concatFloat32, concatUint8, `
+    + `followFocus, followFocusInstant, focusTargetAt, fitFocusFromBounds, `
+    + `fitDistanceFromBounds, fitPlacement, cameraPositionFor, projectPoint, vec3Of, `
+    + `FOCUS_TAU_S, CAMERA_MAX_STEP_M, FOCUS_MIN_Y, CAMERA_FOV_DEG });`,
     context,
     { filename: 'viewer/app.js#pure-timeline' },
   );
@@ -974,6 +977,394 @@ test('criterion 3 negative control: a per-segment refit really would move the ca
     'with the refit forced, the camera is refitted per segment (this is the red case)');
 });
 
+// ---------------------------------------------------------------------------
+// the follow camera: the character stays in the picture, and the camera never jumps
+// ---------------------------------------------------------------------------
+//
+// The symptom this section exists for: 0009 §二's "frame once, or on Fit" rule is
+// correct about *re-fitting*, and the page implemented it as "frame once, then never
+// move". A character who walks more than a few metres then walks out of the shot,
+// and the reader is looking at an empty floor with the position counter still
+// climbing. The fix must not re-introduce the jump 0009 forbids, so there are two
+// criteria and three controls:
+//
+//   6. the character stays in the picture: the root *and* a head above it project
+//      inside the frustum on every frame of a walk.
+//   7. the camera never jumps: no frame moves the focus, or the camera position, by
+//      `CAMERA_MAX_STEP_M` or more, and the damping never has to clamp.
+//   8. following writes `focus` and nothing else -- the distance and the orbit stay
+//      the reader's, so "no re-framing without a user action" still holds.
+//
+// The controls are real alternative implementations, not mocks: follow switched off,
+// a per-segment `fitCameraToClip`, and `followFocusInstant`.
+
+const WALK_STEP_M = 0.05;   // 1 m/s at the clip's 20 fps: a walk, not a teleport
+const WALK_FRAMES = 40;     // one generation horizon
+const WALK_SEGMENTS = 12;   // ~23 m of travel, enough to walk past a static camera
+const VIEW_ASPECT = 16 / 9;
+const HEAD_ABOVE_ROOT_M = 0.85;
+
+/**
+ * `fakeSegment`'s shape, walking `step` metres per frame along +Z.
+ *
+ * `fakeSegment` itself advances 1 m per frame -- 20 m/s, a teleport -- which is fine
+ * for the queue tests and useless for a camera criterion.
+ */
+function walkSegment({ frames = WALK_FRAMES, base = 0, step = WALK_STEP_M } = {}) {
+  const segment = fakeSegment({ frames });
+  for (let frame = 0; frame < frames; frame += 1) {
+    const z = base + frame * step;
+    for (let j = 0; j < JOINT_COUNT; j += 1) {
+      segment.joints[(frame * JOINT_COUNT + j) * 3 + 2] = z;
+    }
+    segment.roots[frame * 3 + 1] = 0.90;
+    segment.roots[frame * 3 + 2] = z;
+  }
+  return segment;
+}
+
+/**
+ * `count` consecutive walk segments.
+ *
+ * Segment N's frame 0 is the previous segment's last frame, carried over verbatim,
+ * so each segment after the first starts `frames - 1` steps further along -- the
+ * same off-by-one the whole playback model is built around.
+ */
+function walkQueue(count, { frames = WALK_FRAMES, step = WALK_STEP_M } = {}) {
+  const stride = (frames - 1) * step;
+  return Array.from({ length: count }, (unused, index) => (
+    walkSegment({ frames, step, base: index * stride })
+  ));
+}
+
+const distance3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+
+/**
+ * Play a queue one frame at a time and report what the camera did each frame.
+ *
+ * The camera starts where the **shipped opening fit** put it -- the centre of the
+ * first segment's bounds and that bounds' fit distance -- because that is the state
+ * the page is really in when playback begins. `refit(frame)` optionally re-places
+ * the camera before a frame is drawn, which is how the per-segment-refit control is
+ * built without touching the page.
+ */
+function cameraRun({ segments, frames = null, follow = true, instant = false, refit = null,
+  targetFrame = null }) {
+  const timeline = stream.timelineOf(segments, JOINT_COUNT);
+  const opening = stream.timelineOf(segments.slice(0, 1), JOINT_COUNT).bounds;
+  const view = {
+    yaw: 0.7,
+    pitch: 0.22,
+    distance: stream.fitDistanceFromBounds(opening),
+    focus: { ...stream.fitFocusFromBounds(opening) },
+  };
+  const total = frames === null ? timeline.frameCount : frames;
+  const trace = [];
+  for (let frame = 0; frame < total; frame += 1) {
+    if (refit) {
+      const placed = refit(frame);
+      if (placed) {
+        view.focus = placed.focus;
+        view.distance = placed.distance;
+      }
+    }
+    // Where the character *is*, and where the follow *thinks* it is. They are the
+    // same on the shipped page; the negative controls below pull them apart, and the
+    // criterion is always about the character, never about the target.
+    const actual = stream.focusTargetAt({
+      roots: timeline.roots, frame, frameCount: timeline.frameCount,
+    });
+    const target = stream.focusTargetAt({
+      roots: timeline.roots,
+      frame: targetFrame ? targetFrame(frame) : frame,
+      frameCount: timeline.frameCount,
+    });
+    const focusBefore = { ...view.focus };
+    const eyeBefore = stream.cameraPositionFor(view);
+
+    let focusStep = 0;
+    let clamped = false;
+    if (follow) {
+      const stepped = instant
+        ? stream.followFocusInstant(view.focus, target)
+        : stream.followFocus(view.focus, target, 1 / STREAM_FPS);
+      view.focus = stepped.focus;
+      focusStep = stepped.distance;
+      clamped = stepped.clamped;
+    }
+
+    const eye = stream.cameraPositionFor(view);
+    const pelvis = stream.projectPoint(actual, view, { aspect: VIEW_ASPECT });
+    const head = stream.projectPoint(
+      { x: actual.x, y: actual.y + HEAD_ABOVE_ROOT_M, z: actual.z },
+      view,
+      { aspect: VIEW_ASPECT },
+    );
+    trace.push({
+      frame,
+      focusStep,
+      focusJump: distance3(view.focus, focusBefore),
+      cameraStep: distance3(eye, eyeBefore),
+      clamped,
+      eye,
+      pelvis,
+      head,
+      onScreen: pelvis.onScreen && head.onScreen,
+      ndc: Math.max(Math.abs(pelvis.x), Math.abs(pelvis.y), Math.abs(head.x), Math.abs(head.y)),
+    });
+  }
+  return { timeline, view, trace };
+}
+
+test('the projection is the page\'s real one: a point at the focus is centred', () => {
+  // The on-screen criterion below is only meaningful if the projection is right, so
+  // check it against the things that are defined by hand: the focus projects to the
+  // centre at the framing distance, the camera sits `distance` from the focus, and a
+  // point behind the camera is not "in front".
+  const view = { yaw: 0.7, pitch: 0.22, distance: 5, focus: { x: 0, y: 0.9, z: 0 } };
+  const centre = stream.projectPoint(view.focus, view, { aspect: VIEW_ASPECT });
+  assert.ok(Math.abs(centre.x) < 1e-9 && Math.abs(centre.y) < 1e-9, 'the focus is the centre');
+  assert.ok(Math.abs(centre.depth - 5) < 1e-9, `depth is the framing distance (got ${centre.depth})`);
+  assert.equal(centre.onScreen, true);
+
+  const eye = stream.cameraPositionFor(view);
+  assert.ok(Math.abs(distance3(eye, view.focus) - 5) < 1e-9, 'the eye is `distance` from the focus');
+
+  // Behind the eye by 1 m along the view direction.
+  const behind = stream.projectPoint({ x: eye.x + eye.x * 0.2, y: eye.y, z: eye.z + eye.z * 0.2 }, view, { aspect: VIEW_ASPECT });
+  assert.equal(behind.inFront, false, 'a point behind the camera is not in front of it');
+  assert.equal(behind.onScreen, false);
+
+  // Well to the side: outside the frustum, and it must say so.
+  const side = stream.projectPoint({ x: 40, y: 0.9, z: 0 }, view, { aspect: VIEW_ASPECT });
+  assert.equal(side.onScreen, false, '40 m to the side is not on screen');
+  assert.ok(Math.abs(side.x) > 1);
+});
+
+test('criterion 6: with the follow on, the character stays in the picture for the whole run', () => {
+  const { timeline, trace } = cameraRun({ segments: walkQueue(WALK_SEGMENTS) });
+  assert.ok(timeline.frameCount > 400, `the run must be long (${timeline.frameCount} frames)`);
+
+  const missing = trace.filter((entry) => !entry.onScreen);
+  const worst = trace.reduce((best, entry) => (entry.ndc > best.ndc ? entry : best), trace[0]);
+  assert.deepEqual(
+    missing.map((entry) => entry.frame),
+    [],
+    `the character left the frame on ${missing.length} frames; worst |ndc| = `
+    + `${worst.ndc.toFixed(3)} at frame ${worst.frame}`,
+  );
+  // ... and it is not merely "on screen": it is well inside it.
+  assert.ok(worst.ndc < 0.8, `the character must stay well inside the frustum (worst ${worst.ndc.toFixed(3)})`);
+});
+
+test('criterion 6 negative control: without the follow, the same run walks out of the shot', () => {
+  // This is the page as it shipped: framed once at the first segment, then never
+  // moved. On the same walk the character is on screen at the start and off it later
+  // -- which is exactly the reader's "似乎不太对".
+  const still = cameraRun({ segments: walkQueue(WALK_SEGMENTS), follow: false });
+  const followed = cameraRun({ segments: walkQueue(WALK_SEGMENTS) });
+
+  const early = still.trace.slice(0, 40);
+  const late = still.trace.slice(-40);
+  assert.ok(early.every((entry) => entry.onScreen), 'the shot is fine at the start');
+  assert.ok(late.every((entry) => !entry.onScreen),
+    'with the camera static, the character must be out of frame by the end');
+  const firstGone = still.trace.find((entry) => !entry.onScreen);
+  assert.ok(firstGone, 'there must be a first frame where the character is gone');
+  assert.ok(Math.abs(firstGone.pelvis.depth) < 1e6);
+
+  // The shipped follow does not: it is on screen on every frame of the same run.
+  assert.ok(followed.trace.every((entry) => entry.onScreen),
+    'the followed run must never lose the character');
+  // Quantified: the static camera watches the character's |ndc| grow by an order of
+  // magnitude, which is the measurable difference between the two policies.
+  const stillWorst = Math.max(...late.map((entry) => entry.ndc));
+  const followedWorst = Math.max(...followed.trace.map((entry) => entry.ndc));
+  assert.ok(stillWorst > followedWorst * 3,
+    `static worst |ndc| ${stillWorst.toFixed(2)} vs followed ${followedWorst.toFixed(2)}`);
+});
+
+test('criterion 6 negative control: a follow that chased a frozen frame loses the character too', () => {
+  // The other plausible half-fix: run the follow, but read the root from the wrong
+  // frame -- frame 0, or the last frame of whatever was loaded first. The camera then
+  // tracks a *point in the past* perfectly, and the character walks out of frame just
+  // as it did with no follow at all. The target frame is what makes the follow real.
+  const segments = walkQueue(WALK_SEGMENTS);
+  const frozen = cameraRun({ segments, targetFrame: () => 0 });
+  assert.ok(frozen.trace.slice(0, 40).every((entry) => entry.onScreen), 'it starts fine');
+  assert.ok(frozen.trace.slice(-40).every((entry) => !entry.onScreen),
+    'and it ends with the character gone, exactly like no follow at all');
+
+  const followed = cameraRun({ segments });
+  assert.ok(followed.trace.every((entry) => entry.onScreen));
+  const followBody = functionBody(SOURCE, 'followTargetNow');
+  assert.ok(followBody.includes('Math.round(state.playhead)'),
+    'the shipped target frame is the playhead, which is what the control above breaks');
+});
+
+test('criterion 7: the follow never jumps -- no frame reaches the threshold, and it never clamps', () => {
+  const { trace } = cameraRun({ segments: walkQueue(WALK_SEGMENTS) });
+  const maxFocus = Math.max(...trace.map((entry) => entry.focusStep));
+  const maxCamera = Math.max(...trace.map((entry) => entry.cameraStep));
+  const maxJump = Math.max(...trace.map((entry) => entry.focusJump));
+  const clamped = trace.filter((entry) => entry.clamped).length;
+
+  assert.ok(maxFocus < stream.CAMERA_MAX_STEP_M,
+    `no frame may move the focus by the threshold: worst ${maxFocus.toFixed(3)} m`);
+  assert.ok(maxCamera < stream.CAMERA_MAX_STEP_M,
+    `no frame may move the camera by the threshold: worst ${maxCamera.toFixed(3)} m`);
+  assert.ok(maxJump < stream.CAMERA_MAX_STEP_M,
+    `no frame may jump the focus: worst ${maxJump.toFixed(3)} m`);
+  assert.equal(clamped, 0, 'the damping alone must never need the clamp on a walk');
+
+  // And the margin is real, not luck. The opening fit leaves a 1.1 m gap to the
+  // character's first root; at tau = 0.30 s and dt = 0.05 s a step closes
+  // 1 - e^{-1/6} = 15.4% of it, i.e. 0.17 m -- a third of the threshold.
+  assert.ok(maxFocus < 0.25,
+    `the damping must have room: worst ${maxFocus.toFixed(3)} m vs a 0.5 m threshold`);
+  // The steady-state step is the root motion itself (0.05 m), not the gap.
+  const steady = Math.max(...trace.slice(60).map((entry) => entry.focusStep));
+  assert.ok(steady < 3 * WALK_STEP_M, `steady-state step ${steady.toFixed(3)} m is one frame of walking`);
+});
+
+test('criterion 7 negative control: a per-segment refit really does jump the camera', () => {
+  // The failure 0009 §二 forbids, reconstructed: `fitCameraToClip()` at every seam,
+  // against the *cumulative* bounds. The focus is thrown to the running clip's centre
+  // (+1 m per seam here) and the distance to that clip's reach (5.1 -> 10.1 -> 15.2
+  // -> ... -> 24, clamped), so the camera position jumps metres in one frame.
+  const stride = WALK_FRAMES - 1;
+  const refit = (frame) => {
+    if (frame === 0 || frame % stride !== 0) return null;
+    const upto = walkQueue(WALK_SEGMENTS).slice(0, frame / stride + 1);
+    const bounds = stream.timelineOf(upto, JOINT_COUNT).bounds;
+    return {
+      focus: stream.fitFocusFromBounds(bounds),
+      distance: stream.fitDistanceFromBounds(bounds),
+    };
+  };
+  const { trace } = cameraRun({ segments: walkQueue(WALK_SEGMENTS), follow: true, refit });
+  const worst = trace.reduce((best, entry) => (entry.cameraStep > best.cameraStep ? entry : best), trace[0]);
+  assert.ok(worst.cameraStep >= stream.CAMERA_MAX_STEP_M,
+    `a per-segment refit must trip the threshold (worst ${worst.cameraStep.toFixed(3)} m at frame ${worst.frame})`);
+  assert.ok(worst.focusJump >= stream.CAMERA_MAX_STEP_M,
+    `... and it jumps the focus too (${worst.focusJump.toFixed(3)} m)`);
+  // The shipped policy, on the same queue, does neither.
+  const shipped = cameraRun({ segments: walkQueue(WALK_SEGMENTS) });
+  assert.ok(Math.max(...shipped.trace.map((entry) => entry.cameraStep)) < stream.CAMERA_MAX_STEP_M);
+});
+
+test('criterion 7 negative control: an instant follow snaps by the whole standing gap', () => {
+  // The other way to "follow": set `focus = root` every frame. It tracks perfectly,
+  // and it still jumps -- at the moment it takes over from the opening fit, by the
+  // whole distance between the fit's centre and the character. Damping is the
+  // difference, and this is what shows the threshold can tell them apart.
+  const segments = walkQueue(WALK_SEGMENTS);
+  const instant = cameraRun({ segments, instant: true });
+  const damped = cameraRun({ segments });
+  const instantWorst = Math.max(...instant.trace.map((entry) => entry.focusStep));
+  const dampedWorst = Math.max(...damped.trace.map((entry) => entry.focusStep));
+
+  assert.ok(instantWorst >= stream.CAMERA_MAX_STEP_M,
+    `an instant snap must trip the threshold (${instantWorst.toFixed(3)} m)`);
+  assert.ok(dampedWorst < stream.CAMERA_MAX_STEP_M,
+    `the shipped damping must not (${dampedWorst.toFixed(3)} m)`);
+  assert.ok(instantWorst > 4 * dampedWorst,
+    `the gap closed in one frame vs a sixth of it per frame: ${instantWorst.toFixed(3)} vs ${dampedWorst.toFixed(3)}`);
+  // Both stay on screen -- this control is about the jump, not the tracking.
+  assert.ok(instant.trace.every((entry) => entry.onScreen));
+
+  // And `followFocus` is what the page calls, not the control.
+  const followBody = functionBody(SOURCE, 'applyFollow');
+  assert.ok(followBody.includes('followFocus('), 'the render path must use the damped follow');
+  assert.ok(!followBody.includes('followFocusInstant('), 'the instant variant is a control, not a page path');
+});
+
+test('criterion 8: following writes the focus and nothing else', () => {
+  // "No re-framing without a user action" (0009 §二) has to survive the follow, so
+  // the follow path may not touch the distance or the orbit. The render loop is the
+  // only caller, and this is its contract.
+  const followBody = functionBody(SOURCE, 'applyFollow');
+  assert.ok(followBody.length > 0, 'applyFollow must exist');
+  assert.equal(followBody.indexOf('cameraView.distance'), -1,
+    'the follow may not set the distance');
+  assert.equal(followBody.indexOf('cameraView.yaw'), -1, 'the follow may not set the yaw');
+  assert.equal(followBody.indexOf('cameraView.pitch'), -1, 'the follow may not set the pitch');
+  assert.ok(followBody.includes('cameraView.focus.set('), 'the follow moves the focus');
+
+  // ... and it is actually *called*, every rendered frame. A `followFocus` that is
+  // never invoked is a camera that never follows.
+  const frameBody = functionBody(SOURCE, 'frame');
+  assert.ok(frameBody.includes('applyFollow('), 'the render loop must run the follow');
+  assert.ok(frameBody.includes('camera.lookAt(cameraView.focus)'),
+    'and it must still aim at the focus');
+
+  // The follow target is the frame *the playhead is on* -- not frame 0, not the last
+  // frame. A frozen target is a camera that watches the character walk away, which
+  // is the criterion-6 negative control again with extra steps.
+  const targetBody = functionBody(SOURCE, 'followTargetNow');
+  assert.ok(targetBody.includes('Math.round(state.playhead)'),
+    'the follow target must be the frame the playhead is on');
+
+  // The only writes to the camera outside the follow and the reader's own handlers
+  // are in `fitCameraToClip` (which is what the reader presses) and `resetCameraView`.
+  const distanceWrites = [...SOURCE.matchAll(/cameraView\.distance =/g)].length;
+  assert.ok(distanceWrites <= 3, `distance is written in the reader's handlers only (${distanceWrites} sites)`);
+});
+
+test('criterion 8: a reader Fit lands on the character, the opening framing on the clip', () => {
+  // `fitPlacement` is the whole decision, so it can be run rather than read.
+  const segments = walkQueue(WALK_SEGMENTS);
+  const timeline = stream.timelineOf(segments, JOINT_COUNT);
+  const bounds = timeline.bounds;
+  const lastRoot = stream.focusTargetAt({
+    roots: timeline.roots, frame: timeline.frameCount - 1, frameCount: timeline.frameCount,
+  });
+
+  const requested = stream.fitPlacement({ userRequested: true, bounds, target: lastRoot });
+  assert.equal(distance3(requested.focus, lastRoot), 0, 'a reader Fit lands on the character');
+  assert.equal(requested.distance, stream.fitDistanceFromBounds(bounds));
+
+  const opening = stream.fitPlacement({ userRequested: false, bounds, target: lastRoot });
+  const centre = stream.fitFocusFromBounds(bounds);
+  assert.equal(distance3(opening.focus, centre), 0, 'the opening framing lands on the clip');
+  assert.equal(distance3(opening.focus, lastRoot) > 10, true, 'and that is not the character, late in a run');
+
+  // No character yet (nothing planned): the reader's Fit falls back to the clip
+  // rather than crashing or leaving the camera somewhere undefined.
+  const noTarget = stream.fitPlacement({ userRequested: true, bounds, target: null });
+  assert.equal(distance3(noTarget.focus, centre), 0);
+  assert.equal(stream.fitPlacement({ userRequested: true, bounds: null, target: null }), null);
+});
+
+test('criterion 8 negative control: a Fit that framed the run instead of the character would jump', () => {
+  // The plausible mistake, made testable by `fitPlacement`: pass `userRequested:
+  // false` (the opening framing) when the reader pressed Fit. On a 23 m run the
+  // whole-run centre is metres from where the character actually is.
+  const segments = walkQueue(WALK_SEGMENTS);
+  const timeline = stream.timelineOf(segments, JOINT_COUNT);
+  const bounds = timeline.bounds;
+  const lastRoot = stream.focusTargetAt({
+    roots: timeline.roots, frame: timeline.frameCount - 1, frameCount: timeline.frameCount,
+  });
+  const swapped = stream.fitPlacement({ userRequested: false, bounds, target: lastRoot });
+  const shipped = stream.fitPlacement({ userRequested: true, bounds, target: lastRoot });
+  const gap = distance3(swapped.focus, lastRoot);
+  assert.ok(gap > 10, `the swapped Fit is metres from the character (${gap.toFixed(1)} m)`);
+  assert.ok(gap >= stream.CAMERA_MAX_STEP_M, 'so it is a jump, not a re-frame');
+  assert.equal(distance3(shipped.focus, lastRoot), 0, 'the shipped Fit has nothing to jump to');
+
+  const fitBody = functionBody(SOURCE, 'fitCameraToClip');
+  assert.ok(fitBody.includes('fitPlacement({'), 'the fit must go through the pure decision');
+  assert.ok(fitBody.includes('userRequested: Boolean(given.userRequested)'),
+    'and it must pass the reader\'s intent through');
+  const clickWiring = SOURCE.slice(SOURCE.indexOf('els.fitCamera.addEventListener'));
+  assert.ok(clickWiring.slice(0, 120).includes('userRequested: true'),
+    'the Fit button must be wired as a reader action, not as the opening frame');
+  const appendBody = functionBody(SOURCE, 'appendSegment');
+  assert.ok(appendBody.includes('fitCameraToClip();'),
+    'the opening framing is the reader-free call, so it gets the clip, not the character');
+});
+
 test('criterion 4: a run out of buffer holds the last frame and says so', () => {
   // One segment, 41 frames, and no more segments to append: playback must park on
   // the last frame. It must not wrap, and it must say the buffer ran out.
@@ -1182,4 +1573,275 @@ test('negative control: the loop is off by default in the markup and in the code
   const body = functionBody(SOURCE, 'updatePlayhead');
   assert.doesNotMatch(body, /playhead\s*-=/, 'the page must not rewind the playhead by arithmetic');
   assert.doesNotMatch(body, /%\s*.*frameCount/, 'and must not modulo it into a loop');
+});
+
+// ---------------------------------------------------------------------------
+// the client log: what the page says about itself, and what it may not say
+// ---------------------------------------------------------------------------
+//
+// The page has no terminal. `POST /api/client-log` is how a renderer exception
+// becomes visible at all -- which is why the two things that could go wrong with it
+// are both tested here:
+//
+//   * it must be **bounded and named**, or a page that is failing becomes a page that
+//     is also flooding, and the server's log fills with events nobody can grep;
+//   * it must be a **whitelist**, or the diagnostic channel becomes the leak. The page
+//     holds no key, but an error message is text the page did not write -- a failed
+//     `fetch('https://…?key=…')` rejects with the whole URL in it.
+
+const CLIENT_LOG_START = '// --- pure-client-log: start';
+const CLIENT_LOG_END = '// --- pure-client-log: end';
+const CLIENT_LOG_SENTINEL = 'ts_test_key_do_not_use_0123456789';
+
+/** The marked client-log region of the shipped page, verbatim. */
+function pureClientLog(source) {
+  return markedRegion(source, CLIENT_LOG_START, CLIENT_LOG_END);
+}
+
+function loadClientLog(context = vm.createContext({})) {
+  return vm.runInContext(
+    `${pureClientLog(SOURCE)}\n({ CLIENT_LOG_MAX_EVENTS, CLIENT_LOG_TEXT_CHARS, `
+    + `CLIENT_LOG_KINDS, CLIENT_LOG_SNAPSHOT_FIELDS, clientLogText, clientLogRedact, `
+    + `clientLogEntry, clientLogPush, clientLogPath, clientSnapshot });`,
+    context,
+    { filename: 'viewer/app.js#pure-client-log' },
+  );
+}
+
+const clientLogRegion = loadClientLog();
+
+test('the client log is bounded: the queue caps at fifty and counts what fell out', () => {
+  let queue = [];
+  let dropped = 0;
+  const cap = clientLogRegion.CLIENT_LOG_MAX_EVENTS;
+  for (let i = 0; i < cap + 7; i += 1) {
+    const pushed = clientLogRegion.clientLogPush(
+      queue, clientLogRegion.clientLogEntry({ kind: 'error', text: `event ${i}` }),
+    );
+    queue = pushed.queue;
+    dropped += pushed.dropped;
+  }
+  assert.equal(queue.length, cap, 'the queue is bounded at the documented maximum');
+  assert.equal(dropped, 7, 'and it says how many it lost');
+  // Oldest first out: the newest events are the ones near the symptom.
+  assert.equal(queue[queue.length - 1].text, `event ${cap + 6}`);
+  assert.equal(queue[0].text, 'event 7');
+
+  // The same bound holds against the *server's* limit, so a full batch is never
+  // refused for being too big.
+  assert.equal(clientLogRegion.CLIENT_LOG_MAX_EVENTS, ardy_viewer_max_events());
+  assert.ok(clientLogRegion.CLIENT_LOG_TEXT_CHARS < 600,
+    'the page truncates below the server’s limit, so it is never refused for length');
+});
+
+/** The server's own ceiling, read out of the shipped Python. */
+function ardy_viewer_max_events() {
+  const source = readFileSync(join(HERE, '..', 'scripts', 'ardy_viewer.py'), 'utf8');
+  const match = source.match(/^CLIENT_LOG_MAX_EVENTS = (\d+)$/m);
+  assert.ok(match, 'scripts/ardy_viewer.py must define CLIENT_LOG_MAX_EVENTS');
+  return Number(match[1]);
+}
+
+test('a log line cannot be forged: control characters are collapsed, not passed through', () => {
+  const forged = clientLogRegion.clientLogText('first line\n[ardy_viewer] client-log error fake');
+  assert.doesNotMatch(forged, /\n/, 'a newline would let a message write a second line');
+  assert.match(forged, /first line/);
+  assert.match(forged, /fake/);
+
+  // Truncation is marked, because an unmarked half-message reads as the whole one.
+  const long = clientLogRegion.clientLogText('x'.repeat(clientLogRegion.CLIENT_LOG_TEXT_CHARS + 25));
+  assert.match(long, /…\[\+25 chars\]$/);
+  assert.equal(long.length > clientLogRegion.CLIENT_LOG_TEXT_CHARS, true);
+  // Exactly at the cap is untouched: no marker on a message that fits.
+  const exact = clientLogRegion.clientLogText('y'.repeat(clientLogRegion.CLIENT_LOG_TEXT_CHARS));
+  assert.equal(exact.length, clientLogRegion.CLIENT_LOG_TEXT_CHARS);
+  assert.doesNotMatch(exact, /chars\]/);
+});
+
+test('an event the page cannot name is refused, not relabelled', () => {
+  // The server refuses an unknown kind by name. The page must therefore not invent
+  // one: relabelling a `console.log` as an `error` would put a name on a report that
+  // does not fit it -- worse than sending nothing.
+  const named = clientLogRegion.clientLogEntry({ kind: 'error', text: 'ok', at: 12.6, line: 3 });
+  assert.equal(named.kind, 'error');
+  assert.equal(named.at, 13, 'the timestamp is whole milliseconds');
+  assert.equal(named.line, 3);
+  assert.equal(clientLogRegion.clientLogEntry({ kind: 'console.log', text: 'nope' }), null);
+  assert.equal(clientLogRegion.clientLogEntry({ kind: undefined, text: 'nope' }), null);
+
+  // A null entry is counted as lost rather than vanishing.
+  const pushed = clientLogRegion.clientLogPush([], null);
+  assert.deepEqual(plain(pushed.queue), []);
+  assert.equal(pushed.dropped, 1);
+
+  for (const kind of clientLogRegion.CLIENT_LOG_KINDS) {
+    assert.ok(clientLogRegion.clientLogEntry({ kind, text: 'x' }), `${kind} must be sendable`);
+  }
+});
+
+test('the snapshot is a whitelist: nothing the page was not written to send can ride along', () => {
+  const poisoned = {
+    playhead: 411.6,
+    timelineFrames: 680,
+    segments: 6,
+    buffered: 12,
+    held: false,
+    playing: true,
+    fps: 19.8,
+    intentVersion: 3,
+    route: 'compose',
+    routeProbability: 0.81,
+    camera: { frames: 400, clamped: 0, maxStep: 0.17, lastStep: 0.05, userJumps: 1 },
+    screen: [0.12, -0.3, 5.1],
+    root: [0, 0.9, 20.4],
+    href: 'http://127.0.0.1:8850/viewer?prompt=secret#frag',
+    // ... the things that must never be sent:
+    secret: CLIENT_LOG_SENTINEL,
+    apiKey: CLIENT_LOG_SENTINEL,
+    TYPESAFE_API_KEY: CLIENT_LOG_SENTINEL,
+    environment: { HOME: '/Users/someone' },
+    localStorage: { token: CLIENT_LOG_SENTINEL },
+  };
+  const snapshot = clientLogRegion.clientSnapshot(poisoned);
+  const text = JSON.stringify(snapshot);
+  assert.doesNotMatch(text, new RegExp(CLIENT_LOG_SENTINEL));
+  assert.doesNotMatch(text, /Users\/someone/);
+  for (const field of ['secret', 'apiKey', 'TYPESAFE_API_KEY', 'environment', 'localStorage']) {
+    assert.equal(field in snapshot, false, `${field} must not be in the snapshot`);
+  }
+  // Named fields only, and every one of them is one the region declared.
+  for (const key of Object.keys(snapshot)) {
+    assert.ok(clientLogRegion.CLIENT_LOG_SNAPSHOT_FIELDS.includes(key), `undeclared field ${key}`);
+  }
+  assert.deepEqual(
+    Object.keys(snapshot).sort(), [...clientLogRegion.CLIENT_LOG_SNAPSHOT_FIELDS].sort(),
+    'the snapshot is exactly the declared whitelist, so a new field is a deliberate act',
+  );
+  // The values that *are* sent are shaped, not passed through: a triple is three
+  // numbers a test can assert on.
+  assert.deepEqual(plain(snapshot.root), [0, 0.9, 20.4]);
+  assert.equal(snapshot.playhead, 412);
+  assert.equal(snapshot.camera.max_step_m, 0.17);
+  assert.equal(snapshot.route, 'compose');
+});
+
+test('the snapshot carries the URL path only, because a query string can carry a secret', () => {
+  assert.equal(clientLogRegion.clientLogPath('http://127.0.0.1:8850/?key=abc#x'), '/');
+  assert.equal(clientLogRegion.clientLogPath('http://127.0.0.1:8850/viewer?a=1'), '/viewer');
+  assert.equal(clientLogRegion.clientLogPath('/plain'), '/plain');
+  assert.equal(clientLogRegion.clientLogPath(''), null);
+  assert.equal(clientLogRegion.clientLogPath(`/?token=${CLIENT_LOG_SENTINEL}`), '/');
+  // The path is the only part that survives -- so a key in the query cannot be sent
+  // even if something put one there.
+  assert.doesNotMatch(String(clientLogRegion.clientLogPath(`/?token=${CLIENT_LOG_SENTINEL}`)),
+    new RegExp(CLIENT_LOG_SENTINEL));
+});
+
+test('negative control: a naive "send everything" snapshot really does carry the key', () => {
+  // The check above only means something if it can fail. A snapshot built by
+  // spreading the page's state -- the obvious implementation -- carries every
+  // poisoned field, so the whitelist assertion is doing real work.
+  const poisoned = { playhead: 1, secret: CLIENT_LOG_SENTINEL, route: 'compose' };
+  const naive = { ...poisoned };
+  assert.match(JSON.stringify(naive), new RegExp(CLIENT_LOG_SENTINEL),
+    'the naive snapshot must leak, or the whitelist test proves nothing');
+  assert.doesNotMatch(JSON.stringify(clientLogRegion.clientSnapshot(poisoned)),
+    new RegExp(CLIENT_LOG_SENTINEL));
+});
+
+test('negative control: a key in an error message is masked before it leaves the page', () => {
+  // The realistic path: an error message is text the page did not write. A failed
+  // request rejects with its whole URL, query string and all.
+  const message = `TypeError: Failed to fetch https://api.example/v1?key=${CLIENT_LOG_SENTINEL}`;
+  assert.match(message, new RegExp(CLIENT_LOG_SENTINEL), 'the fixture must carry the key');
+  const masked = clientLogRegion.clientLogText(message);
+  assert.doesNotMatch(masked, new RegExp(CLIENT_LOG_SENTINEL));
+  assert.match(masked, /\[redacted:typesafe-key\]/);
+  assert.match(masked, /Failed to fetch/, 'and it is masked, not dropped');
+
+  // The other shapes, each masked under its own name.
+  const shapes = {
+    'openai-key': 'sk-live_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
+    'github-token': 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+    'aws-key': 'AKIAIOSFODNN7EXAMPLE',
+    'bearer-token': 'Bearer abcdefghijklmnopqrstuvwxyz',
+    'slack-token': 'xoxb-1234567890-abcdefghijkl',
+    'jev-key': 'jev_ABCDEFGHIJKLMNOP',
+  };
+  for (const [label, token] of Object.entries(shapes)) {
+    const out = clientLogRegion.clientLogText(`boom ${token} end`);
+    assert.ok(out.includes(`[redacted:${label}]`), `${label} must be masked (got ${out})`);
+    assert.doesNotMatch(out, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  // A JWT-shaped token, which is the one that is *three* dot-separated segments.
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1g';
+  assert.match(clientLogRegion.clientLogText(`auth ${jwt}`), /\[redacted:jwt\]/);
+});
+
+test('the client log region is pure: it runs with no document, no fetch, no state', () => {
+  const trap = new Proxy({}, {
+    get(_target, key) { throw new Error(`the pure client log touched ${String(key)}`); },
+  });
+  const isolated = loadClientLog(vm.createContext({
+    document: trap, window: trap, fetch: trap, state: trap, els: trap, console: trap,
+    location: trap, performance: trap, setTimeout: trap, localStorage: trap,
+  }));
+  const entry = isolated.clientLogEntry({ kind: 'error', text: 'still pure' });
+  assert.equal(entry.text, 'still pure');
+  assert.equal(isolated.clientSnapshot({ playhead: 1 }).playhead, 1);
+});
+
+test('the page actually installs the hooks, and a key cannot reach them', () => {
+  // The decision functions are useless if nothing calls them. This is the wiring
+  // half: all three event families, a flush on unload, and the heartbeat that makes
+  // the snapshot exist *before* the reader says "不太对".
+  const install = functionBody(SOURCE, 'installClientLog');
+  assert.ok(install.includes("'console.error', 'console.warn'"), 'console.error/warn are captured');
+  assert.ok(install.includes("addEventListener('error'"), 'window.onerror is captured');
+  assert.ok(install.includes("addEventListener('unhandledrejection'"), 'rejections are captured');
+  assert.ok(install.includes("addEventListener('pagehide'"), 'the last chance to send is taken');
+  assert.ok(install.includes('original(...args)'), 'and the console calls still reach the console');
+
+  const boot = functionBody(SOURCE, 'boot');
+  assert.ok(boot.includes('installClientLog();'), 'the hooks are installed at boot');
+  assert.ok(boot.indexOf('installClientLog();') < boot.indexOf('loadHealth()'),
+    'and before the first request, so a boot failure is reportable');
+  assert.ok(boot.includes('startClientLogHeartbeat();'));
+
+  const heartbeat = functionBody(SOURCE, 'startClientLogHeartbeat');
+  assert.match(heartbeat, /snapshotOnly: true/, 'the heartbeat sends a snapshot, not events');
+
+  // The page holds no key: nothing in what it renders mentions one, and the log
+  // region names the *shapes* it masks rather than any value.
+  const region = pureClientLog(SOURCE);
+  assert.doesNotMatch(region, /TYPESAFE_API_KEY|JEV_API_KEY/, 'the page must not name the key vars');
+  assert.match(region, /CLIENT_LOG_SECRET_SHAPES/, 'it masks by shape instead');
+});
+
+test('the snapshot whitelist is the same list on both sides of the wire', () => {
+  // Two hand-written whitelists drift. The failure mode of drift here is quiet and
+  // one-directional: the page builds a field the server does not know, and the server
+  // drops it -- so the very field added to diagnose a symptom is the one that never
+  // arrives. `screen` and `root` were both in that position when this test was added.
+  const source = readFileSync(join(HERE, '..', 'scripts', 'ardy_viewer.py'), 'utf8');
+  const match = source.match(/^CLIENT_LOG_SNAPSHOT_FIELDS = \(([\s\S]*?)\)$/m);
+  assert.ok(match, 'scripts/ardy_viewer.py must declare CLIENT_LOG_SNAPSHOT_FIELDS as a tuple');
+  const server = [...match[1].matchAll(/"([^"]+)"/g)].map((found) => found[1]);
+  assert.ok(server.length >= 10, `the server list looks parsed (${server.length} names)`);
+  assert.deepEqual(
+    [...clientLogRegion.CLIENT_LOG_SNAPSHOT_FIELDS].sort(),
+    [...server].sort(),
+    'the page and the server must whitelist the same snapshot fields',
+  );
+
+  // ... and the two fields this round added are actually emitted, not merely declared.
+  const snapshot = clientLogRegion.clientSnapshot({
+    playhead: 1, camera: { clamped: 2 }, screen: [0.1, 0.2, 5], root: [0, 0.9, 21],
+    href: '/viewer?x=1',
+  });
+  assert.deepEqual(plain(snapshot.screen), [0.1, 0.2, 5]);
+  assert.deepEqual(plain(snapshot.root), [0, 0.9, 21]);
+  assert.equal(snapshot.camera.clamped, 2);
+  assert.equal(snapshot.url, '/viewer', 'the path reaches the snapshot, without the query');
 });
