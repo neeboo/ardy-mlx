@@ -90,7 +90,7 @@ def test_cli_reproduces_the_multi_window_golden_clip(cli_runs):
     assert entry["heading_vs_npz"]["max_abs"] <= TIGHT
 
 
-def test_cli_exported_posed_joints_is_still_the_placeholder(cli_runs):
+def test_cli_exported_posed_joints_is_the_skeleton_fk_diagnostic(cli_runs):
     """What the *files* contain, as opposed to what A's FK can compute.
 
     The FK is real (``posed_joints_vs_npz`` below) but ``scripts/ardy_generate.py``

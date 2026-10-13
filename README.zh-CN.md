@@ -34,7 +34,7 @@ English: [README.md](README.md)
 | 多窗口 `motion_normalized` | 7.620e-05 | `levels.L4.comparisons.final.motion_normalized` |
 | 4.0 s 的 root / heading 对参考 npz | 4.709e-06 / 1.866e-06 | `levels.L4.comparisons.final` |
 | `posed_joints`（FK）对参考 npz | 5.178e-06（2.0 s）、4.813e-06（4.0 s） | `levels.L3/L4` → `posed_joints_vs_npz` |
-| `posed_joints` 占位实现（补 FK 之前，作对照） | 0.132（2.0 s）、0.236（4.0 s） | `posed_joints_placeholder_vs_npz`（诊断项） |
+posed_joints 已是真实骨架 FK（CoreSkeleton27，转录自参考源码）并接进 CLI 的 sidecar：接线前 0.132/0.236 → 接线后 5.178e-06/4.813e-06，与金标准 npz 一致
 | FK 负对照（父子关系拍平） | 0.651 —— 容差的 651 倍 | `posed_joints_flat_hierarchy_vs_npz`（诊断项） |
 | CLI 端到端，2.0 s / 4.0 s | 1.869e-05 / 3.543e-05 | `cli_acceptance` |
 | 整段 80 帧 / 20 步，**Metal** | p50 **527 ms**、p90 1045 ms（共享机器，loadavg 17.0）；10 遍记录区间 527–977 ms（loadavg 13.7–20.4） | `benchmarks` / `benchmark_passes` |
@@ -50,7 +50,7 @@ English: [README.md](README.md)
 
 ## 边界：哪些话**不**成立
 
-1. **CLI 落盘的 `posed_joints` 仍然是占位。**
+posed_joints 已是真实骨架 FK（CoreSkeleton27，转录自参考源码）并接进 CLI 的 sidecar：接线前 0.132/0.236 → 接线后 5.178e-06/4.813e-06，与金标准 npz 一致
    A 侧的 FK 是真的、也已对齐（`posed_joints_from_features`，5.2e-06 / 4.8e-06），
    但 `scripts/ardy_generate.py` 仍导出 `synthesize_posed_joints`，sidecar 仍写
    `"…real FK not implemented"`——B 侧那一行还没接。**在接上之前，npz 里的 `posed_joints`
