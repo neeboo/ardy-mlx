@@ -1,0 +1,16 @@
+ardy-mlx
+Copyright 2026 gmgn radio contributors
+
+An independent MLX (Apple Silicon) implementation of the motion model from:
+
+  ARDY — "Autoregressive Diffusion with Hybrid Representation for Interactive
+  Human Motion Generation", NVIDIA (nv-tlabs/ardy, SIGGRAPH 2026).
+  Source code: Apache License 2.0.  Checkpoints: per-model terms (see below).
+
+Policy (same as the sibling project motionbrick-mlx):
+* We take the SOURCE-CODE route only. Reference source is Apache-2.0.
+* Checkpoints carry their OWN terms per model (the upstream README lists a
+  License column per checkpoint). Until that is read and recorded in
+  docs/decisions/, no checkpoint is converted, redistributed or depended on.
+* Reference runs happen on a Linux/CUDA box we do not own; that box stays
+  read-only and is used as a golden-output oracle only.
