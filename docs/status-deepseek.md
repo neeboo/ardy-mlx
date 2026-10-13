@@ -496,3 +496,35 @@ $ git ls-files | grep -E '\.(safetensors|npz|npy)$|golden-run[^/]*/(raw|out)/'
 ```
 
 结果：**零命中**。
+
+## 12.8 可视化预览（回答"效果怎么样，能预览吗"）
+
+**新增交付：[`docs/PREVIEW.md`](PREVIEW.md) ＋ `artifacts/preview/`（5 支骨架 GIF，合计 ≈ 2.0 MB）
+＋ [`scripts/ardy_preview.py`](../scripts/ardy_preview.py)（纯 numpy 光栅化 + `subprocess` 调 `ffmpeg`）。**
+
+要点（细节与复现命令见 `PREVIEW.md`）：
+
+- 用 npz 里的 **世界坐标 `posed_joints`** 画 27 关节骨架，叠加 XZ 地面网格、地面影子、
+  以及 `foot_contacts` 的接触标记（真 = 实心绿盘 + 连到脚关节的细线，假 = 琥珀空心环）；
+  HUD 标出 prompt / 模型 / 帧数 / fps / 金标准还是我们 / 噪声来源 / 生成 git sha / 渲染器指纹。
+- **保真度证据（同源，注入参考 `x_T`）**：`posed_joints` max_abs **5.18e-06**（2.0 s）、
+  **4.81e-06**（4.0 s），参考量级 |max| **1.68**；`foot_contacts` **逐位相同**（0/40、0/80）。
+  这两个数与 `artifacts/align-report.json → cli_acceptance.posed_joints_vs_npz` **逐位相同**，
+  说明本次复现就是当时那次验收运行。330 维 `frames` 沿用已登记的 **1.87e-05 / 3.54e-05**。
+- **渲染成图的差异**：同源两支 GIF 在 **raster 层**只差 **0.0726 %** 的像素、
+  **最大通道差 2/255** → 视觉上无法区分。256 色 GIF 那一层是 0.478 %、最大 71，
+  差额全部来自调色板量化把 1–2 灰阶的边缘差放大成另一个调色板索引（两个数字要一起读）。
+- **诚实的边界**：① 骨架预览，不是角色/蒙皮渲染；② 两边都 `--no-postprocess`，
+  所以有 foot skating（脚会打滑），接触帧之间滑动是预期行为；③ 主交付的
+  `ardy-mlx-2s.gif` / `ardy-mlx-4s.gif` 用的是**我们自己的噪声**，所以是"同风格不同样本"，
+  要逐位同源得看额外的 `ardy-mlx-2s-xT.gif`；④ 8B 文本编码器未移植，本次用参考 dump 的
+  预计算 `text_feat.npy`；⑤ 参考只跑过两次，多窗口只有 4.0 s 这一支。
+- **顺手证实的两件事**：`--seed 0` 在 MLX 上可复现（连跑两次 `frames` 逐位相同）；
+  4.0 s 的自回归拼接处**不是**逐帧位移的最大步（边界/最大 = 0.950，且注入版与金标准三项统计完全一致），
+  即续接平滑、无抽搐。
+- 一个采样事实：参考 seed 0 几乎原地走（2 s 位移 0.131 m），我们自己采样的两支分别走
+  1.096 m / 3.819 m。**不是实现差异**——注入同一 `x_T` 后复现到 5e-06。
+- 纪律：未 push；未装依赖（`.venv` 未变，无 matplotlib/mujoco/smplx/torch 新增）；
+  未跑参考实现；未用合成输入；只动了 `scripts/ardy_preview.py`、`docs/PREVIEW.md`、
+  `docs/status-deepseek.md`、`artifacts/preview/**`。GIF 与相机 JSON 入库，
+  `golden-run*/{raw,out}` 与任何 `.npz/.npy` **一律不入库**（§12.7 的审计仍为零命中）。

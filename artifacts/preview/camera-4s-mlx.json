@@ -1,0 +1,27 @@
+{
+  "target": [
+    -0.09838958084583282,
+    0.8397548794746399,
+    2.0091757401823997
+  ],
+  "eye": [
+    11.478604788646853,
+    3.427157494871778,
+    5.77076923400803
+  ],
+  "focal": 1357.9896050619611,
+  "width": 520,
+  "height": 480,
+  "grid_half": 3.0,
+  "margin_top": 78.0,
+  "margin_bottom": 68.0,
+  "margin_side": 18.0,
+  "fitted_from": [
+    "out/preview/own4s/ARDY-Core-RP-20FPS-Horizon40/e9cf8141cac79f35-0.npz"
+  ],
+  "fitted_from_frames": [
+    80
+  ],
+  "azimuth_deg": 72.0,
+  "elevation_deg": 12.0
+}
