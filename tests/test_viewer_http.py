@@ -5,73 +5,162 @@ GPU stream is thread-local). These tests exercise the real
 :class:`ardy_viewer.ViewerServer` and :class:`ardy_viewer.ViewerHandler` over a
 loopback socket, on an ephemeral port, with a fake runner standing in for the
 checkpoint -- so the HTTP layer is real while nothing here loads 765 MB of weights
-or evaluates on the GPU.
+or evaluates on the GPU. The FK is stubbed in numpy as well, so no test ever enters
+MLX from the server's thread.
 """
 
 from __future__ import annotations
 
 import base64
-import importlib.util
 import json
-import sys
 import threading
 import urllib.error
 import urllib.request
-from pathlib import Path
+from urllib.parse import quote
 
 import numpy as np
 import pytest
 
+import sys
+from pathlib import Path
+
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
-from tests.test_viewer_api import CORE, FakeRunner, synthetic_frames  # noqa: E402
+for _candidate in (str(ROOT), str(ROOT / "src")):
+    if _candidate not in sys.path:
+        sys.path.insert(0, _candidate)
 
 
-def _load(name: str, relative: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / relative)
-    assert spec and spec.loader, f"cannot load {relative}"
+def _load_viewer():
+    """Load ``scripts/ardy_viewer.py`` under a stable module name.
+
+    ``tests/`` and ``scripts/`` are not packages, and pytest's import modes disagree
+    about whether ``conftest`` can be imported by name. This by-path load is what
+    every viewer test file uses, and because the module name is fixed, all four files
+    -- and the fixtures in ``tests/conftest.py`` -- get the **same** module object.
+    Anything else would make ``monkeypatch.setattr`` patch a copy, which is a green
+    test that proves nothing.
+    """
+    import importlib.util
+
+    name = "ardy_viewer"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / "ardy_viewer.py")
+    assert spec and spec.loader, "cannot load scripts/ardy_viewer.py"
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
-viewer = _load("ardy_viewer_http_under_test", "scripts/ardy_viewer.py")
+ardy_viewer = _load_viewer()
 
 from ardy_mlx.sampling import pipeline  # noqa: E402
 
-#: The HTTP tests run against the **real** Core layout (20 fps, 40-frame horizon),
-#: so the duration grid the page sees is the one it sees in production. Only the
-#: weights are faked.
-CORE = viewer.PRESETS["ARDY-Core-RP-20FPS-Horizon40"]
+#: The shipped Core layout, a 40x cheaper layout with the same arithmetic, and the
+#: prompt the one authorised reference run encoded.
+CORE = ardy_viewer.PRESETS["ARDY-Core-RP-20FPS-Horizon40"]
+TINY = CORE.__class__(nbjoints=27, fps=5, horizon=5, skeleton="CoreSkeleton27")
+PROMPT = "A person walks forward."
+PROMPT_HASH = pipeline.prompt_hash(PROMPT)
+WRONG_PROMPT = "A person runs backwards."
+
+
+def synthetic_frames(num_frames: int, seed: int = 0):
+    """A deterministic ``(num_frames, 330)`` feature block, in physical units.
+
+    The layout is the contract's: ``root_pos(3) | heading(2) | local_joints(78) |
+    global_rot_data(162) | velocities(81) | foot_contacts(4)``. The rotation block is
+    a small perturbation of the identity 6D basis so ``cont6d_to_matrix`` produces a
+    real rotation, and a contact is set on the first frame of every 5-frame group so
+    a "no contacts anywhere" bug cannot pass silently.
+
+    It lives in each file that needs it rather than behind an import: the only thing
+    the viewer test files share is the module under test, and a fixture cannot be
+    used to build a module-level constant.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    frames = np.zeros((num_frames, CORE.motion_rep_dim), dtype=np.float32)
+    t = np.arange(num_frames, dtype=np.float32)
+    frames[:, 0] = 0.05 * t
+    frames[:, 1] = 0.9 + 0.02 * np.sin(t)
+    frames[:, 3] = 1.0
+    frames[:, 5 : 5 + 26 * 3] = 0.01 * rng.standard_normal((num_frames, 26 * 3))
+    rot = np.zeros((num_frames, 27, 6), dtype=np.float32)
+    rot[..., 0] = 1.0
+    rot[..., 4] = 1.0
+    rot[..., 2] = 0.05 * np.sin(t)[:, None]
+    rot[..., 5] = 0.05 * np.cos(t)[:, None]
+    frames[:, 83 : 83 + 27 * 6] = rot.reshape(num_frames, -1)
+    frames[:, -4:] = 0.0
+    frames[::5, -4:] = 1.0
+    return frames
+
+
+class FakeRunner:
+    """The parts of :class:`ardy_mlx.sampling.pipeline.MlxRunner` the viewer uses."""
+
+    def __init__(self, layout=None, num_windows: int = 1, seed: int = 0):
+        self.model = "ARDY-Core-RP-20FPS-Horizon40"
+        self.layout = layout or CORE
+        self.parameter_count = 1234
+        self.load_seconds = {"tokenizer_s": 0.0, "denoiser_s": 0.0, "total_s": 0.0}
+        self.device = "fake"
+        self.embedding = None
+        self.num_windows = num_windows
+        self.seed = seed
+        self.calls: list[dict] = []
+
+    @property
+    def noise_window_shape(self):
+        from ardy_mlx.io import NUM_FRAMES_PER_TOKEN
+
+        return (1, self.layout.horizon // NUM_FRAMES_PER_TOKEN, self.layout.dim_token)
+
+    def generate(self, *, num_frames, num_steps=10, cfg_weight=(2.0, 2.0), history_frames=None,
+                 noise_fn=None, seed=None, windows=None):
+        import numpy as np
+
+        self.calls.append(
+            {"num_frames": num_frames, "noise_fn": noise_fn, "windows": windows, "seed": seed}
+        )
+        windows = self.num_windows if windows is None else windows
+        noise = None
+        if noise_fn is not None:
+            noise = np.asarray(noise_fn(0, self.noise_window_shape), dtype=np.float32)
+        frames = synthetic_frames(num_frames, seed=self.seed)
+        if noise is not None:
+            # A deterministic, *tame* coupling: the noise nudges the root's y and z,
+            # so two different x_T produce measurably different joints while the
+            # numbers stay small enough for the FK to stay well-conditioned.
+            level = float(np.abs(noise).mean())
+            frames[:, 1] += 0.05 * level
+            frames[:, 2] += 0.10 * level
+        return {
+            "frames": frames[None, ...],
+            "offsets": [0] + [self.layout.horizon * (i + 1) for i in range(windows)],
+            "history_frames": (
+                history_frames if history_frames is not None else self.layout.default_history_frames
+            ),
+            "windows": windows,
+        }
 
 
 # --------------------------------------------------------------------------- #
 # fixtures
 # --------------------------------------------------------------------------- #
-@pytest.fixture()
-def embeddings_dir(tmp_path):
-    directory = tmp_path / "embeddings"
-    directory.mkdir()
-    text = "A person walks forward."
-    digest = pipeline.prompt_hash(text)
-    rng = np.random.default_rng(3)
-    np.save(directory / f"{digest}.npy", rng.standard_normal((1, 1, 4096)).astype(np.float32))
-    (directory / f"{digest}.json").write_text(json.dumps({"prompt": text}), encoding="utf-8")
-    return directory
 
 
 def _posed_joints_without_mlx(frames):
     """FK in numpy, so no test ever enters MLX from a server thread.
 
-    Mirrors ``posed_joints_from_features`` for this one call shape; the real
-    function is exercised on the main thread by ``tests/test_model_skeleton.py``
-    and end-to-end by ``tests/test_viewer_service.py``. Its importance here is that
-    the HTTP layer is tested without touching a thread-local GPU stream.
+    Mirrors ``posed_joints_from_features`` for this one call shape; the real function
+    is exercised on the main thread by ``tests/test_model_skeleton.py`` and end to end
+    by ``tests/test_viewer_service.py``. Its importance here is that the HTTP layer is
+    tested without touching a thread-local GPU stream.
     """
-    skeleton = viewer.core_skeleton()
     feats = np.asarray(frames, dtype=np.float32)
     root_positions = feats[..., 0:3]
     centres = np.asarray(feats[..., 5 : 5 + 26 * 3], dtype=np.float32).reshape(
@@ -86,7 +175,7 @@ def _posed_joints_without_mlx(frames):
 @pytest.fixture()
 def live_server(embeddings_dir, monkeypatch, tmp_path):
     """A real HTTP server on 127.0.0.1:0, in a daemon thread, with a fake runner."""
-    monkeypatch.setattr(viewer, "posed_joints_from_features", lambda frames, skeleton=None: _posed_joints_without_mlx(frames))
+    monkeypatch.setattr(ardy_viewer, "posed_joints_from_features", lambda frames, skeleton=None: _posed_joints_without_mlx(frames))
     # Point the static handler at a temporary viewer directory with one file per
     # whitelisted kind, so the containment tests cannot read the real checkout.
     static = tmp_path / "viewer"
@@ -99,15 +188,15 @@ def live_server(embeddings_dir, monkeypatch, tmp_path):
     # suffix rule would serve both of these.
     (static / "notes.js").write_text("export const leak = 1;\n", encoding="utf-8")
     (static / "secret.html").write_text("<!doctype html><p>leak", encoding="utf-8")
-    monkeypatch.setattr(viewer, "VIEWER_DIR", static)
+    monkeypatch.setattr(ardy_viewer, "VIEWER_DIR", static)
 
-    app = viewer.ViewerApp(embeddings_dir=embeddings_dir)
+    app = ardy_viewer.ViewerApp(embeddings_dir=embeddings_dir)
     app.embeddings.refresh()
     app.runner = FakeRunner(layout=CORE)
     app.error = None
     app.boot_seconds = 0.005
 
-    server = viewer.ViewerServer(("127.0.0.1", 0), app)
+    server = ardy_viewer.ViewerServer(("127.0.0.1", 0), app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[:2]
@@ -368,28 +457,28 @@ def test_reference_for_an_unknown_duration_is_404(live_server):
 # --------------------------------------------------------------------------- #
 def test_the_server_is_not_threaded():
     """``ThreadingHTTPServer`` would hand MLX to a second thread; this must not."""
-    server = viewer.ViewerServer(("127.0.0.1", 0), object())
+    server = ardy_viewer.ViewerServer(("127.0.0.1", 0), object())
     try:
         mro = [klass.__name__ for klass in type(server).__mro__]
         assert "ThreadingHTTPServer" not in mro
         assert "ThreadingMixIn" not in [klass.__name__ for klass in type(server).__mro__]
         assert "HTTPServer" in mro
         # The handler is the same class for every request: no per-request worker.
-        assert server.RequestHandlerClass is viewer.ViewerHandler
+        assert server.RequestHandlerClass is ardy_viewer.ViewerHandler
     finally:
         server.server_close()
 
 
 def test_binding_off_loopback_is_refused(tmp_path, monkeypatch, capsys):
     """The viewer has no authentication; it must not be reachable off-host."""
-    code = viewer.main(["--host", "0.0.0.0", "--port", "0", "--no-preload",
+    code = ardy_viewer.main(["--host", "0.0.0.0", "--port", "0", "--no-preload",
                         "--embeddings-dir", str(tmp_path)])
     assert code == 2
     assert "refusing to bind" in capsys.readouterr().err
 
 
 def test_cpu_device_needs_an_explicit_opt_in(embeddings_dir):
-    app = viewer.ViewerApp(embeddings_dir=embeddings_dir, device="cpu")
+    app = ardy_viewer.ViewerApp(embeddings_dir=embeddings_dir, device="cpu")
     app.start()
     assert app.runner is None
     assert "--allow-cpu" in (app.error or "")

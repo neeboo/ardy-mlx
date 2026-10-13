@@ -405,3 +405,12 @@ reason** when they are absent, because neither is committed (`NOTICE`).
 `tests/test_viewer_api.py` and `tests/test_viewer_http.py` need neither: a fake
 runner returns correctly-shaped feature blocks, and the HTTP tests fake the FK in
 numpy so no test ever touches MLX from a non-MLX thread.
+
+`tests/conftest.py` owns the two fixtures used across the files (a real
+`ViewerApp` wired to a fake runner, and a one-prompt embedding cache) plus the
+synthetic feature block and the fake runner. The viewer module itself is loaded by
+path under the fixed name `ardy_viewer` — by the fixture *and* by each test file —
+so a `monkeypatch.setattr(ardy_viewer, ...)` reaches the same module object the
+server under test is using. Loading it twice would make those tests pass while
+proving nothing, and `tests/test_viewer_api.py::test_reference_payload_shape` is the
+check that catches it (it compares a digest reported by the patched function).

@@ -2,18 +2,15 @@
 
 Two different things are checked here.
 
-1. **The MLX call happens in the process's main thread.** The MLX GPU stream is
-   thread-local; a worker thread that evaluates on a stream another thread opened
-   is what aborts the process. The viewer's answer is a single-threaded
-   ``HTTPServer`` that preloads the model *before* ``serve_forever``. :func:`main`
-   is therefore driven here in-process, with the model started first and requests
-   served from another thread -- which is exactly the shipped arrangement -- and
-   the payload is checked for a real clip.
-
+1. **MLX is used from one thread.** Its GPU stream is thread-local; loading the
+   weights in one thread and evaluating in another fails with ``RuntimeError: There
+   is no Stream(gpu, 1) in current thread``. The viewer binds its socket, then loads
+   *and* serves on a single worker thread, and this file drives
+   :func:`ardy_viewer.main` to prove that arrangement produces a clip.
 2. **The viewer and the CLI load the checkpoint through the same function**
    (:func:`ardy_mlx.sampling.pipeline.build_mlx_runner`), so ``--backend mlx`` and
-   ``/api/plan`` cannot drift into two different definitions of "the standard
-   path". The check is a direct frame comparison, not a code inspection.
+   ``/api/plan`` cannot drift into two definitions of "the standard path". The check
+   is a direct frame comparison, not a code inspection.
 
 Everything that needs the converted weights or the golden dumps skips with an
 explicit reason when they are absent (they are weight-derived and never committed;
@@ -22,26 +19,61 @@ see ``NOTICE``).
 
 from __future__ import annotations
 
-import importlib.util
+import base64
 import json
 import socket
-import sys
 import threading
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import numpy as np
 import pytest
 
+import sys
+from pathlib import Path
+
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+for _candidate in (str(ROOT), str(ROOT / "src")):
+    if _candidate not in sys.path:
+        sys.path.insert(0, _candidate)
 
-from tests.test_viewer_api import CORE  # noqa: E402
 
+def _load_viewer():
+    """Load ``scripts/ardy_viewer.py`` under a stable module name.
+
+    ``tests/`` and ``scripts/`` are not packages, and pytest's import modes disagree
+    about whether ``conftest`` can be imported by name. This by-path load is what
+    every viewer test file uses, and because the module name is fixed, all four files
+    -- and the fixtures in ``tests/conftest.py`` -- get the **same** module object.
+    Anything else would make ``monkeypatch.setattr`` patch a copy, which is a green
+    test that proves nothing.
+    """
+    import importlib.util
+
+    name = "ardy_viewer"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / "ardy_viewer.py")
+    assert spec and spec.loader, "cannot load scripts/ardy_viewer.py"
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+ardy_viewer = _load_viewer()
+
+import mlx.core as mx  # noqa: E402
+
+from ardy_mlx.sampling import pipeline  # noqa: E402
+
+#: The shipped Core layout, a 40x cheaper layout with the same arithmetic, and the
+#: prompt the one authorised reference run encoded.
+CORE = ardy_viewer.PRESETS["ARDY-Core-RP-20FPS-Horizon40"]
+TINY = CORE.__class__(nbjoints=27, fps=5, horizon=5, skeleton="CoreSkeleton27")
+PROMPT = "A person walks forward."
+PROMPT_HASH = pipeline.prompt_hash(PROMPT)
 CKPT = ROOT / "checkpoints" / "ARDY-Core-RP-20FPS-Horizon40"
 TOKENIZER = CKPT / "mlx" / "tokenizer.mlx.safetensors"
 DENOISER = CKPT / "mlx" / "denoiser.mlx.safetensors"
@@ -50,11 +82,57 @@ GOLDEN_4S_NPZ = ROOT / "artifacts" / "golden-run-4s" / "out" / "golden_core_h40_
 EMBEDDINGS = ROOT / "artifacts" / "embeddings"
 
 WEIGHTS_PRESENT = TOKENIZER.is_file() and DENOISER.is_file()
-WEIGHTS_REASON = "converted MLX weights are not present (run scripts/ardy_convert.py; NOTICE forbids committing them)"
+WEIGHTS_REASON = (
+    "converted MLX weights are not present (run scripts/ardy_convert.py; NOTICE forbids "
+    "committing them)"
+)
 GOLDEN_REASON = "golden run npz is not present (weight-derived, never committed)"
 
 
-def _load(name: str, relative: str):
+def synthetic_frames(num_frames: int, seed: int = 0):
+    """A deterministic ``(num_frames, 330)`` feature block, in physical units.
+
+    The layout is the contract's: ``root_pos(3) | heading(2) | local_joints(78) |
+    global_rot_data(162) | velocities(81) | foot_contacts(4)``. The rotation block is
+    a small perturbation of the identity 6D basis so ``cont6d_to_matrix`` produces a
+    real rotation, and a contact is set on the first frame of every 5-frame group so
+    a "no contacts anywhere" bug cannot pass silently.
+
+    It lives in each file that needs it rather than behind an import: the only thing
+    the viewer test files share is the module under test, and a fixture cannot be
+    used to build a module-level constant.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    frames = np.zeros((num_frames, CORE.motion_rep_dim), dtype=np.float32)
+    t = np.arange(num_frames, dtype=np.float32)
+    frames[:, 0] = 0.05 * t
+    frames[:, 1] = 0.9 + 0.02 * np.sin(t)
+    frames[:, 3] = 1.0
+    frames[:, 5 : 5 + 26 * 3] = 0.01 * rng.standard_normal((num_frames, 26 * 3))
+    rot = np.zeros((num_frames, 27, 6), dtype=np.float32)
+    rot[..., 0] = 1.0
+    rot[..., 4] = 1.0
+    rot[..., 2] = 0.05 * np.sin(t)[:, None]
+    rot[..., 5] = 0.05 * np.cos(t)[:, None]
+    frames[:, 83 : 83 + 27 * 6] = rot.reshape(num_frames, -1)
+    frames[:, -4:] = 0.0
+    frames[::5, -4:] = 1.0
+    return frames
+
+
+def _free_port() -> int:
+    """An ephemeral loopback port, so the test never collides with a running viewer."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def load_script(name: str, relative: str):
+    """Import another ``scripts/*.py`` by path (they are not a package either)."""
+    import importlib.util
+
     spec = importlib.util.spec_from_file_location(name, ROOT / relative)
     assert spec and spec.loader, f"cannot load {relative}"
     module = importlib.util.module_from_spec(spec)
@@ -62,31 +140,55 @@ def _load(name: str, relative: str):
     return module
 
 
-viewer = _load("ardy_viewer_service_under_test", "scripts/ardy_viewer.py")
+class FakeRunner:
+    """The parts of :class:`ardy_mlx.sampling.pipeline.MlxRunner` the viewer uses."""
 
-import mlx.core as mx  # noqa: E402
+    def __init__(self, layout=None, num_windows: int = 1, seed: int = 0):
+        self.model = "ARDY-Core-RP-20FPS-Horizon40"
+        self.layout = layout or CORE
+        self.parameter_count = 1234
+        self.load_seconds = {"tokenizer_s": 0.0, "denoiser_s": 0.0, "total_s": 0.0}
+        self.device = "fake"
+        self.embedding = None
+        self.num_windows = num_windows
+        self.seed = seed
+        self.calls: list[dict] = []
 
-from ardy_mlx.sampling import pipeline  # noqa: E402
+    @property
+    def noise_window_shape(self):
+        from ardy_mlx.io import NUM_FRAMES_PER_TOKEN
 
-PROMPT = "A person walks forward."
-PROMPT_HASH = pipeline.prompt_hash(PROMPT)
+        return (1, self.layout.horizon // NUM_FRAMES_PER_TOKEN, self.layout.dim_token)
+
+    def generate(self, *, num_frames, num_steps=10, cfg_weight=(2.0, 2.0), history_frames=None,
+                 noise_fn=None, seed=None, windows=None):
+        import numpy as np
+
+        self.calls.append(
+            {"num_frames": num_frames, "noise_fn": noise_fn, "windows": windows, "seed": seed}
+        )
+        windows = self.num_windows if windows is None else windows
+        noise = None
+        if noise_fn is not None:
+            noise = np.asarray(noise_fn(0, self.noise_window_shape), dtype=np.float32)
+        frames = synthetic_frames(num_frames, seed=self.seed)
+        if noise is not None:
+            # A deterministic, *tame* coupling: the noise nudges the root's y and z,
+            # so two different x_T produce measurably different joints while the
+            # numbers stay small enough for the FK to stay well-conditioned.
+            level = float(np.abs(noise).mean())
+            frames[:, 1] += 0.05 * level
+            frames[:, 2] += 0.10 * level
+        return {
+            "frames": frames[None, ...],
+            "offsets": [0] + [self.layout.horizon * (i + 1) for i in range(windows)],
+            "history_frames": (
+                history_frames if history_frames is not None else self.layout.default_history_frames
+            ),
+            "windows": windows,
+        }
 
 
-# --------------------------------------------------------------------------- #
-# the threading contract
-# --------------------------------------------------------------------------- #
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
-@pytest.mark.skipif(not WEIGHTS_PRESENT, reason=WEIGHTS_REASON)
-@pytest.mark.skipif(not GOLDEN_2S_NPZ.is_file(), reason=GOLDEN_REASON)
-@pytest.mark.skipif(
-    not (EMBEDDINGS / f"{PROMPT_HASH}.npy").is_file(),
-    reason="the cached prompt embedding is not present (see embeddings/README.md)",
-)
 def test_the_shipped_command_serves_a_real_clip_over_http():
     """Run ``main()`` in-process, then drive it over a real socket.
 
@@ -111,7 +213,7 @@ def test_the_shipped_command_serves_a_real_clip_over_http():
     ]
     exit_codes: list[int] = []
     thread = threading.Thread(
-        target=lambda: exit_codes.append(viewer.main(argv)), daemon=True, name="main-under-test"
+        target=lambda: exit_codes.append(ardy_viewer.main(argv)), daemon=True, name="main-under-test"
     )
     thread.start()
 
@@ -191,7 +293,7 @@ def test_the_viewer_and_the_cli_generate_the_same_frames(tmp_path):
     direct_frames = np.asarray(direct["frames"], dtype=np.float32)
 
     # The same run through the shipped CLI, which must land on the same numbers.
-    cli = _load("ardy_generate_cli_for_viewer", "scripts/ardy_generate.py")
+    cli = load_script("ardy_generate_cli_for_viewer", "scripts/ardy_generate.py")
     out_a = tmp_path / "cli"
     ncalls = {"n": 0}
 
@@ -238,7 +340,7 @@ def test_the_viewer_reproduces_the_two_second_golden_clip():
     tolerance, loose enough to be about correctness rather than about float32
     ordering.
     """
-    app = viewer.ViewerApp(embeddings_dir=EMBEDDINGS, device="gpu")
+    app = ardy_viewer.ViewerApp(embeddings_dir=EMBEDDINGS, device="gpu")
     app.start()
     assert app.runner is not None, app.error
 
@@ -259,7 +361,7 @@ def test_the_viewer_reproduces_the_two_second_golden_clip():
 )
 def test_the_viewer_reproduces_the_four_second_golden_clip():
     """The multi-window path: two windows, one recorded x_T each."""
-    app = viewer.ViewerApp(embeddings_dir=EMBEDDINGS, device="gpu")
+    app = ardy_viewer.ViewerApp(embeddings_dir=EMBEDDINGS, device="gpu")
     app.start()
     assert app.runner is not None, app.error
 
@@ -279,7 +381,7 @@ def test_the_viewer_reproduces_the_four_second_golden_clip():
 # --------------------------------------------------------------------------- #
 @pytest.mark.skipif(not GOLDEN_2S_NPZ.is_file(), reason=GOLDEN_REASON)
 def test_the_reference_endpoint_returns_the_real_golden_clip():
-    app = viewer.ViewerApp(embeddings_dir=EMBEDDINGS)
+    app = ardy_viewer.ViewerApp(embeddings_dir=EMBEDDINGS)
     payload = app.reference(2.0)
     assert payload["frames"] == 40 and payload["joints"] == 27
     assert payload["fps"] == 20
