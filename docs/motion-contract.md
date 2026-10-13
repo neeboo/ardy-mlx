@@ -869,3 +869,23 @@ Gram–Schmidt 正是为修它；把 `cont6d_to_matrix` 的输出再转回 6D �
   **不是**"与金标准一致"。所以本机向量那一路**不参与**金标准对照，这一点写进了 HUD 与文档。
 - **编码器不可用不是错误状态，是具名状态**：`/api/health` 的 `encoder` 块给出
   `ready` / `unavailable`（带 `reason` 与逐候选检查）/ `disabled` 三态，探测**不加载权重**。
+
+## 14. 注记（第 8 轮 · 2026-10-13）：查看器接上语义路由，**契约未动**
+
+本轮在查看器侧新增 `src/ardy_mlx/router/`（Jev/TypeSafe 判定 → 行为映射），并把
+`router` / `decision` 两块加进 `/api/plan` 与 `/api/health` 的 **payload**。
+`docs/VIEWER.md` §9 是完整记录。
+
+**契约未动，逐条确认**：
+
+- `src/ardy_mlx/{model,sampling,io}/**` 的既有行为**一字未改**；`(T, 330)` 的维度、顺序、
+  单位、foot contact 约定、以及 `posed_joints` / `root_positions` 的编码方式全部不变。
+- 路由只影响**请求要用哪个向量**与**要不要出片**：`route=library` 时改用库里那条的
+  `prompt_hash`（因此 `embedding.prompt_hash` 与被问的句子不同，payload 里明示）；
+  `route=non_motion` 时返回 `kind: "hold"` 且**不产生任何帧**（保持当前动作）。
+  两者都不改变一帧的语义。
+- `decision.params`（`speed` / `amplitude` / `expression` / `gaze`）**只是携带，未接入采样器**：
+  本轮的片仍然只由文本向量决定；`expression` / `gaze` 标了 `expression_placeholder: true`
+  （骨架没有脸和眼睛）。把它们接进连续动作是下一层的事，不在本轮。
+- **隐私边界变了，需要记在契约旁边**：开启路由时，用户的那句话与 `context`
+  会发到托管的 TypeSafe API；`--no-router` 或没有 key 时完全本地。见 VIEWER.md §9.1 与边界 14。

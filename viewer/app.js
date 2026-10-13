@@ -58,6 +58,9 @@ const els = {
   trailToggle: document.querySelector('#trail-toggle'),
   status: document.querySelector('#status'),
   errorBox: document.querySelector('#error-box'),
+  bubble: document.querySelector('#bubble'),
+  bubbleText: document.querySelector('#bubble-text'),
+  bubbleMeta: document.querySelector('#bubble-meta'),
   hud: {
     clip: document.querySelector('#hud-clip'),
     model: document.querySelector('#hud-model'),
@@ -237,6 +240,115 @@ function showError(name, message, detail) {
 function clearError() {
   els.errorBox.hidden = true;
   els.errorBox.textContent = '';
+}
+
+// --- pure-bubble: start (no DOM, no fetch, no state) -------------------------
+//
+// What the bubble says, in two moments: the instant a trigger fires (before any round
+// trip, so the reader sees that something is happening), and when the plan comes back
+// (so the reader sees what was understood and where it came from). Pure functions of
+// plain data, loaded out of this file and run under node, for the same reason the
+// prompt guard is: the page has no browser harness, so the *decision* about what to
+// display lives where a test can execute it.
+//
+// The rule that matters: a degraded judgment is never silently drawn as a normal one.
+// `router.degraded` (or a `state` that is not `ok`/`cached`) switches the bubble to a
+// visibly different `data-state`, and the sentence itself says no semantic parse
+// happened. Nothing here ever invents a route the server did not report.
+
+/** How many characters of the reader's own sentence to quote back. */
+const BUBBLE_QUOTE_CHARS = 60;
+
+/** Route -> the short tag shown in the meta line. */
+const ROUTE_TAGS = {
+  library: 'library',
+  compose: 'compose',
+  generate: 'generate',
+  non_motion: 'non_motion',
+  vector: 'vector (no judgment)',
+};
+
+function clip(text, limit = BUBBLE_QUOTE_CHARS) {
+  const value = typeof text === 'string' ? text : '';
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+}
+
+/** Milliseconds, short. Local to this region so it stays pure (see `fmtMs` below). */
+function fmtMsShort(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return '—';
+  return ms < 1000 ? `${ms.toFixed(0)} ms` : `${(ms / 1000).toFixed(2)} s`;
+}
+
+/**
+ * The bubble shown the moment a trigger fires, before the request is even sent.
+ *
+ * `routerState` is `/api/health`'s router state, so the promise made here is the one
+ * the server can keep: with the router off or without a key, the page does not claim
+ * to be asking anyone.
+ */
+function bubblePending(resolved, routerState) {
+  const asked = routerState === 'ok' || routerState === undefined || routerState === null;
+  const text = resolved && resolved.text ? `读到了「${clip(resolved.text)}」` : '正在生成…';
+  return {
+    state: 'thinking',
+    text,
+    meta: asked
+      ? '正在问 Jev 这句话是什么意思（判定在后台跑，不挡生成）…'
+      : '语义路由没开，直接用本地向量…',
+  };
+}
+
+/** The one-line provenance: what was read, how sure, how long, by whom. */
+function bubbleMeta(router, decision) {
+  const parts = [];
+  if (router) {
+    const state = router.state || 'unknown';
+    parts.push(`state=${state}`);
+    if (router.route) {
+      const probability = (router.probabilities || {})[router.route];
+      parts.push(`route=${ROUTE_TAGS[router.route] || router.route}`
+        + (typeof probability === 'number' ? ` p=${probability.toFixed(2)}` : ''));
+    }
+    if (router.router_id) parts.push(router.router_id);
+    if (typeof router.latency_ms === 'number') {
+      parts.push(router.cache_hit ? `cached (${fmtMsShort(router.latency_ms)})` : fmtMsShort(router.latency_ms));
+    }
+  }
+  if (decision) {
+    if (typeof decision.conservative === 'boolean' && decision.conservative) {
+      parts.push('保守分支');
+    }
+    parts.push(`source=${decision.source}`);
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * The bubble shown when the plan comes back -- or a plain one for a server that does
+ * not route at all.
+ */
+function bubbleFromPlan(payload) {
+  const router = (payload && payload.router) || null;
+  const decision = (payload && payload.decision) || null;
+  if (!decision) {
+    return { state: 'plain', text: 'Generated from the prompt vector.', meta: bubbleMeta(router, null) };
+  }
+  let bubbleState = 'routed';
+  if (decision.starts_new_action === false) bubbleState = 'hold';
+  else if (router && router.degraded) bubbleState = 'degraded';
+  return {
+    state: bubbleState,
+    text: decision.message || '…',
+    meta: bubbleMeta(router, decision),
+  };
+}
+// --- pure-bubble: end --------------------------------------------------------
+
+/** Render a bubble view. The only place the bubble's DOM is written. */
+function showBubble(view) {
+  els.bubble.dataset.state = view.state;
+  els.bubbleText.textContent = view.text;
+  els.bubbleMeta.textContent = view.meta;
 }
 
 function fmtMs(ms) {
@@ -569,6 +681,10 @@ async function planIfReady(trigger) {
     setStatus(`Nothing to generate yet (${trigger}). ${NO_PROMPT_HINT}`);
     return null;
   }
+  // The bubble appears *before* the request is built and sent, so the reader sees
+  // that the sentence was taken the instant they asked -- not after a round trip
+  // that includes a semantic judgment and an encoder subprocess.
+  showBubble(bubblePending(resolved, state.health && state.health.router && state.health.router.state));
   return generateClip(resolved);
 }
 
@@ -606,6 +722,14 @@ async function generateClip(resolved = requestedPrompt()) {
       body: JSON.stringify(planBody(resolved, { seed, duration, noise })),
     });
     if (requestId !== state.requestId) return;
+    showBubble(bubbleFromPlan(payload));
+    if (payload.kind === 'hold') {
+      // No new action was started and no clip was drawn: `non_motion`, or a sentence
+      // the model did not read as a motion request. The clip on screen is left exactly
+      // as it was, and the status line says which reading held the clip.
+      setStatus(`Kept the current action — ${payload.decision.reason}.`);
+      return;
+    }
     installClip(payload, 'mine');
     const timing = payload.timing || {};
     const encoded = timing.encode_ms;
@@ -622,6 +746,7 @@ async function generateClip(resolved = requestedPrompt()) {
     if (requestId !== state.requestId) return;
     const name = error.errorName || 'request_failed';
     showError(name, error.message, error.payload && error.payload.detail);
+    showBubble({ state: 'error', text: '这次生成失败了。', meta: `error=${name}` });
     setStatus(`Failed: ${name}`, true);
     els.hud.generate.textContent = fmtMs(performance.now() - startedAt);
   } finally {

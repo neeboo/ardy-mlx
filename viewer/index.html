@@ -21,6 +21,17 @@
         <span class="hud-key">encode</span><span class="hud-value" id="hud-encode">—</span>
         <span class="hud-key">embedding</span><span class="hud-value" id="hud-embedding">—</span>
       </div>
+      <!--
+        The bubble. It appears the instant a trigger fires -- before any round trip --
+        and is replaced by what the router decided once the plan comes back. It is the
+        one place the page says *what it understood* and *where that came from*, so it
+        is never hidden on a degraded judgment: "no semantic parse this time" is a
+        thing the reader is entitled to see.
+      -->
+      <div id="bubble" class="bubble" data-state="idle" role="status" aria-live="polite">
+        <p class="bubble-text" id="bubble-text">Say what you want to happen.</p>
+        <p class="bubble-meta" id="bubble-meta"></p>
+      </div>
     </section>
 
     <aside>
@@ -29,7 +40,9 @@
       <p class="lede">Every clip on this page is sampled live on this machine by the MLX
         port, from any prompt you type. A prompt that is not cached yet is encoded here
         first. Prompts that have a <b>reference</b> vector use it, so those clips stay
-        comparable with the golden reference.</p>
+        comparable with the golden reference. With an API key in the server's
+        environment, the sentence is also read by <b>Jev</b> to decide what to do about
+        it — <code>--no-router</code> keeps everything local.</p>
 
       <h2>Prompt</h2>
       <div class="field">

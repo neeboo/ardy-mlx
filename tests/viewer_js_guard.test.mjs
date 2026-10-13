@@ -32,14 +32,26 @@ const SOURCE = readFileSync(APP_PATH, 'utf8');
 
 const START = '// --- pure-prompt-guard: start';
 const END = '// --- pure-prompt-guard: end';
+const BUBBLE_START = '// --- pure-bubble: start';
+const BUBBLE_END = '// --- pure-bubble: end';
 
-/** The marked pure region of the shipped page, verbatim. */
+/** A marker-delimited region of the shipped page, verbatim. */
+function markedRegion(source, start, end) {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end);
+  assert.ok(from >= 0, `viewer/app.js must contain the "${start}" marker`);
+  assert.ok(to > from, `viewer/app.js must contain "${end}" after the start marker`);
+  return source.slice(from, to);
+}
+
+/** The marked prompt-guard region of the shipped page, verbatim. */
 function pureRegion(source) {
-  const start = source.indexOf(START);
-  const end = source.indexOf(END);
-  assert.ok(start >= 0, `viewer/app.js must contain the "${START}" marker`);
-  assert.ok(end > start, `viewer/app.js must contain "${END}" after the start marker`);
-  return source.slice(start, end);
+  return markedRegion(source, START, END);
+}
+
+/** The marked bubble region of the shipped page, verbatim. */
+function pureBubble(source) {
+  return markedRegion(source, BUBBLE_START, BUBBLE_END);
 }
 
 /** Evaluate the region in a fresh context and hand back its functions. */
@@ -48,6 +60,15 @@ function loadGuard(context = vm.createContext({})) {
     `${pureRegion(SOURCE)}\n({ resolveRequest, shouldPlan, planBody, referenceDecision, NO_PROMPT_HINT });`,
     context,
     { filename: 'viewer/app.js#pure-prompt-guard' },
+  );
+}
+
+/** Evaluate the bubble region in a fresh context and hand back its functions. */
+function loadBubble(context = vm.createContext({})) {
+  return vm.runInContext(
+    `${pureBubble(SOURCE)}\n({ bubblePending, bubbleFromPlan, bubbleMeta, clip, fmtMsShort, ROUTE_TAGS, BUBBLE_QUOTE_CHARS });`,
+    context,
+    { filename: 'viewer/app.js#pure-bubble' },
   );
 }
 
@@ -194,6 +215,125 @@ test('the guard region is pure: it runs with no document, no fetch, no state', (
 });
 
 // ---------------------------------------------------------------------------
+// the bubble: what the viewer says it understood, and where that came from
+// ---------------------------------------------------------------------------
+
+const bubble = loadBubble();
+
+/** A `/api/plan` payload's two routing blocks, as the server sends them. */
+function planPayload({ route = 'compose', state = 'ok', degraded = false, probability = 0.83,
+  startsNewAction = true, message = '用现有动作组合：速度 0.65×、幅度 1.00×。', source = 'jev',
+  latency = 412.3, cacheHit = false } = {}) {
+  return {
+    kind: startsNewAction ? 'plan' : 'hold',
+    router: {
+      state,
+      router_id: 'jev-latest+typesafe-sdk==0.7.4',
+      route: degraded ? null : route,
+      // The chosen route's own probability last, so it wins for the default fixture.
+      probabilities: degraded ? {} : Object.assign({ compose: 0.1 }, { [route]: probability }),
+      latency_ms: latency,
+      cache_hit: cacheHit,
+      degraded,
+    },
+    decision: {
+      route: degraded ? 'vector' : route,
+      action: startsNewAction ? 'compose_knobs' : 'hold',
+      starts_new_action: startsNewAction,
+      conservative: false,
+      source,
+      reason: 'route=compose p=0.830 conf=0.840',
+      message,
+      params: {},
+    },
+  };
+}
+
+test('the bubble appears before the request and promises only what will happen', () => {
+  const resolved = guard.resolveRequest({ typed: '慢慢走过去', entry: null });
+  const asking = bubble.bubblePending(resolved, 'ok');
+  assert.equal(asking.state, 'thinking');
+  assert.match(asking.text, /慢慢走过去/, 'the reader must see their own sentence taken');
+  assert.match(asking.meta, /不挡生成/);
+
+  // A viewer that is not asking anybody must not say it is. This is the same rule as
+  // the degraded bubble below, one step earlier in the interaction.
+  for (const off of ['router_disabled', 'router_unavailable']) {
+    const quiet = bubble.bubblePending(resolved, off);
+    assert.doesNotMatch(quiet.meta, /Jev/, `router state ${off} must not claim to ask Jev`);
+    assert.match(quiet.meta, /本地向量/);
+  }
+});
+
+test('a routed plan shows what it chose, why, and the source', () => {
+  const view = bubble.bubbleFromPlan(planPayload());
+  assert.equal(view.state, 'routed');
+  assert.equal(view.text, '用现有动作组合：速度 0.65×、幅度 1.00×。', 'the server sent the sentence');
+  assert.match(view.meta, /state=ok/);
+  assert.match(view.meta, /route=compose p=0\.83/);
+  assert.match(view.meta, /jev-latest\+typesafe-sdk==0\.7\.4/);
+  assert.match(view.meta, /412 ms/);
+  assert.match(view.meta, /source=jev/);
+});
+
+test('a non-motion hold is drawn as a hold, never as a new action', () => {
+  const view = bubble.bubbleFromPlan(planPayload({
+    route: 'non_motion', startsNewAction: false, probability: 0.9,
+    message: '这句不是动作要求（Jev 读 non_motion 的概率 0.90），保持当前动作。',
+  }));
+  assert.equal(view.state, 'hold');
+  assert.match(view.text, /保持当前动作/);
+});
+
+test('negative control: a degraded judgment is never drawn as a normal one', () => {
+  // The failure this exists for: a timeout or a missing key quietly rendered with the
+  // same look as a real reading, so a page that did no semantic parsing looks exactly
+  // like one that did.
+  const view = bubble.bubbleFromPlan(planPayload({
+    state: 'router_timeout', degraded: true, source: 'vector', latency: 2500,
+    message: '这次没做语义解析（router_timeout：超过 2500 ms），先用纯向量路由继续。',
+  }));
+  assert.equal(view.state, 'degraded', 'a degraded verdict must be visually distinct');
+  assert.match(view.meta, /state=router_timeout/);
+  assert.doesNotMatch(view.meta, /route=/, 'there is no route to report, so none may be reported');
+  assert.match(view.meta, /source=vector/);
+  assert.match(view.text, /没做语义解析/);
+});
+
+test('a cached judgment says it was cached rather than showing a bare latency', () => {
+  const view = bubble.bubbleFromPlan(planPayload({ state: 'cached', cacheHit: true, latency: 0 }));
+  assert.equal(view.state, 'routed');
+  assert.match(view.meta, /cached \(0 ms\)/);
+});
+
+test('a conservative decision is labelled conservative in the meta line', () => {
+  const payload = planPayload();
+  payload.decision.conservative = true;
+  const view = bubble.bubbleFromPlan(payload);
+  assert.match(view.meta, /保守分支/);
+});
+
+test('a server that does not route gets a plain bubble, not an invented route', () => {
+  const view = bubble.bubbleFromPlan({ kind: 'plan', frames: 40 });
+  assert.equal(view.state, 'plain');
+  assert.equal(view.meta, '');
+  assert.doesNotMatch(view.text, /route/);
+});
+
+test('the bubble region is pure: it runs with no document, no fetch, no state', () => {
+  const trap = new Proxy({}, {
+    get(_target, key) { throw new Error(`the pure region touched ${String(key)}`); },
+  });
+  const isolated = loadBubble(vm.createContext({
+    document: trap, window: trap, fetch: trap, state: trap, els: trap,
+    THREE: trap, performance: trap, requestAnimationFrame: trap,
+  }));
+  assert.equal(isolated.bubbleFromPlan(planPayload()).state, 'routed');
+  assert.equal(isolated.clip('x'.repeat(200)).length, isolated.BUBBLE_QUOTE_CHARS);
+  assert.equal(isolated.fmtMsShort(2500), '2.50 s');
+});
+
+// ---------------------------------------------------------------------------
 // wiring: the guard above is only worth anything if the page actually calls it
 // ---------------------------------------------------------------------------
 
@@ -221,6 +361,22 @@ function wiring(source) {
       && reference.indexOf('referenceDecision(') < reference.indexOf('/api/reference'),
     // The three controls that invalidate the loaded reference share one function.
     oneReferenceRefreshPath: (source.match(/refreshGoldenForControls\(\)/g) || []).length >= 4,
+    // The bubble is drawn before the request leaves, so it cannot be a summary that
+    // only exists once the round trip is over.
+    bubbleBeforeRequest: (() => {
+      const body = functionBody(source, 'planIfReady');
+      const pending = body.indexOf('showBubble(bubblePending(');
+      return pending >= 0 && pending < body.indexOf('generateClip(resolved)');
+    })(),
+    // ... and redrawn from the *server's* verdict, not from the page's guess at one.
+    bubbleFromVerdict: /showBubble\(bubbleFromPlan\(payload\)\)/.test(source),
+    // A hold keeps the clip on screen: no clip is installed and the branch returns.
+    holdInstallsNothing: (() => {
+      const body = functionBody(source, 'generateClip');
+      const hold = body.indexOf("payload.kind === 'hold'");
+      const install = body.indexOf("installClip(payload, 'mine')");
+      return hold >= 0 && install > hold && /return;/.test(body.slice(hold, install));
+    })(),
   };
 }
 
@@ -239,7 +395,11 @@ test('negative control: the wiring checks fail on a guard-free copy of the page'
     .replace('planBody(resolved, { seed, duration, noise })',
       '{ prompt: resolved.prompt, seed, duration, noise }')
     .replace('await loadHealth().catch(() => {});', 'loadHealth().catch(() => {});')
-    .replace("await planIfReady('reload');", 'generateClip();');
+    .replace("await planIfReady('reload');", 'generateClip();')
+    // ... and the bubble checks, so they cannot be checks that never fail either.
+    .replace("  showBubble(bubblePending(resolved, state.health && state.health.router && state.health.router.state));\n", '')
+    .replace('showBubble(bubbleFromPlan(payload));', '')
+    .replace("payload.kind === 'hold'", 'false');
 
   const checks = wiring(bypassed);
   assert.equal(checks.guardInPlan, false);
@@ -247,5 +407,8 @@ test('negative control: the wiring checks fail on a guard-free copy of the page'
   assert.equal(checks.singleGenerateCallSite, false);
   assert.equal(checks.reloadAwaitsHealth, false);
   assert.equal(checks.allTriggersGuarded, false);
+  assert.equal(checks.bubbleBeforeRequest, false);
+  assert.equal(checks.bubbleFromVerdict, false);
+  assert.equal(checks.holdInstallsNothing, false);
   assert.ok(Object.values(wiring(SOURCE)).every(Boolean), 'the real page passes them all');
 });

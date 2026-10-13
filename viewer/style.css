@@ -40,6 +40,48 @@ main {
 }
 #viewport canvas { display: block; width: 100%; height: 100%; }
 
+/* ---------------------------------------------------------------- bubble */
+/*
+ * What the viewer understood, over the canvas. The `data-state` attribute is the
+ * whole visual language, and it is set from the server's own router state -- so a
+ * degraded judgment (no semantic parse, falling back to the vector) cannot be drawn
+ * the same way as a real one. That is the point of the colours below.
+ */
+.bubble {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  max-width: min(64ch, 68%);
+  padding: 9px 13px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: rgba(8, 11, 16, .88);
+  backdrop-filter: blur(6px);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.bubble[data-state="idle"] { display: none; }
+.bubble .bubble-text { margin: 0; color: var(--ink); }
+.bubble .bubble-meta {
+  margin: 3px 0 0;
+  color: #778599;
+  font-size: 10.5px;
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.bubble[data-state="thinking"] { border-left-color: #4d6b8a; }
+.bubble[data-state="thinking"] .bubble-text { color: var(--dim); }
+.bubble[data-state="routed"] { border-left-color: var(--accent); }
+.bubble[data-state="hold"] { border-left-color: var(--golden); }
+.bubble[data-state="hold"] .bubble-text { color: #f6d9a6; }
+.bubble[data-state="degraded"] { border-left-color: var(--warn); }
+.bubble[data-state="degraded"] .bubble-text { color: var(--warn); }
+.bubble[data-state="error"] { border-left-color: #ff7a6b; }
+.bubble[data-state="error"] .bubble-text { color: #ffb3a6; }
+.bubble[data-state="plain"] { border-left-color: #46536a; }
+
 /* ------------------------------------------------------------------ HUD */
 #hud {
   position: absolute;

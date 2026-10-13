@@ -42,6 +42,8 @@ curl -s http://127.0.0.1:8850/api/health | head -c 400
 | `--encoder-weights-dir` | `<repo>/weights` | override the encoder's weights directory |
 | `--encoder-interpreter` | `<repo>/.venv/bin/python` | override the interpreter (only the sibling `.venv` is ever tried by default) |
 | `--encoder-timeout` | `600` | give up on one encoder subprocess after this many seconds |
+| `--no-router` | off | turn semantic routing off entirely: no judgment is made and **nothing leaves this machine** (§9) |
+| `--router-deadline-ms` | `2500` | how long one plan may wait for a judgment before degrading to the plain vector route, **by name** (§9) |
 | `--no-preload` | off | serve before loading weights; the page then reports `model_unavailable` |
 
 Startup prints the URL and the load time, and the process keeps running after the
@@ -50,8 +52,7 @@ shell exits under `nohup`. `Ctrl-C` (or `SIGTERM` to the process) shuts it down.
 Requirements: `mlx`, `numpy` and the standard library — nothing else, **in this
 repository**. The page loads three.js from `viewer/vendor/`, never from a CDN. The
 converted weights must exist (`scripts/ardy_convert.py`); without them the server
-still starts and `/api/health` says exactly what is missing instead of failing
-obscurely.
+still starts and `/api/health` says exactly what is missing instead of failingobscurely.
 
 The local text encoder lives in a **different repository** (`~/dev/llm2vec-mlx`)
 with its own virtualenv, and is run as a subprocess (§3). If that checkout is absent,
@@ -144,6 +145,21 @@ Three routes plus static files. Every failure carries a stable machine-readable
     {"duration_s": 4.0, "path": "artifacts/golden-run-4s", "available": true}
   ],
   "limits": {"text_encoder": "...", "postprocess": "...", "rng": "...", "auth": "...", "threading": "..."},
+  "golden_references": [{"duration_s": 2.0, "path": "artifacts/golden-run", "available": true}],
+  "router": {                           // §9. The same six names a plan carries.
+    "enabled": true, "available": true,
+    "state": "ok",                      // "router_disabled" | "router_unavailable" | "ok"
+    "router_id": "jev-latest+typesafe-sdk==0.7.4",
+    "route": "compose",                 // the LAST verdict's route, null before any plan
+    "probabilities": {"library": 0.01, "compose": 0.99, "generate": 0.0, "non_motion": 0.0},
+    "latency_ms": 308.4, "cache_hit": false,
+    "deadline_ms": 2500, "model": "jev-latest", "sdk_version": "0.7.4",
+    "key_env": "TYPESAFE_API_KEY",       // the VARIABLE's name, never the key
+    "calls": 3, "cache_hits": 1, "timeouts": 0, "cache_size": 2,
+    "library_entries": 28, "known_intents": ["A person walks forward.", "…"],
+    "last": {"state": "ok", "degraded": false, "judgment": {"is_motion": {"type": "noul", "noul": 0.97}, "…": "…"}},
+    "privacy": "on: `utterance` and `context` in every judgment are sent to the hosted TypeSafe API at https://api.typesafe.ai (TYPESAFE_API_KEY)"
+  },
   "served_by": "scripts/ardy_viewer.py (127.0.0.1)"
 }
 ```
@@ -217,9 +233,50 @@ Response:
             "source_files": ["artifacts/golden-run/raw/denoise_step0_x_in.npy"], "note": "…"},
   "postprocess": false,
   "reference": {"repo": "nv-tlabs/ardy", "commit": "693f74d"},
+  "router": {                      // §9. What was read (or the name of why nothing was)
+    "state": "ok",                 // "ok" | "cached" | "router_timeout" | "router_unavailable"
+                                   // | "router_error" | "router_bad_response"
+                                   // | "router_disabled" | "router_no_utterance"
+    "router_id": "jev-latest+typesafe-sdk==0.7.4",
+    "route": "compose",            // "library" | "compose" | "generate" | "non_motion"
+                                   // | "vector" (no judgment) | null
+    "probabilities": {"library": 0.01, "compose": 0.99, "generate": 0.0, "non_motion": 0.0},
+    "latency_ms": 308.4,           // time THIS request spent on the router (0.0 on a cache hit)
+    "cache_hit": false,
+    "degraded": false,             // true whenever state is not "ok"/"cached"
+    "detail": null, "deadline_ms": 2500,
+    "model": "jev-latest", "sdk_version": "0.7.4",
+    "known_intents_rev": "7b1a29790c964ec1",   // the third part of the judgment cache key
+    "judgment": {"is_motion": {"type": "noul", "noul": 0.97}, "…": "…"}
+  },
+  "decision": {                    // §9. What the viewer DOES about it
+    "route": "compose", "action": "compose_knobs",   // "load_library" | "generate" | "hold" | "vector_fallback"
+    "starts_new_action": true,     // false means: no clip is drawn and the current one stays
+    "conservative": false, "source": "jev",          // "jev" | "vector"
+    "reason": "route=compose p=0.990 conf=0.990",    // machine-readable, language-neutral
+    "message": "用现有动作组合：速度 0.65×、幅度 0.66×（Jev 读出 slow and relaxed / subtle）。",
+    "params": {"speed": 0.65, "amplitude": 0.656, "tempo": {"score": 0.0, "level": "slow and relaxed",
+               "probabilities": {"0": 0.98, "1": 0.02, "2": 0.0}},
+               "intensity": {"score": 0.14, "level": "subtle", "probabilities": {"…": 0.0}},
+               "emotion": "平静", "expression": "neutral", "gaze": "forward",
+               "replaces_current": true, "expression_placeholder": true},
+    "library_entry": null          // {"prompt_hash": "…", "text": "…"} for action == "load_library"
+  },
   "served_by": "127.0.0.1 scripts/ardy_viewer.py"
 }
 ```
+
+A **hold** is a different `kind` and carries no clip at all:
+
+```json
+{"kind": "hold", "reason": "route=non_motion p=0.990",
+ "router": {"…": "…"}, "decision": {"starts_new_action": false, "action": "hold", "…": "…"},
+ "duration_s": 2.0, "seed": 0, "prompt": "A person walks forward.", "held_action": "…",
+ "timing": {"encode_ms": null, "generate_ms": null, "total_ms": 4.1, "router_ms": 281.6}}
+```
+
+`kind` is the field a consumer switches on: `"plan"` (a clip is present), `"hold"`
+(nothing was drawn — §9) or `"golden"` (`/api/reference`).
 
 `posed_joints` is world-space joint positions, Y-up, metres, from the real
 `CoreSkeleton27` FK over the generated feature frames — the same value
@@ -445,6 +502,12 @@ The right-hand panel is the whole control surface; the canvas is the clip.
   the page clears any error, says one plain sentence in the status line, and leaves the
   last clip on screen. `Reload` waits for `/api/health` — the round trip that fills the
   dropdown — before it decides. See §8.2 for the 400 this came from.
+* **Bubble** (over the canvas, bottom left) — what the viewer understood from the
+  sentence, where that came from, and what it is doing about it. It appears **the
+  instant a trigger fires**, before the request is built, and is replaced by the
+  server's decision when the plan returns. Its colour is the server's own router
+  state, so a degraded judgment (no semantic parse) is never drawn like a real one.
+  See §9.7.
 * **HUD** (over the canvas) — clip, model, frames, generate time, playback fps, which
   `x_T` was injected, the **vector source** (`reference bf16 (golden)` in amber, or
   `local MLX 4-bit` in mint), the **encode time** (or `cached`), and the embedding
@@ -603,6 +666,21 @@ Two small read-plus-additive changes were made to shared code, both recorded her
     refresh, one click per trigger, and a look at the console. The tests can be green
     while the page is broken in a way no test claims to cover — this is a boundary,
     not a gap to be quietly closed later.
+14. **Routing sends the user's sentence off this machine.** With the router enabled,
+    `utterance` and `context` (§9.1) are posted to TypeSafe's hosted API. That is a
+    real disclosure of what the user typed, it happens on the first plan of a session,
+    and no local test can observe it. `--no-router` (or simply not setting a key)
+    keeps the viewer fully local, and `/api/health.router.privacy` states which of the
+    three conditions is in force. The **model's judgments are not verified for
+    correctness here** either: §9.6 records what it answered for four sentences, and
+    one of the four did not match the expectation. A judgment is an input to code, not
+    a fact.
+15. **The router's parameters are carried, not applied.** `speed`, `amplitude`,
+    `expression` and `gaze` travel in `decision.params`, and the viewer displays them,
+    but nothing in this repository feeds them into the sampler: the clip is still
+    conditioned on the prompt vector alone, and `expression`/`gaze` are explicitly
+    marked `expression_placeholder: true` because the rig has no face and no eyes.
+    Wiring them into continuous motion is the next layer's job (§5).
 
 ---
 
@@ -697,6 +775,8 @@ acceptance measurement.
 | `tests/test_viewer_negative_controls.py` | partly | deliberate faults that must be refused **or** must visibly change the clip: a missing embedding, a partial horizon, a missing golden clip, a wrong-window `x_T`, a partial multi-window injection, the wrong prompt, the wrong seed, and `random` noise failing to reproduce the reference |
 | `tests/test_viewer_local_encoder.py` | **two of its tests need the encoder** | the quantization naming, the `(prompt_hash, encoder_id)` cache key, reference precedence, free-text encode-and-cache, the per-encoder directory layout, and the named refusals (`local_encoder_unavailable`, `local_encoder_failed`, `encoder_variant_not_cached`, a wrong-shaped vector, a non-finite vector, a vector labelled with another encoder, a mislabelled file in an encoder's directory) |
 | `tests/test_viewer_service.py` | yes | the shipped command over HTTP with real weights and a golden comparison, the CLI/viewer frame-identity check, and the 2.0 s / 4.0 s golden residues |
+| `tests/test_router_jev.py` | **no** (its one SDK-shape test skips without the extra) | §9: the state and the question set, the route→action table, the parameter mappings, the thresholds, every named degradation, the judgment cache and its key, the timeout, and that the key is in no router output |
+| `tests/test_viewer_router.py` | no | §9's viewer layer: a plan carries `router`/`decision`, `non_motion` returns a hold and draws nothing, a degraded verdict still plans and says it did not parse, `library` conditions on the entry, the judgment overlaps the encoder, and the key is in no response and in no file under `viewer/` |
 
 The tests that need the converted checkpoint or the golden dumps **skip with a
 reason** when they are absent, because neither is committed (`NOTICE`).
@@ -832,3 +912,219 @@ What the page does now (the same rules are stated in §4):
 **Neither of those two verifications is a browser** (§6 boundary 13). They prove the
 decision logic and the wiring. A click, a hard refresh and a look at the console are
 still what prove the bundled page behaves.
+
+---
+
+## 9. Semantic routing: Jev supplies judgments, code decides
+
+A user says one sentence. The viewer decides what to do. **The model never decides
+anything by itself** — it answers a closed set of typed questions and
+`src/ardy_mlx/router/jev.py` turns those answers into one of four actions through a
+pure, testable mapping. There is no path from model text to engine behaviour.
+
+### 9.1 What leaves the device, and how to stop it
+
+When the router runs, **the user's sentence and the context around it are sent to
+TypeSafe's hosted API** (`https://api.typesafe.ai` by default). That is what
+`state` is:
+
+```json
+{"utterance": "慢慢走过去",
+ "context": {"current_action": "A person walks forward.",
+             "known_intents": ["A person walks forward.", "…"],
+             "library_entries": [{"prompt_hash": "e9cf8141cac79f35", "text": "A person walks forward."}, "…"]}}
+```
+
+* The key is read **only** from the server's environment: `TYPESAFE_API_KEY`, or
+  `JEV_API_KEY` as a fallback **mapped onto the same slot** (`resolve_api_key()` is
+  the single place a key can enter the module). Blank values are not keys.
+* The key is never in a request payload, never logged, never in any response, and
+  never in a file under `viewer/`. `/api/health` reports the *variable's name*
+  (`key_env`), which is what an operator needs and all they need.
+* `--no-router` turns the whole thing off: no judgment, no client, nothing sent.
+  `/api/health` then says `router_disabled` and the page says so in its bubble.
+* With no key set, the viewer runs exactly as it did before routing existed and
+  reports `router_unavailable` — not a silent no-op.
+
+### 9.2 The question set
+
+Eight questions, asked in **one** request, all against the same state. One question,
+one judgment; every closed set keeps a way out.
+
+| id | primitive | asks | exit |
+|---|---|---|---|
+| `is_motion` | Noul | does this **ask for or name** a physical action | — (the false case is "about how someone feels") |
+| `known` | Noul | is this something this engine can already do | — |
+| `route` | Choice | which of four behaviours | `non_motion` is an option, not an absence |
+| `tempo` | Score | how fast | 3 levels, `slow and relaxed` / `normal pace` / `hurried` |
+| `intensity` | Score | how large and forceful | 3 levels, `subtle` / `moderate` / `vigorous` |
+| `emotion` | Choice | the speaker's mood | 平静 / 高兴 / 烦躁 / 低落 |
+| `interrupt` | Noul | replace what is happening now, or wait | — |
+| `library_pick` | Choice | **which** library entry | `none` |
+
+`library_pick` is asked **speculatively**, in the same request. Without it
+`route = "library"` would name a behaviour ("load the library entry") with no way to
+say which entry; asking it in the same call costs tokens and no wall clock, because
+all questions run in parallel. Its choices are labelled `L1…Ln` because a prompt hash
+is not a label a model can reason about — the hash travels in the criteria
+description and the code maps the label back.
+
+### 9.3 The mapping table, and the thresholds
+
+`route → action` is total over the four routes and lives in `ROUTE_ACTIONS`:
+
+| `route` | `action` | what happens | `starts_new_action` |
+|---|---|---|---|
+| `library` | `load_library` | the clip is conditioned on the picked entry's **own cached vector**, not on the sentence that pointed at it | yes |
+| `compose` | `compose_knobs` | the sentence's own vector, plus `speed`/`amplitude` from the Scores | yes |
+| `generate` | `generate` | the sentence's own vector, neutral knobs | yes |
+| `non_motion` | `hold` | **no clip is drawn**; the one on screen stays; the bubble answers | **no** |
+| *(no judgment)* | `vector_fallback` | the sentence's own vector, neutral knobs, and the bubble says no semantic parse happened | yes |
+
+Parameters are computed, not guessed:
+
+```
+speed      = 1 + (tempo - 1) * 0.35          → 0.65× … 1.35×   (neutral at "normal pace")
+amplitude  = 0.6 + intensity/2 * 0.8         → 0.60× … 1.40×   (neutral at "moderate")
+expression, gaze = EMOTION_PLACEHOLDERS[emotion]             ← **placeholders**: the rig has no face
+                                                               and no eyes, and the payload says so
+replaces_current = interrupt >= 0.5
+```
+
+Thresholds are three different numbers because the three costs are different
+(`Thresholds` in the module):
+
+| threshold | default | what crossing it does |
+|---|---|---|
+| `route_confidence` | 0.5 | the reading is a guess: the **conservative branch** runs |
+| `route_top_probability` | 0.5 | the probability mass is split: same branch |
+| `is_motion` | 0.5 | **no new action is started at all** — moving unasked is the worst available outcome |
+| `known` | 0.5 | does not change the action; makes the bubble admit the engine is improvising |
+
+The **conservative branch** keeps the nearest route but clamps the parameters to the
+gentlest setting (`speed ≤ 1.0`, `amplitude ≤ 1.0`), sets `conservative: true`, and
+prefixes the bubble with `我拿不准，先用最接近的：`. A low-confidence reading is never
+presented as a confident one.
+
+### 9.4 Asynchronous, with a deadline and a name for missing it
+
+`JevRouter.submit()` starts the call on its own thread and returns immediately. The
+request then resolves the embedding — a ~1 s encoder subprocess on a cache miss — and
+**only then** collects the judgment, so the two overlap:
+
+```
+submit(judgment) ────────────────┐          Jev is thinking (warm p50 ≈ 380 ms)
+_embedding_for_request(prompt) ──┤          the encoder is working (~1 s)
+handle.resolve(deadline) ────────┘
+```
+
+If the deadline passes, the verdict is `router_timeout`, the plan proceeds down the
+plain vector route, and the page says `这次没做语义解析（router_timeout：超过 2500 ms）`
+— **a degraded answer is named, never passed off as a judgment.** The worker keeps
+running and still caches its answer, so the *next* identical sentence is a cache hit
+rather than a second charge.
+
+Every degraded state is a value of `router.state`, and they are the API's own error
+vocabulary:
+
+| `router.state` | when |
+|---|---|
+| `ok` | a judgment was made |
+| `cached` | a judgment was made earlier and reused |
+| `router_timeout` | the deadline passed; the call may still land in the cache |
+| `router_unavailable` | no key in the server's environment, or the SDK/network is unreachable |
+| `router_error` | the SDK raised something nameable (rate limit, internal error, …) |
+| `router_bad_response` | an answer arrived but could not be read as the questions asked |
+| `router_disabled` | `--no-router` |
+| `router_no_utterance` | the prompt is a hash with no cached text to judge |
+
+Classification is by the SDK's **exception name**, not by words in the message: a
+`TypeSafeBadRequestError` whose text happens to contain "timeout" is `router_error`.
+
+### 9.5 The judgment cache
+
+Key: `(prompt_hash, router_id, known_intents_rev)`, where
+
+* `prompt_hash` — the sentence, by the repository's existing convention;
+* `router_id` — `"<model>+typesafe-sdk==<version>"`, because a judgment is only
+  reusable against both;
+* `known_intents_rev` — a hash of `(known_intents, library_entries)`.
+
+The third part is not decoration: `route` and `library_pick` were both chosen
+*against the library*, so a library that has changed makes the cached answer invalid
+by construction rather than by remembering to clear anything. The observed
+consequence is in §9.6: the first plan for a new sentence is a miss (the encoder adds
+it to the library), the second shares a key with the third, and the third is a hit.
+
+A cache hit reports `state: "cached"`, `cache_hit: true` and `latency_ms: 0.0` — the
+time *this* request spent at the model. The original call's own cost stays in
+`judgment.model_latency_ms`, where it is a fact about that call.
+
+### 9.6 Measured, with a real key
+
+`jev-latest` via `typesafe-sdk==0.7.4`, deadline 8000 ms, on the repository's own
+27-entry embedding cache (copied to a throwaway directory — no measurement writes
+into `artifacts/`). Four sentences, each twice, the library restored before every
+call:
+
+| utterance | expected | run 1 | run 2 | `tempo` / `intensity` | `emotion` |
+|---|---|---|---|---|---|
+| `往前走` | `library` | **library** 0.96 | **library** 0.96 | 1.00 normal / 0.87 moderate | 平静 0.99 |
+| `慢慢走过去` | `compose` | **compose** 0.99 | **compose** 0.99 | 0.00 slow / 0.13 subtle | 平静 1.00 |
+| `跳过去挥挥手` | `generate` | compose 0.71 | compose 0.70 | 1.14 normal / 0.95 moderate | 高兴 0.96 |
+| `今天好累` | `non_motion` | **non_motion** 0.99 | **non_motion** 0.99 | 0.07 slow / 0.08 subtle | 低落 0.99 |
+| `A person walks forward.` | `library` | **library** | **library** | 1.00 normal / 0.89 moderate | 平静 1.00 |
+
+The last row is the dropdown's own vocabulary — a third-person *description* rather
+than an imperative — and it is in the table because the first version of the
+`is_motion` question got it **wrong**: it asked whether the speaker was *requesting*
+motion, so every cached library prompt read as a non-request and the viewer answered
+`hold` instead of drawing. That was found by driving the running server
+(`POST /api/plan` with the cached hash `e9cf8141cac79f35`), not by any test; the
+question now asks whether the sentence **asks for or names** an action, and the false
+case is about the speaker's own state. Both runs agree on all five sentences. Three of the four matched the expectation.
+`跳过去挥挥手` was read as **`compose`**, consistently, and that reading is
+defensible rather than wrong: the route definitions reserve `generate` for an action
+the library does not contain *and* that cannot be composed, and this library already
+contains **"A person jumps over a puddle."** and **"A person waves with both hands."**
+— so "jump over and wave" is exactly a composition of existing motions. A user who
+wants `generate` for it needs a library that lacks those two entries, or a route
+description that weights novelty more heavily. It is recorded here rather than
+tuned away.
+
+Actions and bubbles from the same run:
+
+```
+往前走        action=load_library  embedding='A person walks forward.'
+              照库里那条来：A person walks forward.（Jev 读出这句最接近库里已有的一条）。
+慢慢走过去     action=compose_knobs speed=0.65 amplitude=0.656
+              用现有动作组合：速度 0.65×、幅度 0.66×（Jev 读出 slow and relaxed / subtle）。
+跳过去挥挥手    action=compose_knobs speed=1.07 amplitude=0.99 expression=smile
+              用现有动作组合：速度 1.07×、幅度 0.99×（Jev 读出 normal pace / moderate）。
+今天好累      action=hold starts_new_action=False kind=hold
+              这句不是动作要求（Jev 读 non_motion 的概率 0.99），保持当前动作。
+A person walks forward.  action=load_library  embedding='A person walks forward.'
+              照库里那条来：A person walks forward.（Jev 读出这句最接近库里已有的一条）。
+```
+
+Latency, ten warm calls in one process: **min 284.7 ms, p50 440.6 ms, max 1646.7 ms**
+(an earlier eight-call run on a quieter host measured min 281.6 / p50 379.3 / max 560.0 ms;
+the spread between the two runs is this shared host's load, not the router).
+The judgment cache: call 1 `ok` (miss), call 2 `ok` (`known_intents_rev` changed —
+the encoder had added the sentence to the library), call 3 `cached`, `latency_ms 0.0`.
+
+### 9.7 The bubble
+
+The bubble is the page's sentence about its own understanding. It appears **the instant
+a trigger fires** — before the request is built — and is replaced by the server's
+decision when the plan returns. Its `data-state` is set from the server's own router
+state, so a degraded judgment is drawn differently from a real one
+(`degraded` → amber, `hold` → gold, `routed` → mint, `thinking` → blue). The meta line
+carries `state=… · route=… p=… · <router_id> · <latency> · source=…`, which is where
+"what it chose, why, and where that came from" is legible without opening a console.
+
+Its copy is **Chinese**, unlike the rest of the page: the sentences it explains are
+usually Chinese, and the bubble is product copy for the person speaking rather than a
+developer diagnostic. It is one table (`MESSAGES`) plus one prefix
+(`CONSERVATIVE_PREFIX`) in `src/ardy_mlx/router/jev.py` — changing the language is
+changing those, and nothing else.

@@ -737,3 +737,174 @@ HTTP 200  frames 160 | windows 4 | duration_s 8.0 | generate_ms 752.7 | source l
   prompt 文本，所以用**本地**向量去比对 2.0 s 金标准时仍会被具名拒绝 —— 这是真拒绝，不消。
 - 选中下拉项**不会**自动重新生成（只是作废并重载参考）。若期望"选完即生成"，那是行为变更，
   需另行确认。
+
+---
+
+## 16. 第 8 轮（2026-10-13）· System 1 落地：代码掌流程，Jev 只提供判断
+
+**先回答上一轮的状态**：第 7 轮（空 prompt 守卫 ＋ 404 噪音）的前端修复**已经落地**，
+并在本轮开始后由父 agent 提交为 `0238624 viewer: one guard for every trigger, and no
+/api/reference without a golden run`（17:31:58，含 `docs/VIEWER.md`、`docs/status-deepseek.md`、
+`tests/viewer_js_guard.test.mjs`、`viewer/app.js`、`tests/test_viewer_http.py`）。
+我**接着它继续**，一个字未丢；本轮全部改动都在它之上。
+
+本轮新增/改动：`src/ardy_mlx/router/**`（新）、`scripts/ardy_viewer.py`（加路由接线，既有行为未动）、
+`viewer/{app.js,index.html,style.css}`（气泡）、`tests/test_router_jev.py`（新）、
+`tests/test_viewer_router.py`（新）、`tests/test_viewer_http.py`（加 5 条）、
+`tests/viewer_js_guard.test.mjs`（12 → 20 条）、`pyproject.toml`（加 `router` extra）、
+`docs/VIEWER.md`（§9 等）、`docs/motion-contract.md`（§14 只加注记）、本文件。
+**未碰**：`src/ardy_mlx/{model,sampling,io}/**` 的既有行为、`scripts/ardy_{generate,align}.py`、
+`tests/test_model_*.py`、`tests/test_io_*.py`、`NOTICE`、`LICENSE`、根 `.gitignore`、
+`~/dev/llm2vec-mlx`。
+
+### 16.1 依赖：装了什么，为什么
+
+`typesafe-sdk==0.7.4` 装进**本仓库 `.venv`**（纯 Python）。它带入 `httpx2`、`pydantic`(+core)、
+`tenacity`、`truststore`、`anyio`、`h11`、`idna`、`typing-extensions`、`annotated-types`、
+`typing-inspection`。`pyproject.toml` 里它是**可选 extra** `router`，不是硬依赖：
+
+```
+./.venv/bin/python -m pip install -e '.[router]'
+```
+
+不加这个 extra，查看器照样起，`/api/health.router.state` 具名报 `router_unavailable`。
+所有路由测试都用**假 client**，因此核心测试既不需要这个包，也不需要网络。
+
+**接口细节以已装 SDK 的类型定义为准**（`typesafe_sdk/_core/question_types.py`、
+`response_types.py`、`_schemas/models.py`、`constants.py`）。文档站点在我这里是**通的**
+（`https://docs.typesafe.ai/llms.txt` 返回 200），所以我也读了 live docs 的
+`sdk/python/*`、`primitives/*`、`confidence`、`patterns/confidence-routing`，没有臆造字段。
+
+### 16.2 结构
+
+- **`src/ardy_mlx/router/jev.py`**：状态构造、问句集、答案归一化、映射与阈值（纯函数）、
+  判定缓存、线程与 deadline、七种具名降级、按键解析。**key 只有 `resolve_api_key()` 一个入口**。
+- **问句集**（一次请求，8 条，各问一件事，闭集都留出口）：
+  `is_motion`(Noul) / `known`(Noul) /
+  `route`(Choice: `library`/`compose`/`generate`/`non_motion`) /
+  `tempo`(Score: `slow and relaxed`/`normal pace`/`hurried`) /
+  `intensity`(Score: `subtle`/`moderate`/`vigorous`) /
+  `emotion`(Choice: 平静/高兴/烦躁/低落) / `interrupt`(Noul) /
+  `library_pick`(Choice: `L1…Ln` ＋ `none`) ——
+  最后一条是**投机问句**，与其余同批发出：没有它 `route=library` 只说了"走库"却没说**哪一条**。
+- **`state` 用命名字段**：`utterance`、`context.current_action`、`context.known_intents`、
+  `context.library_entries`（**为空数组也如实传**）。
+- **映射表**（`ROUTE_ACTIONS`，全函数）：
+  `library→load_library`（**换成库里那条的 prompt_hash 做条件**）、
+  `compose→compose_knobs`、`generate→generate`、
+  `non_motion→hold`（**不出片、保持当前动作**）。
+  `speed = 1 + (tempo-1)*0.35`；`amplitude = 0.6 + intensity/2*0.8`；
+  `emotion → expression/gaze`（**占位**，`expression_placeholder: true`）；`interrupt → replaces_current`。
+- **阈值**（三个不同的数，因为三种代价不同）：`route_confidence=0.5`、
+  `route_top_probability=0.5` → 走**保守分支**（取最近路由、参数只许更慢更小、
+  `conservative=true`、气泡加 `我拿不准，先用最接近的：`）；`is_motion=0.5` → **绝不开新动作**；
+  `known=0.5` → 不改动作，只让气泡承认在即兴。
+- **异步不阻塞**：`submit()` 起线程立刻返回 → 请求去解析向量（未命中约 1 s 子进程）→
+  再 `resolve(deadline)` 取判定。两者**真的重叠**（`test_viewer_router.py` 用会合事件证明：
+  判定线程要等编码器发信号才结束；串行时必定超时）。超时 → `router_timeout`，
+  退化为纯向量路由，气泡明写"这次没做语义解析"；**跑过期的调用仍会写入缓存**，下次同句直接命中。
+- **缓存键**：`(prompt_hash, router_id, known_intents_rev)`；`router_id = "<model>+typesafe-sdk==<ver>"`，
+  `known_intents_rev` 是 `(known_intents, library_entries)` 的哈希 —— 库一变，判定自动失效。
+- **留痕**：`/api/plan` 与 `/api/health` 都带 `router{state, router_id, route, probabilities,
+  latency_ms, cache_hit, degraded, detail, deadline_ms, model, sdk_version, judgment, known_intents_rev}`，
+  plan 另带 `decision{route, action, starts_new_action, conservative, source, reason, message,
+  params, library_entry}`。
+- **开关与隐私**：`--no-router`、`--router-deadline-ms`（默认 2500）。
+  `router.privacy` 三态明写：on（发到托管 API）/ off（没 key，不发）/ 关（本地）。
+
+### 16.3 真实验收（`jev-latest` + `typesafe-sdk==0.7.4`，deadline 8000 ms）
+
+四句各跑 2 次，**每次调用前把库还原**（用仓库缓存的**临时副本**，绝不写 `artifacts/`）：
+
+| 句子 | 期望 | run 1 | run 2 | tempo / intensity | emotion |
+|---|---|---|---|---|---|
+| `往前走` | library | **library 0.96** | **library 0.96** | 1.00 normal / 0.87 moderate | 平静 0.99 |
+| `慢慢走过去` | compose | **compose 0.99** | **compose 0.99** | 0.00 slow / 0.13 subtle | 平静 1.00 |
+| `跳过去挥挥手` | generate | compose 0.71 | compose 0.70 | 1.14 normal / 0.95 moderate | 高兴 0.96 |
+| `今天好累` | non_motion | **non_motion 0.99** | **non_motion 0.99** | 0.07 slow / 0.08 subtle | 低落 0.99 |
+| `A person walks forward.` | library | **library** | **library** | 1.00 normal / 0.89 moderate | 平静 1.00 |
+
+**最后一行是跑真服务时抓到的一个真 bug**：`is_motion` 第一版问的是"说话人是不是在**要求**动作"，
+而本查看器的全部 prompt 词表都是**第三人称描述**（`A person walks forward.`），于是**每一条缓存条目
+都被读成非请求 → hold → 不出片**。这是驱动运行中的服务（`POST /api/plan`，缓存哈希
+`e9cf8141cac79f35`）发现的，没有任何测试抓到。问句已改成"这句话是不是**要求或命名**一个动作"，
+false 一侧改说"说话人自己的状态"。五行两句全部一致。
+
+5 条里 4 条与期望一致。`跳过去挥挥手` **稳定读成 `compose`**：
+路由定义把 `generate` 留给"库里没有**且**组合不出来"的动作，而本库**已经有**
+`A person jumps over a puddle.` 与 `A person waves with both hands.` —— "跳过去＋挥挥手"
+正好是这两条的**组合**。这是**可辩护的读法**，不是 bug；如实记录，不调参掩盖。
+
+动作与气泡原文：
+
+```
+往前走        action=load_library   embedding='A person walks forward.'
+              照库里那条来：A person walks forward.（Jev 读出这句最接近库里已有的一条）。
+慢慢走过去     action=compose_knobs speed=0.65 amplitude=0.656
+              用现有动作组合：速度 0.65×、幅度 0.66×（Jev 读出 slow and relaxed / subtle）。
+跳过去挥挥手    action=compose_knobs speed=1.07 amplitude=0.99 expression=smile
+              用现有动作组合：速度 1.07×、幅度 0.99×（Jev 读出 normal pace / moderate）。
+今天好累      action=hold starts_new_action=False kind=hold
+              这句不是动作要求（Jev 读 non_motion 的概率 0.99），保持当前动作。
+A person walks forward.  action=load_library  embedding='A person walks forward.'
+              照库里那条来：A person walks forward.（Jev 读出这句最接近库里已有的一条）。
+```
+
+延迟（同进程 10 次 warm）：**min 284.7 / p50 440.6 / max 1646.7 ms**（更早的 8 次那轮在机器较闲时是 min 281.6 / p50 379.3 / max 560.0 ms；两轮之差是这台共享机器的负载，不是路由）。
+判定缓存：call 1 `ok`（miss）→ call 2 `ok`（`known_intents_rev` 变了：编码器把句子加进了库）
+→ call 3 `cached`，`latency_ms 0.0`。
+
+### 16.4 负对照（四条，原文）
+
+跑法：`./.venv/bin/python -m pytest -v <每条>` —— 18 条全 PASS。
+
+- **① `non_motion` 绝不启动新动作**：`test_negative_control_non_motion_never_starts_a_new_action`
+  （概率 0.5/0.6/0.9/0.99 四档，且 `is_motion=0.99`、`interrupt=1.0` 也说不动它）、
+  `test_viewer_router.py::test_negative_control_non_motion_returns_a_hold_and_draws_nothing`
+  （`runner.calls == []`：**模型一次都没被调用**，`kind == "hold"`，`last_action` 不变）。
+- **② 超时绝不假装"已解析"**：`test_negative_control_a_degraded_verdict_never_claims_a_semantic_parse`
+  （六种降级逐一参数化，且**故意把一份完美 judgment 与降级 state 一起传进去**）、
+  `test_a_timeout_names_itself_and_the_deadline_it_missed`、
+  `test_viewer_router.py::test_negative_control_a_degraded_verdict_still_plans_but_says_it_did_not_parse`
+  （四种具名降级，`route` 必须是 `None`、`judgment` 必须是 `None`、气泡必须含"没做语义解析"）。
+- **③ 低置信必须走保守分支并明示**：
+  `test_negative_control_a_low_confidence_reading_takes_the_conservative_branch_and_says_so`
+  （`conservative is True`、消息以 `我拿不准，先用最接近的：` 开头、`speed ≤ 1.0`、`amplitude ≤ 1.0`）。
+- **④ key 出现在前端或接口里必须能被测出来**：
+  `test_negative_control_the_key_is_in_no_output_the_router_can_produce`（递归扫所有字符串）、
+  `test_negative_control_the_key_is_in_no_api_response`（`/api/health` 与 `/api/plan` 全字段）、
+  `test_negative_control_the_key_is_in_no_file_the_browser_can_fetch`（**把 sentinel 写进环境变量后
+  扫 `viewer/**` 每一个文件**，并在同一条测试里把哨兵写进一个临时文件证明这个检查**会红**）。
+
+**这些负对照本身也会红**（在仓库文件上注入后立即按 sha256 逐字节还原）：
+
+```
+1 non_motion gate removed          -> exit 1  1 failed
+2 degraded branch removed          -> exit 1  6 failed
+3 low-confidence branch removed    -> exit 1  1 failed
+4 key written into the page        -> exit 1  1 failed
+all four files restored byte-for-byte
+   src/ardy_mlx/router/jev.py  sha256=a61afa1f20bc3074…
+   viewer/app.js               sha256=10a4cf099c3f8c7e…
+```
+
+### 16.5 测试计数
+
+`./.venv/bin/python -m pytest -q` → **411 passed, 1 xfailed**（上一轮 333 + 1 xfailed；只增不减）。
+其中本轮新增 57（`test_router_jev.py`）＋ 16（`test_viewer_router.py`）＋ 5（`test_viewer_http.py`）
+＝ 78，另 `node tests/viewer_js_guard.test.mjs` 从 12 条加到 **20 条**（仍由 pytest 里的桥接条驱动）。
+
+### 16.6 残留未知
+
+- **本轮把一次真实调用写进了仓库缓存，已清理并如实记录**：第一次验收脚本用了仓库真实的
+  `artifacts/embeddings`，`FakeLocalEncoder` 因此把 4 条假向量（`git_sha` 全零）装了进去
+  （`047a2ea98fe79ec2`、`14375452c554aeea`、`540b358400fad375`、`ab60cf41271af9d3`）。
+  已按 `git_sha` 全零精确识别并**逐文件删除**，复扫为 0；随后所有验收都在**临时副本**上跑，
+  每次调用前还原。`artifacts/embeddings/*` 本来就在 `.gitignore` 里，未进版本库。
+- **参数未接入采样器**（新增边界 15）：`speed` / `amplitude` / `expression` / `gaze` 只是携带，
+  本轮出片仍只由文本向量决定。
+- **判定正确性未验证**（新增边界 14）：四句里有一句与预期不符（见 §16.3），且这是**一个模型一次
+  回答**，不是准确率。低置信、对抗输入、CJK 的稳定性都未测。
+- **隐私是真实变化**（新增边界 14）：开启路由时用户那句话离开本机，本地测试无法观测这件事。
+- **浏览器运行时仍需人眼确认**（上一轮边界 13 仍然成立）：气泡的 DOM、颜色与点击路径没有任何
+  本仓库的测试声称覆盖。

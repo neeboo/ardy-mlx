@@ -89,6 +89,13 @@ from ardy_mlx.model.skeleton import (  # noqa: E402
     core_skeleton,
     posed_joints_from_features,
 )
+from ardy_mlx.router.jev import (  # noqa: E402
+    ACTION_LIBRARY,
+    JevRouter,
+    decide as decide_route,
+    known_intents_revision,
+)
+from ardy_mlx.router.jev import DEFAULT_DEADLINE_MS as DEFAULT_ROUTER_DEADLINE_MS  # noqa: E402
 from ardy_mlx.sampling.diffusion import resolve_num_steps  # noqa: E402
 from ardy_mlx.sampling.local_encoder import (  # noqa: E402
     DEFAULT_LLM2VEC_REPO,
@@ -885,6 +892,9 @@ class ViewerApp:
         checkpoint_dir: Optional[Path] = None,
         allow_cpu: bool = False,
         local_encoder: Optional[LocalEncoder] = None,
+        router: Optional[object] = None,
+        router_enabled: bool = True,
+        router_deadline_ms: int = DEFAULT_ROUTER_DEADLINE_MS,
     ):
         self.model = model
         self.device = device
@@ -897,6 +907,23 @@ class ViewerApp:
         # ``llm2vec-mlx`` checkout and passes an encoder; a test that wants the
         # cached-only semantics simply does not.
         self.local_encoder = local_encoder
+        # The router is *advisory*: it reads the sentence and names a route, and
+        # ``_route_request`` is the only place that turns that into an action. Three
+        # ways in, and the difference is visible in every payload:
+        #   * ``router`` given        -> use it (the tests inject a fake here);
+        #   * ``router_enabled`` True -> build one from the environment; it reports
+        #     ``router_unavailable`` by name when no API key is set;
+        #   * ``router_enabled`` False-> ``--no-router``: ``router_disabled``.
+        if router is not None:
+            self.router = router
+        elif router_enabled:
+            self.router = JevRouter.from_environment(deadline_ms=router_deadline_ms)
+        else:
+            self.router = JevRouter.disabled_router(deadline_ms=router_deadline_ms)
+        #: The text of the last clip this viewer planned, which is what the next
+        #: request's ``context.current_action`` reports. The server owns it rather
+        #: than the page, because it is the server that knows what it last drew.
+        self.last_action: Optional[str] = None
         self.lock = threading.Lock()
         self.runner = None
         self.error: Optional[str] = None
@@ -1286,8 +1313,115 @@ class ViewerApp:
                     "cache miss pays its cold start (about 1-2 s) before the ~0.4 s encode"
                 ),
             },
+            "router": {
+                # The same six named fields a plan carries -- state, router_id, route,
+                # probabilities, latency_ms, cache_hit -- plus what a reader needs to
+                # tell a guess from a reading. Before the first plan, ``last`` is null
+                # and the top-level ``state`` still says whether the router *would*
+                # run, which is the fact health exists to report.
+                **self.router.status(),
+                "library_entries": len(self.library_entries()),
+                "known_intents": self.known_intents(),
+            },
             "served_by": f"scripts/ardy_viewer.py ({HOST})",
         }
+
+    # -- routing: the sentence -> a route -> an action --------------------
+    def library_entries(self) -> List[dict]:
+        """The motions this viewer can load *directly*, as ``{prompt_hash, text}``.
+
+        This is the cache, filtered to what a request could actually resolve: one
+        preferred entry per prompt. It is what ``context.library_entries`` carries and
+        what ``route == library`` loads from, so the answer the model picks from and
+        the entries the code can load are the same list by construction.
+        """
+        entries = []
+        for entry in self.embeddings.list():
+            text = entry.get("text")
+            digest = entry.get("prompt_hash")
+            if text and digest:
+                entries.append({"prompt_hash": digest, "text": text})
+        entries.sort(key=lambda item: item["prompt_hash"])
+        return entries
+
+    def known_intents(self) -> List[str]:
+        """The intents the engine already knows, as the model is told them.
+
+        The library *is* the set of motions this engine can already produce, so this
+        is its texts. It is derived rather than configured: an intent list that could
+        drift from the cache would let ``known`` answer yes about an ability that is
+        no longer on disk.
+        """
+        return [entry["text"] for entry in self.library_entries()]
+
+    def _utterance_for_request(self, prompt: Optional[str]) -> Optional[str]:
+        """The sentence Jev is asked about -- from the cache when a hash was sent.
+
+        A prompt hash carries no text of its own, so the cached sidecar's ``prompt``
+        is what the user actually said. When a hash has no cached text there is
+        nothing to judge, and ``None`` here becomes ``router_no_utterance`` rather
+        than a judgment about a hex string.
+        """
+        if prompt is None or prompt == "":
+            return None
+        digest = self.embeddings._selector_digest(prompt)
+        if digest is None:
+            return str(prompt)
+        entry = self.embeddings.resolve_cached(digest)
+        if entry is not None and entry.get("text"):
+            return str(entry["text"])
+        for variant in self.embeddings.variants(digest):
+            if variant.get("text"):
+                return str(variant["text"])
+        return None
+
+    def _open_judgment(self, prompt: Optional[str]):
+        """Start the judgment and hand back the handle, the library and the intents.
+
+        Split from :meth:`_read_judgment` on purpose. The caller resolves the embedding
+        *between* the two, so Jev and the encoder are in flight at the same time and
+        the judgment's wall clock is largely hidden behind work the request had to do
+        anyway. Resolving here instead -- which is what this used to do -- serialises
+        them and turns every uncached prompt into a deadline wait.
+        """
+        library = self.library_entries()
+        intents = [entry["text"] for entry in library]
+        utterance = self._utterance_for_request(prompt)
+        handle = self.router.submit(
+            utterance,
+            current_action=self.last_action,
+            known_intents=intents,
+            library_entries=library,
+            prompt_hash=prompt_hash(utterance) if utterance else "",
+        )
+        return handle, library, intents
+
+    def _read_judgment(self, handle, library: List[dict], intents: List[str]) -> Tuple[dict, dict, Optional[dict]]:
+        """Collect the judgment, map it to an action, and report both.
+
+        Returns ``(router_block, decision, library_entry)``. Every path through this
+        method ends in a ``router`` block that says what happened; there is no branch
+        that returns a route without a state.
+        """
+        verdict = handle.resolve()
+        router = self.router
+        decision = decide_route(
+            verdict.judgment,
+            state=verdict.state,
+            deadline_ms=getattr(router, "deadline_ms", DEFAULT_ROUTER_DEADLINE_MS),
+            library_entries=library,
+            detail=verdict.detail,
+        )
+        block = verdict.router_block(
+            deadline_ms=getattr(router, "deadline_ms", DEFAULT_ROUTER_DEADLINE_MS),
+            model=getattr(router, "model", None),
+            sdk_version=getattr(router, "sdk_version", None),
+        )
+        # The revision the judgment was conditioned on travels with the payload: it is
+        # the third part of the cache key, and a reader can see *which* library the
+        # answer was chosen against.
+        block["known_intents_rev"] = known_intents_revision(intents, library)
+        return block, decision.as_dict(), decision.library_entry
 
     def plan(
         self,
@@ -1306,10 +1440,46 @@ class ViewerApp:
                 status=503,
             )
         request_started = time.perf_counter()
+        # The judgment starts here and the encoder starts two lines later, so the two
+        # overlap. The verdict is collected *after* the encode, which is where the
+        # deadline has been ticking down; a judgment that misses it degrades by name.
+        handle, library, intents = self._open_judgment(prompt)
         # Resolving the prompt may encode it here (a ~0.4 s subprocess on a cache
         # miss); the time that takes is reported separately from sampling, so the page
         # can show which half of the wall clock was the encoder.
         entry, embedding_source = self._embedding_for_request(prompt)
+        router_block, decision, library_entry = self._read_judgment(handle, library, intents)
+        if decision["action"] == ACTION_LIBRARY and library_entry:
+            # "Load the library entry" is a real substitution, and it is the one thing
+            # the route changes about the request: the clip is conditioned on the
+            # entry's own cached vector, not on the sentence that pointed at it.
+            entry, embedding_source = self._embedding_for_request(library_entry["prompt_hash"])
+
+        if not decision["starts_new_action"]:
+            # ``non_motion``, or a sentence the model does not read as a motion
+            # request. Nothing is generated and the clip on screen is left alone: the
+            # one outcome this viewer must never produce is a body that moves because
+            # of a sentence that did not ask it to.
+            return {
+                "kind": "hold",
+                "reason": decision["reason"],
+                "router": router_block,
+                "decision": decision,
+                "duration_s": float(duration) if duration is not None else None,
+                "seed": seed,
+                "prompt": entry.get("text"),
+                "held_action": self.last_action,
+                "timing": {
+                    "encode_ms": embedding_source.get("encode_ms"),
+                    "generate_ms": None,
+                    "total_ms": (time.perf_counter() - request_started) * 1000.0,
+                    "embedding_source": embedding_source.get("kind"),
+                    "cache_hit": embedding_source.get("kind") == "cache",
+                    "router_ms": router_block.get("latency_ms"),
+                },
+                "served_by": f"{HOST} scripts/ardy_viewer.py",
+            }
+
         embedding = self._embedding_for(entry)
         frames_wanted = validate_duration(duration, self.layout)
         num_steps = resolve_num_steps(diffusion_steps, NUM_BASE_STEPS)
@@ -1409,9 +1579,18 @@ class ViewerApp:
                 "total_ms": (time.perf_counter() - request_started) * 1000.0,
                 "embedding_source": embedding_source.get("kind"),
                 "cache_hit": embedding_source.get("kind") == "cache",
+                "router_ms": router_block.get("latency_ms"),
             },
+            # Both blocks travel on every planned clip: ``router`` is what was read
+            # (or the name of the reason nothing was), ``decision`` is what the viewer
+            # does about it, including the bubble sentence and the source it names.
+            "router": router_block,
+            "decision": decision,
             "served_by": f"{HOST} scripts/ardy_viewer.py",
         }
+        # The next request's ``context.current_action``. Recorded from the clip that
+        # was actually drawn, which is the only honest answer to "what is happening".
+        self.last_action = entry.get("text")
         if include_frames:
             payload["frames_330_b64"] = encode_float32(np.asarray(generated, dtype=np.float32)[0])
         return payload
@@ -1721,6 +1900,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="give up on one encoder subprocess after this long (default 600)",
     )
     parser.add_argument(
+        "--no-router",
+        action="store_true",
+        help=(
+            "turn semantic routing off entirely: no judgment is made and nothing leaves "
+            "this machine (by default the router runs when TYPESAFE_API_KEY or JEV_API_KEY "
+            "is in this server's environment)"
+        ),
+    )
+    parser.add_argument(
+        "--router-deadline-ms",
+        type=int,
+        default=DEFAULT_ROUTER_DEADLINE_MS,
+        metavar="MS",
+        help=(
+            "how long a plan may wait for a judgment before degrading to the plain vector "
+            f"route, by name (default {DEFAULT_ROUTER_DEADLINE_MS}; the first call of a "
+            "process pays Jev's cold start, about 1.7 s)"
+        ),
+    )
+    parser.add_argument(
         "--no-preload",
         action="store_true",
         help="start the HTTP server before loading weights (the page sees model_unavailable)",
@@ -1777,7 +1976,14 @@ def main(argv=None) -> int:
         checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else None,
         allow_cpu=args.allow_cpu,
         local_encoder=encoder,
+        router_enabled=not args.no_router,
+        router_deadline_ms=args.router_deadline_ms,
     )
+    # Say which of the three router conditions this process is in, before the first
+    # request: a viewer that quietly stopped asking Jev would otherwise look identical
+    # to one that asked and got no answer.
+    print(f"[ardy_viewer] router: {app.router.status()['state']} "
+          f"({app.router.status()['reason'] or app.router.router_id})", flush=True)
 
     # Bind before loading so a port clash is reported immediately instead of after
     # a 765 MB weight load.

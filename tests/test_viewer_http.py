@@ -16,6 +16,7 @@ import json
 import shutil
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import quote
@@ -58,6 +59,8 @@ def _load_viewer():
 ardy_viewer = _load_viewer()
 
 from ardy_mlx.sampling import pipeline  # noqa: E402
+
+from ardy_mlx.router import jev  # noqa: E402
 
 #: The shipped Core layout, a 40x cheaper layout with the same arithmetic, and the
 #: prompt the one authorised reference run encoded.
@@ -214,6 +217,75 @@ def live_server(embeddings_dir, monkeypatch, tmp_path):
     host, port = server.server_address[:2]
     try:
         yield f"http://{host}:{port}", app
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class _FakeTypeSafeClient:
+    """A ``TypeSafeClient`` whose answers come from a dict.
+
+    The real :class:`ardy_mlx.router.jev.JevRouter` is used over the socket -- real
+    threads, real deadline, real cache, real mapping -- and only the HTTP call to
+    TypeSafe is replaced. That keeps the HTTP test about the wire shape and the
+    degradation behaviour without a network or an API key.
+    """
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.calls = []
+
+    def system_one(self, state, questions):
+        self.calls.append({"state": state, "questions": list(questions)})
+        return type("_Response", (), {"answers": self.answers, "model": "jev-fake"})()
+
+
+def _answers(route_name, *, probabilities=None, is_motion=0.97, library_pick=jev.LIBRARY_NONE):
+    probabilities = probabilities or {
+        jev.ROUTE_LIBRARY: 0.1, jev.ROUTE_COMPOSE: 0.8,
+        jev.ROUTE_GENERATE: 0.05, jev.ROUTE_NON_MOTION: 0.05,
+    }
+    return {
+        jev.Q_IS_MOTION: {"type": "noul", "noul": is_motion},
+        jev.Q_KNOWN: {"type": "noul", "noul": 0.85},
+        jev.Q_ROUTE: {"type": "choice", "choice": route_name, "confidence": max(probabilities.values()),
+                      "probabilities": probabilities},
+        jev.Q_TEMPO: {"type": "score", "score": 0.0, "confidence": 1.0,
+                      "probabilities": {"0": 0.98, "1": 0.02, "2": 0.0}, "legend": {}},
+        jev.Q_INTENSITY: {"type": "score", "score": 1.0, "confidence": 0.9,
+                          "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}, "legend": {}},
+        jev.Q_EMOTION: {"type": "choice", "choice": "平静", "confidence": 0.9, "probabilities": {"平静": 0.9}},
+        jev.Q_INTERRUPT: {"type": "noul", "noul": 0.9},
+        jev.Q_LIBRARY: {"type": "choice", "choice": library_pick, "confidence": 0.6,
+                        "probabilities": {library_pick: 0.6}},
+    }
+
+
+@pytest.fixture()
+def router_server(embeddings_dir, monkeypatch, tmp_path):
+    """``live_server``'s twin, with a **real** router whose SDK call is faked."""
+    monkeypatch.setattr(ardy_viewer, "posed_joints_from_features",
+                        lambda frames, skeleton=None: _posed_joints_without_mlx(frames))
+    monkeypatch.setattr(ardy_viewer, "VIEWER_DIR", tmp_path / "viewer")
+
+    client = _FakeTypeSafeClient(_answers(jev.ROUTE_COMPOSE))
+    router = jev.JevRouter(
+        api_key="ts_test_key_do_not_use_0123456789",
+        client_factory=lambda key, model, deadline: client,
+    )
+    app = ardy_viewer.ViewerApp(embeddings_dir=embeddings_dir, router=router)
+    app.embeddings.refresh()
+    app.runner = FakeRunner(layout=CORE)
+    app.error = None
+    app.boot_seconds = 0.005
+
+    server = ardy_viewer.ViewerServer(("127.0.0.1", 0), app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        yield f"http://{host}:{port}", app, client
     finally:
         server.shutdown()
         server.server_close()
@@ -543,7 +615,119 @@ def test_the_pages_prompt_guard_runs_under_node():
         if len(parts) == 2 and parts[0] in ("pass", "fail") and parts[1].isdigit():
             summary[parts[0]] = int(parts[1])
     assert summary.get("fail") == 0, completed.stdout
-    # Twelve cases: the three control states, the not-ready states, whitespace, the
-    # body/guard negative controls, the reference decisions, purity, and two wiring
-    # checks -- one of which proves the other can fail.
-    assert summary.get("pass", 0) >= 12, completed.stdout
+    # Twenty cases: the three control states, the not-ready states, whitespace, the
+    # body/guard negative controls, the reference decisions, purity, the bubble
+    # (pending, routed, hold, degraded, cached, conservative, plain, purity), and two
+    # wiring checks -- one of which proves the others can fail.
+    assert summary.get("pass", 0) >= 20, completed.stdout
+
+
+# --------------------------------------------------------------------------- #
+# the router over the wire
+# --------------------------------------------------------------------------- #
+def test_plan_over_http_carries_the_router_block_and_the_decision(router_server):
+    """The six named fields, on a real socket, from a real ``JevRouter``."""
+    base, app, client = router_server
+    status, body, _ = request(f"{base}/api/plan", "POST",
+                              {"prompt": PROMPT_HASH, "seed": 0, "duration": 2, "noise": "random"})
+    assert status == 200, body
+    payload = json.loads(body)
+    block = payload["router"]
+    for field in ("state", "router_id", "route", "probabilities", "latency_ms", "cache_hit"):
+        assert field in block, field
+    assert block["state"] == jev.STATE_OK
+    assert block["route"] == jev.ROUTE_COMPOSE
+    assert block["cache_hit"] is False
+    assert block["degraded"] is False
+    assert block["known_intents_rev"]
+    assert payload["decision"]["action"] == jev.ACTION_COMPOSE
+    assert payload["decision"]["source"] == "jev"
+    assert payload["decision"]["message"], "the bubble sentence travels with the clip"
+
+
+def test_health_over_http_reports_the_router_and_the_privacy_note(router_server):
+    base, app, client = router_server
+    status, body, _ = request(f"{base}/api/health")
+    assert status == 200
+    block = json.loads(body)["router"]
+    assert block["state"] == jev.STATE_OK
+    assert block["router_id"].startswith("jev-latest+typesafe-sdk==")
+    assert block["deadline_ms"] == jev.DEFAULT_DEADLINE_MS
+    assert block["available"] is True
+    assert "sent to" in block["privacy"]
+    # Neither the key nor its value is anywhere in the response.
+    assert b"ts_test_key_do_not_use" not in body
+
+
+def test_the_same_sentence_over_http_is_judged_once(router_server):
+    base, app, client = router_server
+    for _ in range(2):
+        status, body, _ = request(f"{base}/api/plan", "POST",
+                                  {"prompt": PROMPT_HASH, "seed": 0, "duration": 2, "noise": "random"})
+        assert status == 200
+    assert len(client.calls) == 1, "the second identical sentence must be answered from the judgment cache"
+    assert json.loads(body)["router"]["cache_hit"] is True
+
+
+def test_a_non_motion_sentence_over_http_returns_a_hold_and_no_clip(router_server):
+    base, app, client = router_server
+    client.answers = _answers(
+        jev.ROUTE_NON_MOTION, is_motion=0.05,
+        probabilities={jev.ROUTE_LIBRARY: 0.02, jev.ROUTE_COMPOSE: 0.05,
+                       jev.ROUTE_GENERATE: 0.03, jev.ROUTE_NON_MOTION: 0.9},
+    )
+    app.router.clear_cache()
+    status, body, _ = request(f"{base}/api/plan", "POST",
+                              {"prompt": PROMPT_HASH, "seed": 0, "duration": 2, "noise": "random"})
+    assert status == 200, body
+    payload = json.loads(body)
+    assert payload["kind"] == "hold"
+    assert payload["decision"]["starts_new_action"] is False
+    assert "frames" not in payload
+    assert app.runner.calls == [], "nothing may be drawn for a sentence that did not ask for motion"
+
+
+def test_a_router_that_times_out_over_http_still_draws_and_says_it_did_not_parse(embeddings_dir, monkeypatch, tmp_path):
+    """The degradation path, end to end: a deadline of 1 ms cannot be met."""
+    monkeypatch.setattr(ardy_viewer, "posed_joints_from_features",
+                        lambda frames, skeleton=None: _posed_joints_without_mlx(frames))
+    monkeypatch.setattr(ardy_viewer, "VIEWER_DIR", tmp_path / "viewer")
+    client = _FakeTypeSafeClient(_answers(jev.ROUTE_COMPOSE))
+    real_system_one = client.system_one
+
+    def slow(state, questions):
+        time.sleep(0.3)
+        return real_system_one(state, questions)
+
+    client.system_one = slow
+    router = jev.JevRouter(api_key="ts_test_key_do_not_use_0123456789", deadline_ms=5,
+                           client_factory=lambda key, model, deadline: client)
+    app = ardy_viewer.ViewerApp(embeddings_dir=embeddings_dir, router=router)
+    app.embeddings.refresh()
+    app.runner = FakeRunner(layout=CORE)
+    app.error = None
+    app.boot_seconds = 0.005
+    server = ardy_viewer.ViewerServer(("127.0.0.1", 0), app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        started = time.perf_counter()
+        status, body, _ = request(f"http://{host}:{port}/api/plan", "POST",
+                                  {"prompt": PROMPT_HASH, "seed": 0, "duration": 2, "noise": "random"})
+        elapsed = time.perf_counter() - started
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200, body
+    payload = json.loads(body)
+    assert elapsed < 1.5, "the deadline bounds the wait; the slow call must not hold the request"
+    assert payload["kind"] == "plan", "the plain vector route still produces a clip"
+    assert payload["frames"] == 40
+    assert payload["router"]["state"] == jev.STATE_TIMEOUT
+    assert payload["router"]["route"] is None
+    assert payload["router"]["degraded"] is True
+    assert payload["decision"]["source"] == "vector"
+    assert "没做语义解析" in payload["decision"]["message"]

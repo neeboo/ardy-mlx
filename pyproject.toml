@@ -7,6 +7,12 @@ dependencies = ["mlx>=0.20", "numpy>=1.26"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Semantic routing for the viewer (docs/VIEWER.md "Router"). An **extra**, not a hard
+# dependency: the viewer runs without it and reports `router_unavailable` by name, and
+# every test that exercises the router injects a fake SDK client, so the core test
+# suite needs neither this package nor a network. Pure Python; it pulls httpx2,
+# pydantic, tenacity and truststore.
+router = ["typesafe-sdk>=0.7"]
 
 [build-system]
 requires = ["setuptools>=68"]
