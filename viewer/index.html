@@ -9,155 +9,172 @@
 </head>
 <body>
   <main>
-    <section id="viewport" aria-label="Animated CoreSkeleton27 motion">
-      <div id="hud" aria-live="off">
-        <span class="hud-key">clip</span><span class="hud-value" id="hud-clip">—</span>
-        <span class="hud-key">model</span><span class="hud-value" id="hud-model">—</span>
-        <span class="hud-key">frames</span><span class="hud-value" id="hud-frames">—</span>
-        <span class="hud-key">generate</span><span class="hud-value" id="hud-generate">—</span>
-        <span class="hud-key">playback</span><span class="hud-value" id="hud-fps">—</span>
-        <span class="hud-key">noise</span><span class="hud-value" id="hud-noise">—</span>
-        <span class="hud-key">vector</span><span class="hud-value" id="hud-source">—</span>
-        <span class="hud-key">encode</span><span class="hud-value" id="hud-encode">—</span>
-        <span class="hud-key">embedding</span><span class="hud-value" id="hud-embedding">—</span>
-      </div>
-      <!--
-        The bubble. It appears the instant a trigger fires -- before any round trip --
-        and is replaced by what the router decided once the plan comes back. It is the
-        one place the page says *what it understood* and *where that came from*, so it
-        is never hidden on a degraded judgment: "no semantic parse this time" is a
-        thing the reader is entitled to see.
-      -->
-      <div id="bubble" class="bubble" data-state="idle" role="status" aria-live="polite">
-        <p class="bubble-text" id="bubble-text">Say what you want to happen.</p>
-        <p class="bubble-meta" id="bubble-meta"></p>
-      </div>
-    </section>
+    <!--
+      The default screen is three things and one line: the picture, the
+      conversation, the input box, and the status line under the title. Every
+      control that is not needed to *ask for a motion* lives in the collapsed
+      "Advanced" drawer below the composer -- including the whole HUD and stats
+      table, which used to cover the canvas.
+    -->
+    <section id="viewport" aria-label="Animated CoreSkeleton27 motion"></section>
 
-    <aside>
-      <p class="eyebrow">ARDY / MLX</p>
-      <h1>Motion viewer</h1>
-      <p class="lede">Every clip on this page is sampled live on this machine by the MLX
-        port, from any prompt you type. A prompt that is not cached yet is encoded here
-        first. Prompts that have a <b>reference</b> vector use it, so those clips stay
-        comparable with the golden reference. With an API key in the server's
-        environment, the sentence is also read by <b>Jev</b> to decide what to do about
-        it — <code>--no-router</code> keeps everything local.</p>
+    <aside id="chat">
+      <header class="chat-head">
+        <p class="eyebrow">ARDY / MLX</p>
+        <h1>Motion viewer</h1>
+        <p id="status" class="statusbar" role="status" aria-live="polite">正在加载模型…</p>
+      </header>
 
-      <h2>Prompt</h2>
-      <div class="field">
-        <label for="prompt-text">Any prompt <span class="hint">(Enter to generate)</span></label>
-        <div class="row">
-          <input id="prompt-text" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="A person walks forward and waves."
-                 aria-label="Prompt text">
-          <button id="prompt-text-go" class="ghost" type="button">Go</button>
-        </div>
-        <p class="help" id="prompt-text-help">—</p>
-      </div>
+      <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-label="对话"></div>
 
-      <div class="field">
-        <label for="prompt-select">Cached text embeddings</label>
-        <select id="prompt-select" aria-label="Cached text embedding"></select>
-        <p class="help" id="prompt-help">—</p>
-      </div>
-
-      <h2>Sample</h2>
-      <div class="field">
-        <label for="seed-input">Seed</label>
-        <div class="row">
-          <input id="seed-input" type="number" step="1" value="0" aria-label="Seed">
-          <button id="seed-next" class="ghost" type="button">Next</button>
-        </div>
-        <p class="help">Only affects the <b>random</b> noise below. With golden noise the
-          reference's own x<sub>T</sub> is injected and the seed changes nothing.</p>
-      </div>
-
-      <div class="field">
-        <label for="duration-input">Duration (seconds)</label>
-        <div class="row">
-          <input id="duration-input" type="number" step="1" min="2" value="2"
-                 aria-label="Duration in seconds">
-          <button id="duration-step" class="ghost" type="button">+1 step</button>
-        </div>
-        <p class="help" id="duration-help">—</p>
-      </div>
-
-      <div class="field">
-        <label for="noise-select">Initial noise (x<sub>T</sub>)</label>
-        <select id="noise-select" aria-label="Initial noise source">
-          <option value="golden">golden — the reference's own x_T</option>
-          <option value="random">random — MLX RNG</option>
-        </select>
-        <p class="help" id="noise-help">—</p>
-      </div>
-
-      <div class="buttons">
-        <button id="generate" class="primary" type="button">Generate &amp; play</button>
-        <button id="reload" type="button">Reload</button>
-      </div>
-
-      <h2>Playback</h2>
-      <div class="transport">
-        <button id="play-pause" class="ghost" type="button" aria-pressed="true">Pause</button>
-        <output id="frame-label">frame 0 / 0</output>
-        <input id="frame-slider" type="range" min="0" max="0" step="1" value="0"
-               aria-label="Scrub to frame">
-      </div>
-      <div class="buttons">
-        <button id="reset-camera" class="ghost" type="button">Reset camera</button>
-        <button id="fit-camera" class="ghost" type="button">Fit clip</button>
-      </div>
-
-      <h2>Reference</h2>
-      <label class="checkline"><input id="golden-toggle" type="checkbox">
-        Reference (golden)</label>
-      <p class="help" id="golden-help">—</p>
-      <label class="checkline"><input id="contacts-toggle" type="checkbox" checked>
-        Foot-contact markers</label>
-      <label class="checkline"><input id="trail-toggle" type="checkbox" checked>
-        Ground trail</label>
-
-      <h2>This run</h2>
-      <dl id="stats">
-        <div><dt>Model</dt><dd id="stat-model">—</dd></div>
-        <div><dt>Device</dt><dd id="stat-device">—</dd></div>
-        <div><dt>Parameters</dt><dd id="stat-params">—</dd></div>
-        <div><dt>Cold start (weights)</dt><dd id="stat-coldstart">—</dd></div>
-        <div><dt>Generate (last)</dt><dd id="stat-generate">—</dd></div>
-        <div><dt>Frames</dt><dd id="stat-frames">—</dd></div>
-        <div><dt>Autoregressive windows</dt><dd id="stat-windows">—</dd></div>
-        <div><dt>Playback fps</dt><dd id="stat-fps">—</dd></div>
-        <div><dt>Clip fps (model)</dt><dd id="stat-clipfps">—</dd></div>
-        <div><dt>Injected x<sub>T</sub></dt><dd id="stat-noise">—</dd></div>
-        <div><dt>Embedding sha256</dt><dd id="stat-embedding">—</dd></div>
-        <div><dt>Prompt hash</dt><dd id="stat-prompt">—</dd></div>
-        <div><dt>Vector source</dt><dd id="stat-source">—</dd></div>
-        <div><dt>Quantization</dt><dd id="stat-quantization">—</dd></div>
-        <div><dt>Encode (local)</dt><dd id="stat-encode">—</dd></div>
-        <div><dt>Total (server)</dt><dd id="stat-total">—</dd></div>
-        <div><dt>Local encoder</dt><dd id="stat-encoder">—</dd></div>
-        <div><dt>Endpoint</dt><dd id="stat-endpoint">—</dd></div>
-      </dl>
-
-      <div id="status" role="status" aria-live="polite">Loading model…</div>
+      <form id="composer" class="composer" autocomplete="off">
+        <input id="prompt-text" type="text" autocomplete="off" spellcheck="false"
+               placeholder="说一句动作，回车发送"
+               aria-label="Prompt text">
+        <button id="prompt-text-go" class="primary" type="button">发送</button>
+      </form>
       <div id="error-box" hidden></div>
 
-      <p class="note" id="limits">
-        <b>Read this before comparing clips.</b> A prompt with a cached
-        <b>reference bf16</b> vector is conditioned on that vector, and only those clips
-        are comparable with the <b>Reference (golden)</b> overlay. Any other prompt is
-        encoded <b>on this machine</b> by the local MLX text encoder — close to the
-        reference, but a different artifact, so its motion is a <b>different, equally
-        valid sample</b> and is <b>not</b> aligned with the golden clip. Encoding happens
-        once per prompt and is then cached under
-        <code>artifacts/embeddings/&lt;encoder-id&gt;/&lt;prompt-hash&gt;.npy</code>. If the
-        encoder is missing or refuses, the request fails by name
-        (<code>local_encoder_unavailable</code> / <code>local_encoder_failed</code>) — the
-        server never substitutes another prompt's vector. Post-processing is not built, so
-        the clip carries foot skating, and the MLX RNG is not CUDA's Philox stream. See
-        <code>docs/VIEWER.md</code>.
-      </p>
+      <!--
+        Advanced. Closed by default; the state is remembered in localStorage. The
+        ids below are the ones the page logic drives -- the HUD moved in here
+        rather than being deleted, so "which vector is this clip conditioned on"
+        is still on the page, one disclosure away.
+      -->
+      <details id="advanced" class="advanced">
+        <summary>高级 / Advanced</summary>
+
+        <h2>Prompt</h2>
+        <div class="field">
+          <label for="prompt-select">Cached text embeddings</label>
+          <select id="prompt-select" aria-label="Cached text embedding"></select>
+          <p class="help" id="prompt-help">—</p>
+        </div>
+        <p class="help" id="prompt-text-help">—</p>
+
+        <h2>Sample</h2>
+        <div class="field">
+          <label for="seed-input">Seed</label>
+          <div class="row">
+            <input id="seed-input" type="number" step="1" value="0" aria-label="Seed">
+            <button id="seed-next" class="ghost" type="button">Next</button>
+          </div>
+          <p class="help">Only affects the <b>random</b> noise. With golden noise the
+            reference's own x<sub>T</sub> is injected and the seed changes nothing.</p>
+        </div>
+
+        <div class="field">
+          <label for="duration-input">Duration (seconds)</label>
+          <div class="row">
+            <input id="duration-input" type="number" step="1" min="2" value="2"
+                   aria-label="Duration in seconds">
+            <button id="duration-step" class="ghost" type="button">+1 step</button>
+          </div>
+          <p class="help" id="duration-help">—</p>
+        </div>
+
+        <div class="field">
+          <label for="noise-select">Initial noise (x<sub>T</sub>)</label>
+          <select id="noise-select" aria-label="Initial noise source">
+            <option value="random" selected>random — MLX RNG (default)</option>
+            <option value="golden">golden — the reference's own x_T</option>
+          </select>
+          <p class="help" id="noise-help">—</p>
+        </div>
+
+        <div class="buttons">
+          <button id="generate" class="primary" type="button">Generate &amp; play</button>
+          <button id="reload" type="button">Reload</button>
+        </div>
+
+        <h2>Playback</h2>
+        <div class="transport">
+          <button id="play-pause" class="ghost" type="button" aria-pressed="true">Pause</button>
+          <output id="frame-label">frame 0 / 0</output>
+          <input id="frame-slider" type="range" min="0" max="0" step="1" value="0"
+                 aria-label="Scrub to frame">
+        </div>
+        <div class="buttons">
+          <button id="reset-camera" class="ghost" type="button">Reset camera</button>
+          <button id="fit-camera" class="ghost" type="button">Fit clip</button>
+        </div>
+
+        <h2>Reference</h2>
+        <label class="checkline"><input id="golden-toggle" type="checkbox">
+          Reference (golden)</label>
+        <p class="help" id="golden-help">—</p>
+        <label class="checkline"><input id="contacts-toggle" type="checkbox" checked>
+          Foot-contact markers</label>
+        <label class="checkline"><input id="trail-toggle" type="checkbox" checked>
+          Ground trail</label>
+
+        <h2>Continuity</h2>
+        <p class="help" id="continuation-help">—</p>
+
+        <h2>HUD</h2>
+        <div id="hud" aria-live="off">
+          <span class="hud-key">clip</span><span class="hud-value" id="hud-clip">—</span>
+          <span class="hud-key">model</span><span class="hud-value" id="hud-model">—</span>
+          <span class="hud-key">frames</span><span class="hud-value" id="hud-frames">—</span>
+          <span class="hud-key">generate</span><span class="hud-value" id="hud-generate">—</span>
+          <span class="hud-key">playback</span><span class="hud-value" id="hud-fps">—</span>
+          <span class="hud-key">noise</span><span class="hud-value" id="hud-noise">—</span>
+          <span class="hud-key">vector</span><span class="hud-value" id="hud-source">—</span>
+          <span class="hud-key">encode</span><span class="hud-value" id="hud-encode">—</span>
+          <span class="hud-key">embedding</span><span class="hud-value" id="hud-embedding">—</span>
+        </div>
+
+        <h2>This run</h2>
+        <dl id="stats">
+          <div><dt>Model</dt><dd id="stat-model">—</dd></div>
+          <div><dt>Device</dt><dd id="stat-device">—</dd></div>
+          <div><dt>Parameters</dt><dd id="stat-params">—</dd></div>
+          <div><dt>Cold start (weights)</dt><dd id="stat-coldstart">—</dd></div>
+          <div><dt>Generate (last)</dt><dd id="stat-generate">—</dd></div>
+          <div><dt>Frames</dt><dd id="stat-frames">—</dd></div>
+          <div><dt>Autoregressive windows</dt><dd id="stat-windows">—</dd></div>
+          <div><dt>Playback fps</dt><dd id="stat-fps">—</dd></div>
+          <div><dt>Clip fps (model)</dt><dd id="stat-clipfps">—</dd></div>
+          <div><dt>Injected x<sub>T</sub></dt><dd id="stat-noise">—</dd></div>
+          <div><dt>Embedding sha256</dt><dd id="stat-embedding">—</dd></div>
+          <div><dt>Prompt hash</dt><dd id="stat-prompt">—</dd></div>
+          <div><dt>Vector source</dt><dd id="stat-source">—</dd></div>
+          <div><dt>Quantization</dt><dd id="stat-quantization">—</dd></div>
+          <div><dt>Encode (local)</dt><dd id="stat-encode">—</dd></div>
+          <div><dt>Total (server)</dt><dd id="stat-total">—</dd></div>
+          <div><dt>Local encoder</dt><dd id="stat-encoder">—</dd></div>
+          <div><dt>Endpoint</dt><dd id="stat-endpoint">—</dd></div>
+        </dl>
+
+        <p class="note" id="limits">
+          <b>Read this before comparing clips.</b> A prompt with a cached
+          <b>reference bf16</b> vector is conditioned on that vector, and only those clips
+          are comparable with the <b>Reference (golden)</b> overlay. Any other prompt is
+          encoded <b>on this machine</b> by the local MLX text encoder — close to the
+          reference, but a different artifact, so its motion is a <b>different, equally
+          valid sample</b> and is <b>not</b> aligned with the golden clip. Encoding happens
+          once per prompt and is then cached under
+          <code>artifacts/embeddings/&lt;encoder-id&gt;/&lt;prompt-hash&gt;.npy</code>. If the
+          encoder is missing or refuses, the request fails by name
+          (<code>local_encoder_unavailable</code> / <code>local_encoder_failed</code>) — the
+          server never substitutes another prompt's vector. Post-processing is not built, so
+          the clip carries foot skating, and the MLX RNG is not CUDA's Philox stream. See
+          <code>docs/VIEWER.md</code>.
+        </p>
+
+        <p class="note" id="continuity-note">
+          <b>Continuity.</b> A new prompt does <b>not</b> reset the character. The next clip
+          is generated from the clip on screen: its trailing frames are the window's clean
+          history, and the accumulated root translation and the heading are carried over, so
+          frame 0 of the new clip is the frame you were already looking at. Position and
+          velocity are continuous across that seam; <b>acceleration is not</b> (the 4-frame
+          conditioning window has no acceleration channel). The reference's own
+          <code>x_T</code> only reproduces the reference from its own beginning, so a
+          continuation always uses the local random noise and says so. A forced reset is
+          available over the API (<code>"reset": true</code>) and is the negative control the
+          continuity numbers are measured against.
+        </p>
+      </details>
     </aside>
   </main>
   <script type="module" src="app.js"></script>

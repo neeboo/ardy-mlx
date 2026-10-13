@@ -587,3 +587,341 @@ def test_weight_store_total_elements_does_not_mark_tensors_used():
     store = WeightStore({"a.weight": mx.zeros((2, 3)), "a.bias": mx.zeros((2,))})
     assert store.total_elements() == 8
     assert store.unused() == ["a.bias", "a.weight"]
+
+
+# --------------------------------------------------------------------------- #
+# continuation: a new prompt is not a reset
+# --------------------------------------------------------------------------- #
+# The model-backed half of this (a real clip generated *from* the clip on screen)
+# lives in ``tests/test_viewer_service.py`` and needs the checkpoint. What is tested
+# here is everything around it: which state is carried, what the payload promises
+# about the seam, when an explicit ``reset`` wins, and that a seam whose carried
+# state did not survive is refused rather than served.
+
+
+class _MotionRepStub:
+    """Only what the viewer's bookkeeping asks of ``MotionRep``.
+
+    Identity, because these tests look at *whether* the state was carried and in
+    what shape -- not at metres. The real normalise/unnormalise pair is affine and
+    per channel; replacing it with identity keeps the arithmetic under test (the
+    re-centring, the anchor, the seam check) exactly as it is in production.
+    """
+
+    @staticmethod
+    def normalize(frames):
+        return frames
+
+    @staticmethod
+    def unnormalize(frames):
+        return frames
+
+
+class _BatchStub:
+    """A stand-in ``ArdyBatch``: the capability check, nothing else."""
+
+    denoiser = object()
+    tokenizer = object()
+    motion_rep = _MotionRepStub()
+    gen_horizon_len = 40
+
+
+class ContinuationRunner(FakeRunner):
+    """A ``FakeRunner`` that reports a continuation path, without a model."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.batch = _BatchStub()
+
+
+@pytest.fixture()
+def continuation_app(embeddings_dir):
+    """A real ``ViewerApp`` whose runner can be continued from (see the stub above).
+
+    Two prompts are on disk, because "a new prompt continues the clip on screen" is
+    only meaningful with a *second* prompt to ask for.
+    """
+    import json
+
+    digest = pipeline.prompt_hash(WRONG_PROMPT)
+    rng = np.random.default_rng(11)
+    np.save(embeddings_dir / f"{digest}.npy", rng.standard_normal((1, 1, 4096)).astype(np.float32))
+    (embeddings_dir / f"{digest}.json").write_text(
+        json.dumps({"prompt": WRONG_PROMPT, "prompt_hash": digest}), encoding="utf-8"
+    )
+    application = ardy_viewer.ViewerApp(embeddings_dir=embeddings_dir)
+    application.embeddings.refresh()
+    application.runner = ContinuationRunner()
+    application.error = None
+    application.boot_seconds = 0.01
+    return application
+
+
+def _decode(payload, key, shape):
+    return np.frombuffer(base64.b64decode(payload[key]), dtype="<f4").reshape(shape)
+
+
+def _stub_continuation(monkeypatch, gap_mm=0.0):
+    """Replace the model-backed continuation with the data contract it must keep.
+
+    The stub returns exactly what the real one returns -- a clip that opens on the
+    previous clip's own last frame, in the space the window loop hands back and
+    forth, plus that loop's run info -- so the assertions below are about the
+    viewer's promises (the seam, the state, the reset) rather than about a model.
+    """
+    import mlx.core as mx
+
+    def fake(self, *, runner, embedding, previous, frames_wanted, num_steps, weights, seed, noise_fn):
+        assert previous is not None, "a continuation without a previous clip is a bug"
+        carried = np.asarray(previous.frames[:, -1:, :], dtype=np.float32)
+        new = np.asarray(synthetic_frames(frames_wanted - 1, seed=int(seed or 0)), dtype=np.float32)
+        new = new[None, ...].copy()
+        if gap_mm:
+            # The failure the seam check exists for: the new motion does not start
+            # where the clip on screen ended.
+            new[..., 2] += float(gap_mm) / 1000.0
+        served = np.concatenate([carried, new], axis=1)
+        return (
+            mx.array(served),
+            served,
+            {"offsets": [0, frames_wanted], "history_frames": int(previous.frames.shape[1])},
+        )
+
+    monkeypatch.setattr(ardy_viewer.ViewerApp, "_generate_continued", fake)
+
+
+def test_the_first_clip_has_nothing_to_continue_from(continuation_app):
+    payload = continuation_app.plan(prompt=PROMPT, duration=2.0, noise="random")
+    block = payload["continuation"]
+    assert block["requested"] is True, "the page sends no reset, so a continue was asked for"
+    assert block["applied"] is False
+    assert block["reason"] == "no_previous_clip"
+    assert block["seam"] is None, "no continuation, so no seam to report"
+    # ... and the clip that was drawn is now what the next request starts from.
+    assert continuation_app.continuation is not None
+    assert continuation_app.continuation.frames.shape == (1, 40, 330)
+    assert continuation_app.continuation.prompt_hash == PROMPT_HASH
+    assert continuation_app.continuation.roots.shape == (3,)
+
+
+def test_a_new_prompt_continues_the_clip_on_screen(continuation_app, monkeypatch):
+    _stub_continuation(monkeypatch)
+    first = continuation_app.plan(prompt=PROMPT, duration=2.0, noise="random")
+    second = continuation_app.plan(prompt=WRONG_PROMPT, duration=2.0, noise="random")
+
+    block = second["continuation"]
+    assert block["applied"] is True
+    assert block["reason"] is None
+    assert block["history_frames"] == 40
+    assert block["previous"]["prompt_hash"] == PROMPT_HASH
+
+    # The criterion, on the frames the page will draw: frame 0 of the new clip *is*
+    # the last frame of the previous one, joint for joint.
+    previous = _decode(first, "posed_joints_b64", (first["frames"], first["joints"], 3))
+    current = _decode(second, "posed_joints_b64", (second["frames"], second["joints"], 3))
+    assert float(np.abs(current[0] - previous[-1]).max()) == 0.0
+    assert block["seam"]["carried_frame_joint_mm"] == 0.0
+    assert block["seam"]["carried_frame_root_mm"] == 0.0
+    # The model's own next step is one frame further along, and is reported, not
+    # hidden: the reader can check it against the clip's own frame-to-frame motion.
+    assert block["seam"]["model_first_joint_mm"] >= 0.0
+    first_roots = _decode(first, "root_positions_b64", (first["frames"], 3))
+    assert block["seam"]["previous_last_root"] == [
+        float(v) for v in first_roots[-1]
+    ], "the seam is quoted against the frame the page was showing"
+    assert second["frames"] == 40, "the carried frame does not lengthen the clip"
+    assert second["duration_s"] == pytest.approx(2.0)
+
+
+def test_negative_control_reset_does_not_continue(continuation_app, monkeypatch):
+    _stub_continuation(monkeypatch)
+    first = continuation_app.plan(prompt=PROMPT, duration=2.0, noise="random")
+    second = continuation_app.plan(prompt=WRONG_PROMPT, duration=2.0, noise="random", reset=True)
+
+    block = second["continuation"]
+    assert block["requested"] is False
+    assert block["applied"] is False
+    assert block["reason"] == "reset_requested"
+    assert block["seam"] is None
+    # The jump the negative control exists for: a reset does *not* open on the frame
+    # that was on screen.
+    previous = _decode(first, "posed_joints_b64", (first["frames"], first["joints"], 3))
+    current = _decode(second, "posed_joints_b64", (second["frames"], second["joints"], 3))
+    assert float(np.abs(current[0] - previous[-1]).max()) > 0.0
+    # ... and the state moves on to the clip that was actually drawn.
+    assert continuation_app.continuation.prompt_hash == pipeline.prompt_hash(WRONG_PROMPT)
+
+
+def test_golden_noise_falls_back_by_name_inside_a_continuation(continuation_app, monkeypatch):
+    _stub_continuation(monkeypatch)
+    continuation_app.plan(prompt=PROMPT, duration=2.0, noise="random")
+    payload = continuation_app.plan(prompt=WRONG_PROMPT, duration=2.0, noise="golden")
+    assert payload["continuation"]["applied"] is True
+    # 2.0 s *does* have a recorded x_T, so this is the continuation's own rule and
+    # not the duration rule: golden noise reproduces the reference only from the
+    # reference's own beginning.
+    assert payload["noise"]["mode"] == "random"
+    assert payload["noise"]["fallback_from"] == "golden"
+    assert payload["noise"]["fallback_reason"] == ardy_viewer.CONTINUATION_NOISE_FALLBACK
+    assert payload["noise"]["requested"] == "golden"
+
+
+def test_negative_control_golden_noise_still_works_on_a_fresh_clip(app):
+    """The fallback above is about continuations, not a blanket downgrade."""
+    application = app
+    application.runner = FakeRunner()          # no batch: every plan is a fresh one
+    payload = application.plan(prompt=PROMPT, duration=2.0, noise="golden")
+    assert payload["noise"]["mode"] == "golden"
+    assert "fallback_from" not in payload["noise"]
+    assert payload["continuation"]["applied"] is False
+    assert payload["continuation"]["reason"] == "no_previous_clip"
+
+
+def test_the_capability_check_needs_the_batch_path(continuation_app, monkeypatch):
+    assert continuation_app.continuation_supported() is True
+    _stub_continuation(monkeypatch)
+    continuation_app.plan(prompt=PROMPT, duration=2.0, noise="random")
+    assert continuation_app.continuation is not None, "a clip is on screen"
+
+    # The runner loses the continuation path (an older server, a test double). The
+    # state is still there, so the *capability* is what the payload names -- not
+    # "there was nothing to continue from".
+    continuation_app.runner = FakeRunner()
+    assert continuation_app.continuation_supported() is False
+    payload = continuation_app.plan(prompt=WRONG_PROMPT, duration=2.0, noise="random")
+    assert payload["continuation"]["applied"] is False
+    assert payload["continuation"]["reason"] == "runner_has_no_continuation_path"
+    # ... and a first plan on a runner with no batch says the honest other thing.
+    fresh = ardy_viewer.ViewerApp(embeddings_dir=continuation_app.embeddings.directory)
+    fresh.embeddings.refresh()
+    fresh.runner = FakeRunner()
+    fresh.error = None
+    assert fresh.plan(prompt=PROMPT, duration=2.0, noise="random")["continuation"]["reason"] == (
+        "no_previous_clip"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# the seam invariant: a lost carry-over is refused, not served
+# --------------------------------------------------------------------------- #
+class _SamplerStub:
+    """The loop's result for one continuation, with the root wherever the test says."""
+
+    def __init__(self, frames):
+        self._frames = frames
+        self.offsets = [0, 40]
+
+    def run(self):
+        return self
+
+    def translated(self):
+        return self._frames
+
+
+def _continuation_state(viewer, frames=None):
+    frames = np.asarray(
+        frames if frames is not None else synthetic_frames(40, seed=3)[None, ...],
+        dtype=np.float32,
+    )
+    return viewer.ContinuationState(
+        frames=frames,
+        joints=np.zeros((27, 3), dtype=np.float32),
+        roots=np.array([0.0, 0.9, 1.2], dtype=np.float32),
+        contacts=np.zeros(4, dtype=np.uint8),
+        prompt_hash=PROMPT_HASH,
+        prompt_text=PROMPT,
+        model="ARDY-Core-RP-20FPS-Horizon40",
+    )
+
+
+def _patch_continuation_loop(monkeypatch, first_frame_offset_m):
+    """Stub B's loop so the *viewer's* carry-over arithmetic is what runs."""
+    import types
+
+    import mlx.core as mx
+    from ardy_mlx.model import ardy as ardy_model
+    from ardy_mlx.sampling import autoregressive
+
+    frames = np.asarray(synthetic_frames(40, seed=5), dtype=np.float32)[None, ...].copy()
+    frames[0, :, 0] = 0.0
+    frames[0, :, 2] = 0.0
+    frames[0, 1:, 2] = np.linspace(0.0, 0.5, 39, dtype=np.float32)
+    frames[0, 0, 2] = float(first_frame_offset_m)   # where the new motion claims to start
+
+    monkeypatch.setattr(ardy_model, "make_step_fn", lambda *a, **k: (lambda request: None))
+    monkeypatch.setattr(
+        autoregressive, "ArdyAutoregressiveConfig", lambda **kwargs: types.SimpleNamespace(**kwargs)
+    )
+    monkeypatch.setattr(
+        autoregressive, "ArdySampler",
+        lambda config, step_fn, initial_history_frames=None: _SamplerStub(mx.array(frames)),
+    )
+    return frames
+
+
+def test_the_carried_state_really_reaches_the_new_clip(continuation_app, monkeypatch):
+    """The positive half: with the root where it should be, the seam is exact."""
+    _patch_continuation_loop(monkeypatch, 0.0)
+    previous = _continuation_state(ardy_viewer)
+    generated, served_norm, run_info = continuation_app._generate_continued(
+        runner=continuation_app.runner,
+        embedding=type("E", (), {"embeddings": None, "mask": None})(),
+        previous=previous,
+        frames_wanted=40,
+        num_steps=10,
+        weights=(2.0, 2.0),
+        seed=0,
+        noise_fn=None,
+    )
+    assert run_info == {"offsets": [0, 40], "history_frames": 40}
+    assert np.asarray(served_norm).shape == (1, 40, 330)
+    assert np.array_equal(np.asarray(served_norm)[:, 0, :], previous.frames[:, -1, :])
+    import mlx.core as mx
+
+    assert np.asarray(mx.array(generated)).shape == (1, 40, 330)
+
+
+def test_negative_control_a_lost_carry_over_is_refused(continuation_app, monkeypatch):
+    """The failure mode: the new motion does not start where the clip on screen ended.
+
+    A metre in one frame is not a motion, it is a bug -- a wrong anchor, a mixed
+    unit, a dropped translation -- and it must not reach the page as a clip.
+    """
+    _patch_continuation_loop(monkeypatch, 1.0)
+    previous = _continuation_state(ardy_viewer)
+    with pytest.raises(ardy_viewer.ViewerError) as excinfo:
+        continuation_app._generate_continued(
+            runner=continuation_app.runner,
+            embedding=type("E", (), {"embeddings": None, "mask": None})(),
+            previous=previous,
+            frames_wanted=40,
+            num_steps=10,
+            weights=(2.0, 2.0),
+            seed=0,
+            noise_fn=None,
+        )
+    assert excinfo.value.name == "continuation_seam_too_far"
+    assert excinfo.value.status == 500
+    assert "mm" in excinfo.value.message
+    # The limit is a *seam* budget: a quarter of a metre in 50 ms (5 m/s), well
+    # above the ~60 mm/frame these prompts produce.
+    assert 0.05 <= ardy_viewer.CONTINUATION_SEAM_LIMIT_M <= 0.5
+
+
+def test_the_history_window_is_capped_at_the_checkpoint_s_budget(continuation_app, monkeypatch):
+    """A longer clip does not become a longer context: the crop budget wins."""
+    assert ardy_viewer.continuation_history_frames(CORE) == CORE.default_history_frames == 160
+    _patch_continuation_loop(monkeypatch, 0.0)
+    long_state = _continuation_state(ardy_viewer, frames=synthetic_frames(240, seed=1)[None, ...])
+    _, served_norm, run_info = continuation_app._generate_continued(
+        runner=continuation_app.runner,
+        embedding=type("E", (), {"embeddings": None, "mask": None})(),
+        previous=long_state,
+        frames_wanted=40,
+        num_steps=10,
+        weights=(2.0, 2.0),
+        seed=0,
+        noise_fn=None,
+    )
+    assert run_info["history_frames"] == 160
+    assert np.asarray(served_norm).shape == (1, 40, 330)

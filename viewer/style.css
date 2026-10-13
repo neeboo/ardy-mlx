@@ -1,9 +1,13 @@
 /* viewer/style.css -- ardy-mlx browser viewer.
  *
  * Written for this repository. The layout follows the MotionBricks MLX viewer's
- * page shape (a full-bleed viewport with a fixed control rail on the right,
- * dark palette, HUD overlaid on the canvas), which is a look, not code: no
- * rule below is copied from it. three.js is vendored, not styled here.
+ * page shape (a full-bleed viewport beside a fixed rail, dark palette), which is a
+ * look, not code: no rule below is copied from it. three.js is vendored, not
+ * styled here.
+ *
+ * The rail is a conversation, not a control panel: the picture, the chat, the
+ * input box and one status line are the whole default surface, and everything
+ * else is inside the collapsed <details> at the bottom.
  */
 
 :root {
@@ -18,6 +22,8 @@
   --warn: #ffad9b;
   --golden: #f4b860;
   --mine: #55efc4;
+  --user: #1d3b52;
+  --user-line: #3f6d8f;
   background: var(--bg);
   color: var(--ink);
 }
@@ -28,7 +34,7 @@ html, body, main { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 
 main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 30vw);
   grid-template-rows: minmax(0, 1fr);
 }
 
@@ -40,102 +46,180 @@ main {
 }
 #viewport canvas { display: block; width: 100%; height: 100%; }
 
-/* ---------------------------------------------------------------- bubble */
-/*
- * What the viewer understood, over the canvas. The `data-state` attribute is the
- * whole visual language, and it is set from the server's own router state -- so a
- * degraded judgment (no semantic parse, falling back to the vector) cannot be drawn
- * the same way as a real one. That is the point of the colours below.
- */
-.bubble {
-  position: absolute;
-  left: 14px;
-  bottom: 14px;
-  max-width: min(64ch, 68%);
+/* ------------------------------------------------------------- chat rail */
+#chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: -18px 0 60px #0008;
+}
+
+.chat-head { padding: 22px 20px 10px; border-bottom: 1px solid #1c2532; }
+.eyebrow { margin: 0 0 6px; color: var(--accent); letter-spacing: .18em; font-size: 10.5px; font-weight: 750; }
+h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: -.035em; }
+
+/* The one status line: connection, route, and what generation is doing. */
+.statusbar {
+  margin: 0;
+  color: var(--accent);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+#status[data-error="true"] { color: var(--warn); font-weight: 650; }
+
+/* ------------------------------------------------------------ chat log */
+.chat-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 16px 16px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-msg {
+  max-width: 88%;
   padding: 9px 13px;
   border: 1px solid var(--line);
   border-left-width: 3px;
-  border-radius: 10px;
+  border-radius: 12px;
   background: rgba(8, 11, 16, .88);
-  backdrop-filter: blur(6px);
   font-size: 12.5px;
-  line-height: 1.4;
+  line-height: 1.45;
 }
-.bubble[data-state="idle"] { display: none; }
-.bubble .bubble-text { margin: 0; color: var(--ink); }
-.bubble .bubble-meta {
-  margin: 3px 0 0;
+.chat-msg .chat-text { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.chat-msg .chat-meta:empty { display: none; }
+.chat-msg .chat-meta {
+  margin: 4px 0 0;
   color: #778599;
   font-size: 10.5px;
   letter-spacing: .02em;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.bubble[data-state="thinking"] { border-left-color: #4d6b8a; }
-.bubble[data-state="thinking"] .bubble-text { color: var(--dim); }
-.bubble[data-state="routed"] { border-left-color: var(--accent); }
-.bubble[data-state="hold"] { border-left-color: var(--golden); }
-.bubble[data-state="hold"] .bubble-text { color: #f6d9a6; }
-.bubble[data-state="degraded"] { border-left-color: var(--warn); }
-.bubble[data-state="degraded"] .bubble-text { color: var(--warn); }
-.bubble[data-state="error"] { border-left-color: #ff7a6b; }
-.bubble[data-state="error"] .bubble-text { color: #ffb3a6; }
-.bubble[data-state="plain"] { border-left-color: #46536a; }
 
-/* ------------------------------------------------------------------ HUD */
-#hud {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 3px 12px;
-  max-width: min(420px, 60%);
-  padding: 12px 14px;
-  border: 1px solid #263041;
-  border-radius: 10px;
-  background: rgba(8, 11, 16, .78);
-  backdrop-filter: blur(6px);
-  font-size: 11.5px;
-  line-height: 1.35;
-  pointer-events: none;
+/* What the reader said: the right-hand side, its own colour. */
+.chat-msg--user {
+  align-self: flex-end;
+  border-color: var(--user-line);
+  border-left-color: var(--user-line);
+  border-right-width: 3px;
+  border-right-color: var(--user-line);
+  background: var(--user);
+  border-bottom-right-radius: 3px;
 }
-#hud .hud-key { color: #6f7d91; letter-spacing: .06em; text-transform: uppercase; font-size: 10px; padding-top: 1px; }
-#hud .hud-value { color: #e3ebf5; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-#hud .hud-value.is-golden { color: var(--golden); }
-#hud .hud-value.is-mine { color: var(--mine); }
-#hud .hud-value.is-warn { color: var(--warn); }
+.chat-msg--user .chat-text { color: #e8f4ff; }
 
-/* -------------------------------------------------------------- sidebar */
-aside {
-  min-width: 0;
-  min-height: 0;
+/* What the character decided / did: the left-hand side. */
+.chat-msg--character {
+  align-self: flex-start;
+  border-bottom-left-radius: 3px;
+}
+.chat-msg--system {
+  align-self: center;
+  max-width: 94%;
+  border-style: dashed;
+  border-left-width: 1px;
+  border-color: #33404f;
+  background: transparent;
+  color: #8d9aad;
+  font-size: 11px;
+  text-align: center;
+}
+.chat-msg--system .chat-text { color: #8d9aad; }
+
+/*
+ * The judgement's own state drives the colour, exactly as it did over the canvas:
+ * a degraded reading (no semantic parse) must not be drawn like a real one.
+ */
+.chat-msg[data-state="thinking"] { border-left-color: #4d6b8a; }
+.chat-msg[data-state="thinking"] .chat-text { color: var(--dim); }
+.chat-msg[data-state="routed"] { border-left-color: var(--accent); }
+.chat-msg[data-state="hold"] { border-left-color: var(--golden); }
+.chat-msg[data-state="hold"] .chat-text { color: #f6d9a6; }
+.chat-msg[data-state="degraded"] { border-left-color: var(--warn); }
+.chat-msg[data-state="degraded"] .chat-text { color: var(--warn); }
+.chat-msg[data-state="error"] { border-left-color: #ff7a6b; }
+.chat-msg[data-state="error"] .chat-text { color: #ffb3a6; }
+.chat-msg[data-state="plain"] { border-left-color: #46536a; }
+
+/* ------------------------------------------------------------ composer */
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 12px 16px 6px;
+  border-top: 1px solid #1c2532;
+  background: var(--panel);
+}
+.composer input[type="text"] {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #343d4d;
+  border-radius: 10px;
+  background: #171c26;
+  color: #f2f6fb;
+  font: inherit;
+  font-size: 13px;
+}
+.composer input[type="text"]:focus { outline: 1px solid #3a7867; border-color: #3a7867; }
+
+#error-box {
+  margin: 6px 16px 10px;
+  padding: 9px 11px;
+  border: 1px solid #7a3b30;
+  border-radius: 8px;
+  background: #24130f;
+  color: #ffcabd;
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+#error-box code { color: #ffd9a0; font-size: 11px; }
+
+/* ------------------------------------------------------------ advanced */
+.advanced {
+  flex: 0 0 auto;
+  max-height: 46dvh;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  padding: 28px 22px 40px;
-  border-left: 1px solid var(--line);
-  background: var(--panel);
-  box-shadow: -18px 0 60px #0008;
+  border-top: 1px solid var(--line);
+  padding: 0 0 18px;
 }
+.advanced > summary {
+  cursor: pointer;
+  padding: 11px 20px;
+  color: #9aa8bb;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  user-select: none;
+}
+.advanced > summary:hover { color: var(--ink); }
+.advanced[open] > summary { color: var(--accent); }
+.advanced > *:not(summary) { margin-left: 20px; margin-right: 20px; }
 
-.eyebrow { margin: 0 0 8px; color: var(--accent); letter-spacing: .18em; font-size: 10.5px; font-weight: 750; }
-h1 { margin: 0 0 10px; font-size: 25px; letter-spacing: -.035em; }
-h2 { margin: 26px 0 10px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: #8c9aad; }
-.lede { margin: 0 0 16px; color: var(--dim); line-height: 1.45; font-size: 13px; }
+h2 { margin: 20px 0 9px; font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: #8c9aad; }
 
-.field { margin-bottom: 14px; }
+.field { margin-bottom: 12px; }
 label { display: block; margin-bottom: 6px; color: #c8d1dd; font-size: 11.5px; font-weight: 700; }
 select, input[type="number"] {
   width: 100%;
-  padding: 10px;
+  padding: 9px;
   border: 1px solid #343d4d;
   border-radius: 8px;
   background: #171c26;
   color: #f2f6fb;
   font: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 select:disabled, input:disabled { opacity: .5; cursor: not-allowed; }
 .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
@@ -172,20 +256,24 @@ label .hint { color: #5c6a7d; font-weight: 500; text-transform: none; letter-spa
 #stats dd.is-golden { color: var(--golden); }
 #stats dd.is-mine { color: var(--mine); }
 
-#status { min-height: 1.4em; margin: 14px 0 0; font-size: 12px; color: var(--accent); }
-#status[data-error="true"] { color: var(--warn); font-weight: 650; }
-#error-box {
-  margin-top: 10px;
+/* --------------------------------------------------------------- HUD */
+/* Moved off the canvas on purpose: it is the same table, one disclosure down. */
+#hud {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 12px;
   padding: 10px 12px;
-  border: 1px solid #7a3b30;
-  border-radius: 8px;
-  background: #24130f;
-  color: #ffcabd;
+  border: 1px solid #263041;
+  border-radius: 10px;
+  background: rgba(8, 11, 16, .6);
   font-size: 11.5px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
-#error-box code { color: #ffd9a0; font-size: 11px; }
+#hud .hud-key { color: #6f7d91; letter-spacing: .06em; text-transform: uppercase; font-size: 10px; padding-top: 1px; }
+#hud .hud-value { color: #e3ebf5; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+#hud .hud-value.is-golden { color: var(--golden); }
+#hud .hud-value.is-mine { color: var(--mine); }
+#hud .hud-value.is-warn { color: var(--warn); }
 
 /* --------------------------------------------------------- transport */
 .transport { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 10px; align-items: center; margin-top: 8px; }
@@ -198,8 +286,8 @@ dt { color: #778599; font-size: 11.5px; }
 dd { margin: 0; text-align: right; color: #dce4ee; font-size: 11.5px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 .note {
-  margin-top: 22px;
-  padding: 12px 14px;
+  margin-top: 16px;
+  padding: 11px 13px;
   border: 1px solid #3d3524;
   border-radius: 10px;
   background: #1b1710;
@@ -211,7 +299,7 @@ dd { margin: 0; text-align: right; color: #dce4ee; font-size: 11.5px; font-varia
 .note code { color: #ffe1a8; font-size: 11px; }
 
 @media (max-width: 860px) {
-  main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 56dvh); }
-  aside { padding: 16px 18px 28px; border-left: 0; border-top: 1px solid var(--line); }
-  #hud { max-width: 92%; font-size: 10.5px; }
+  main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 62dvh); }
+  #chat { border-left: 0; border-top: 1px solid var(--line); }
+  .advanced { max-height: none; }
 }

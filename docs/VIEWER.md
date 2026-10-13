@@ -146,6 +146,18 @@ Three routes plus static files. Every failure carries a stable machine-readable
   ],
   "limits": {"text_encoder": "...", "postprocess": "...", "rng": "...", "auth": "...", "threading": "..."},
   "golden_references": [{"duration_s": 2.0, "path": "artifacts/golden-run", "available": true}],
+  "golden_noise": [                     // which durations have a *recorded x_T* -- a
+    {"duration_s": 2.0, "available": true, "windows": 1,   // different fact from which
+     "source_files": ["artifacts/golden-run/raw/denoise_step0_x_in.npy"]},  // have a clip
+    {"duration_s": 4.0, "available": true, "windows": 2,
+     "source_files": ["artifacts/golden-run-4s/raw/randn_0.npy",
+                      "artifacts/golden-run-4s/raw/randn_1.npy"]}],
+  "continuation": {                     // §10. What the next plan without reset starts from
+    "supported": true,                  // this runner has a batch path to continue from
+    "active": true,                     // a clip is on screen
+    "history_frames": 160,              // the checkpoint's own crop budget
+    "frames": 40, "prompt_hash": "e9cf8141cac79f35", "prompt_text": "A person walks forward.",
+    "note": "a prompt change continues the clip that is on screen: …"},
   "router": {                           // §9. The same six names a plan carries.
     "enabled": true, "available": true,
     "state": "ok",                      // "router_disabled" | "router_unavailable" | "ok"
@@ -183,14 +195,21 @@ and `disabled`. No weights are loaded to answer a `GET`.
 {"prompt": "A person waves.",    // any prompt text, or a cached prompt hash
  "seed": 0,                       // integer, or omitted
  "duration": 2.0,                 // seconds; must be a whole number of horizons
- "noise": "golden",               // "golden" (default) or "random"
+ "noise": "random",               // "random" (what the page sends) or "golden"
  "diffusion_steps": 10,           // optional, 1..num_base_steps
  "cfg_weight": [2.0, 2.0],        // optional; 1 value = text only, constraint 0.0
- "include_frames": false}         // optional; adds the raw 330-wide frames
+ "include_frames": false,         // optional; adds the raw 330-wide frames
+ "reset": false}                  // optional; **default false** -- see §10
 ```
 
 `GET /api/plan?prompt=&seed=&duration=&noise=` accepts the same parameters as query
 strings (no `cfg_weight` list). Body and query are merged, the body winning.
+
+**`reset` defaults to false**, so a request that arrives while a clip is on screen is
+generated *from* that clip: the previous clip's trailing frames are the window's clean
+history, and the accumulated root translation and the heading are carried over.
+`reset: true` throws that state away and samples from `x_T` — the negative control the
+continuity numbers in §10 are measured against. The page never sends it.
 
 Response:
 
@@ -229,8 +248,28 @@ Response:
                 "bits": null, "group_size": null,
                 "provenance": {"kind": "reference", "label": "reference bf16 (golden)",
                                "note": "the reference machine's own bf16 vector …"}},
-  "noise": {"mode": "golden", "seed": 0, "windows": 1,
-            "source_files": ["artifacts/golden-run/raw/denoise_step0_x_in.npy"], "note": "…"},
+  "noise": {"mode": "random", "seed": 0, "source_files": [], "note": "…"},
+            // inside a continuation, a requested "golden" carries three extra keys
+            // instead of being silently honoured: "requested": "golden",
+            // "fallback_from": "golden", "fallback_reason":
+            // "golden noise does not survive a continuation" (see §10)
+  "continuation": {                // §10. What this clip was generated from
+    "requested": true,             // the page sends no reset, so a continue was asked for
+    "applied": true,               // ... and it happened
+    "reason": null,                // when it did not: "no_previous_clip" | "reset_requested"
+                                   // | "model_changed" | "runner_has_no_continuation_path"
+    "history_frames": 40,          // frames of the previous clip used as clean history
+    "seam": {                      // measured on the frames being served, in millimetres
+      "carried_frame_joint_mm": 0.0,   // frame 0 *is* the previous clip's last frame
+      "carried_frame_root_mm": 0.0,
+      "model_first_joint_mm": 118.0,   // the model's own next step, one frame later
+      "model_first_root_mm": 55.1,
+      "previous_last_root": [-0.0068, 0.9395, 1.0956],
+      "model_first_root": [-0.0053, 0.9464, 1.1503]
+    },
+    "previous": {"prompt_hash": "e9cf8141cac79f35", "prompt_text": "A person walks forward."},
+    "note": "a prompt change continues the clip that is on screen: …"
+  },
   "postprocess": false,
   "reference": {"repo": "nv-tlabs/ardy", "commit": "693f74d"},
   "router": {                      // §9. What was read (or the name of why nothing was)
@@ -452,25 +491,76 @@ a vector — but it cannot make the sidecar true.
 
 ## 4. The page
 
-The right-hand panel is the whole control surface; the canvas is the clip.
+The canvas is on the left and the **conversation** is on the right. The default
+surface is four things and nothing else:
 
-* **Prompt (free text)** — type any prompt and press **Enter** (or `Go`). If the
+```
+┌───────────────────────────┬──────────────────────────────┐
+│                           │  ARDY / MLX · Motion viewer  │
+│                           │  ● 已连接 · 路由：… · 就绪     │   <- one status line
+│        3D canvas          ├──────────────────────────────┤
+│                           │        ┌───────────────────┐ │
+│                           │        │ A person jogs…    │ │   <- user bubble (right)
+│                           │        └───────────────────┘ │
+│                           │ ┌───────────────────┐        │
+│                           │ │ 用现有动作组合…    │        │   <- character bubble (left)
+│                           │ │ state=ok · route… │        │
+│                           │ └───────────────────┘        │
+│                           ├──────────────────────────────┤
+│                           │ [说一句动作，回车发送] [发送]  │   <- the only input
+│                           ├──────────────────────────────┤
+│                           │ ▸ 高级 / Advanced             │   <- collapsed by default
+└───────────────────────────┴──────────────────────────────┘
+```
+
+* **The conversation** — the reader's prompt is a bubble on the right; the character's
+  answer is a bubble on the left, carrying the JEV decision's own sentence
+  (`decision.message`) and, in small type, **what it was**: `state=…`, the route and
+  its probability, any `params={…}` the decision carries, and `source=…`. The pending
+  bubble (`读到了「…」`) appears the instant a trigger fires and is *replaced in place*
+  by the verdict, so one prompt never produces two answers on screen. A degraded
+  judgment keeps its own colour here exactly as it did over the canvas (§9.7), and the
+  log scrolls to the bottom on its own.
+* **The input box** — type and press **Enter**. There is no Generate button on the
+  default surface. Picking an entry from the cached-embedding dropdown **also sends
+  it** (the same rule: a parsed prompt is a prompt), which is the wiring change this
+  round added.
+* **The status line** — connection, router state and what generation is doing, in that
+  order, every time (`● 已连接 · 路由：Jev 语义路由（compose） · 生成中：…`). It is
+  written by one function, so a page that is not asking anyone cannot look like one
+  that is.
+* **高级 / Advanced** — a `<details>` holding everything else, **collapsed by default**
+  and remembered in `localStorage` (`ardy-viewer-advanced`). Inside it: the cached
+  embeddings dropdown, the prompt/encoder help, seed, duration, the noise source, the
+  old Generate/Reload buttons, the transport (pause, frame slider, camera), the
+  reference/contact/trail toggles, the continuity readout, the **HUD** (moved off the
+  canvas) and the **stats table**. Nothing was deleted; the canvas simply no longer
+  carries an overlay.
+
+The controls inside the drawer:
+
+* **Prompt (free text)** — type any prompt and press **Enter** (or `发送`). If the
   prompt has no vector, the server encodes it locally first; the status line says so
-  while it happens and the HUD shows how long it took. The label under the box comes
-  from `/api/health`'s `encoder` block, so it says what precision is in use — or, when
-  the encoder is missing, that only the cached prompts can run.
+  while it happens and the HUD shows how long it took. The help line under the box
+  comes from `/api/health`'s `encoder` block, so it says what precision is in use —
+  or, when the encoder is missing, that only the cached prompts can run.
 * **Cached text embeddings (dropdown)** — every vector on disk from
   `/api/health.embeddings`, each labelled **`reference bf16`** or **`local MLX 4-bit`**,
   with the full `encoder_id` and quantization in its tooltip. Picking one clears the
-  text box: there should never be two answers to "which prompt is being generated?".
-  A prompt with a reference vector is listed (and used) as the reference even when a
-  local vector for it also exists.
+  text box (there should never be two answers to "which prompt is being generated?")
+  and sends it immediately.
 * **Seed** — used only by `random` noise. With `golden` the reference `x_T` is
   injected and the seed changes nothing (the help text says so).
 * **Duration** — in seconds, stepped by one horizon (2.0 s for Core/20FPS/H40). A
   value that is not a whole multiple is flagged in the panel *and* refused by the
   server with `duration_not_horizon_multiple`.
-* **Initial noise** — `golden` (the reference's own `x_T`) or `random` (MLX's RNG).
+* **Initial noise** — `random` (the default, and what every continuation uses) or
+  `golden` (the reference's own `x_T`, which only exists for 2.0 s and 4.0 s). The
+  page reads `/api/health.golden_noise` **before** it builds the request: choosing
+  `golden` for a duration with no recorded `x_T` puts the selection back on `random`
+  and says, in the panel and in the conversation, `这个时长（6.0 s）没有金标准噪声…，
+  这次用本机随机噪声。` The server keeps refusing that request by name
+  (`no_golden_noise_for_duration`) for anything that bypasses the page.
 * **Generate & play** — posts to `/api/plan` and plays the result.
 * **Playback** — pause/resume, a frame slider that scrubs and pauses, and
   `Playback fps` measured over the last ~45 rendered frames (that is page frame rate,
@@ -496,25 +586,28 @@ The right-hand panel is the whole control surface; the canvas is the clip.
   aligned, and the HUD's `vector` field is what says so. The one 404 left on this
   endpoint is `golden_reference_prompt_mismatch`, a real refusal, still reported by
   name.
-* **Prompt guard** — `Generate`, `Enter`, `Go`, `Reload` and the boot request all
-  reach `/api/plan` through one guard (`planIfReady`), so a prompt that has not
-  resolved (an empty box *and* a dropdown that is not populated yet) sends **nothing**:
-  the page clears any error, says one plain sentence in the status line, and leaves the
-  last clip on screen. `Reload` waits for `/api/health` — the round trip that fills the
-  dropdown — before it decides. See §8.2 for the 400 this came from.
-* **Bubble** (over the canvas, bottom left) — what the viewer understood from the
-  sentence, where that came from, and what it is doing about it. It appears **the
-  instant a trigger fires**, before the request is built, and is replaced by the
-  server's decision when the plan returns. Its colour is the server's own router
-  state, so a degraded judgment (no semantic parse) is never drawn like a real one.
-  See §9.7.
-* **HUD** (over the canvas) — clip, model, frames, generate time, playback fps, which
-  `x_T` was injected, the **vector source** (`reference bf16 (golden)` in amber, or
+* **Continuity** — what the last plan did about the clip that was already on screen:
+  whether it continued it, how many frames of history that used, and the seam the
+  server measured (§10). It is drawn from the response's own `continuation` block, so
+  the page cannot claim a continuation the server did not report.
+* **Prompt guard** — `Generate`, `Enter`, `发送`, the dropdown's `change`, `Reload`
+  and the boot request all reach `/api/plan` through one guard (`planIfReady`), so a
+  prompt that has not resolved (an empty box *and* a dropdown that is not populated
+  yet) sends **nothing**: the page clears any error, says one plain sentence in the
+  status line, and leaves the last clip on screen. `Reload` waits for `/api/health` —
+  the round trip that fills the dropdown — before it decides. See §8.2 for the 400 this
+  came from.
+* **Bubble** — now the conversation itself (above): what the viewer understood from the
+  sentence, where that came from, and what it is doing about it. Its colour is the
+  server's own router state, so a degraded judgment (no semantic parse) is never drawn
+  like a real one. See §9.7.
+* **HUD** — clip, model, frames, generate time, playback fps, which `x_T` was
+  injected, the **vector source** (`reference bf16 (golden)` in amber, or
   `local MLX 4-bit` in mint), the **encode time** (or `cached`), and the embedding
-  fingerprint. The panel repeats those and adds device, parameter count, cold start,
-  window count, model fps, the full embedding sha256, the prompt hash, the vector
-  source, the quantization, the encode time, the server-side total, and what the local
-  encoder is.
+  fingerprint. It lives in the drawer now, as does the panel that repeats those and
+  adds device, parameter count, cold start, window count, model fps, the full embedding
+  sha256, the prompt hash, the vector source, the quantization, the encode time, the
+  server-side total, and what the local encoder is.
 
 ---
 
@@ -681,6 +774,26 @@ Two small read-plus-additive changes were made to shared code, both recorded her
     conditioned on the prompt vector alone, and `expression`/`gaze` are explicitly
     marked `expression_placeholder: true` because the rig has no face and no eyes.
     Wiring them into continuous motion is the next layer's job (§5).
+16. **A continuation carries position and velocity, not acceleration.** The 4-frame
+    conditioning window has no acceleration channel, so the seam is continuous in
+    position and velocity and **not** in acceleration; the page says so in the
+    drawer (§10.3). The whole visible seam is one frame wide: frame 0 of the new clip
+    is the previous clip's own last frame, so what a reader can see is the model's
+    next frame, 50 ms later.
+17. **A continuation is generated by B's loop, which has no golden comparison.**
+    `ArdySampler` + `make_step_fn` is the supported way to hand a window a real
+    history and it reuses the validated window kernel, but `0005`'s lead ruling
+    stands: B's loop is not a golden-judgeable path. "Continuing is more continuous
+    than resetting" is measured (§10.2); "a continued clip is as good as the batch
+    path's clip" is **not** measured. The residual cost is also recorded: the seed's
+    explicit frames are re-encoded to the hybrid representation instead of reusing the
+    loop's own requantised latent, because `reuse_latent` is per-run and a request
+    boundary is a new run.
+18. **Golden noise does not survive a continuation.** The recorded `x_T` is the
+    reference's *first* window with the reference's own history; a continuation
+    therefore falls back to MLX's RNG and reports it in `noise.fallback_*` (§10.3).
+    Only the fresh, `reset`-ed path can reproduce the reference, and only for 2.0 s
+    and 4.0 s.
 
 ---
 
@@ -817,37 +930,55 @@ regression (it compares a digest reported by the patched function).
 
 ### 8.1 The page's own logic, run under node
 
-The page has no browser test harness, so the part of it that decides **whether to
-send a request** would otherwise be untestable. It lives instead in a
-marker-delimited region of pure functions inside `viewer/app.js`
-(`// --- pure-prompt-guard: start … end`), and that region is loaded out of the
-**shipped file** — not copied — and executed in a bare `node:vm` context by
-`tests/viewer_js_guard.test.mjs`:
+The page has no browser test harness, so the parts of it that *decide* something —
+whether to send a request, which noise source is possible, whether the drawer starts
+open, what the status line says — would otherwise be untestable. They live instead in
+marker-delimited regions of pure functions inside `viewer/app.js`
+(`// --- pure-prompt-guard`, `// --- pure-bubble` and `// --- pure-chat`), and those
+regions are loaded out of the **shipped file** — not copied — and executed in a bare
+`node:vm` context by `tests/viewer_js_guard.test.mjs` (the chat region is loaded
+together with the bubble's, because the status line names a route and the route
+vocabulary is the bubble's):
 
 ```sh
 node --check viewer/app.js                      # the page parses (ESM, no bundler)
-node tests/viewer_js_guard.test.mjs             # 12 cases; also: node --test <file>
+node tests/viewer_js_guard.test.mjs             # 33 cases; also: node --test <file>
 ./.venv/bin/python -m pytest -q                 # the same run, via
                                                 # test_viewer_http.py::test_the_pages_prompt_guard_runs_under_node
 ```
 
-The 12 cases cover: empty text box **and** empty dropdown → nothing resolves;
-whitespace is not a prompt (it falls through to the dropdown); text wins over the
-selection and is used trimmed; a selected entry is planned by its `prompt_hash`; the
-guard region is pure (it is re-evaluated with `document`, `window`, `fetch`,
-`state`, `els` and `THREE` replaced by traps that throw); the reference decisions for
-a duration with a golden run, one without, one whose npz is missing, and malformed
-input; and two **wiring** checks on the real source — `generateClip` keeps its
-`shouldPlan` check and builds its body through `planBody`, every trigger calls
-`planIfReady`, `Reload` awaits `/api/health`, and `loadReference` decides before it
-requests.
+The first twenty cases cover: empty text box **and** empty dropdown → nothing
+resolves; whitespace is not a prompt (it falls through to the dropdown); text wins
+over the selection and is used trimmed; a selected entry is planned by its
+`prompt_hash`; the guard region is pure (it is re-evaluated with `document`, `window`,
+`fetch`, `state`, `els` and `THREE` replaced by traps that throw); the reference
+decisions for a duration with a golden run, one without, one whose npz is missing, and
+malformed input; the bubble's pending/routed/hold/degraded/cached/conservative/plain
+copy and its purity; and two **wiring** checks on the real source.
 
-Two of those cases are **negative controls**, because a check that cannot fail is not
-a check: one asserts that a body built from an unresolved prompt is literally
-`{"seed":0,"duration":2,"noise":"golden"}` (no `prompt` key — the 400 above), and the
-other re-runs the wiring checks against a deliberately mutated copy of the page and
-requires them to fail. `node` is a build-time tool, not a Python dependency: the
-pytest bridge skips with a reason when it is not on `PATH`.
+The thirteen added this round cover the chatbox itself:
+
+* the advanced drawer is **closed** for every `localStorage` value this page did not
+  write, opens for the one it did, and the shipped `<details>` carries no `open`
+  attribute (with a negative control that adds one and requires the check to fail);
+* `noiseDecision` keeps `golden` where a recorded `x_T` exists, falls back to `random`
+  with a sentence naming the durations that do exist where it does not, and never
+  second-guesses a `random` selection — the negative control runs both directions, so
+  neither an always-downgrade nor an always-upgrade implementation can pass;
+* `statusLine` says connection, router and activity, keeps a degraded router named as
+  degraded, and never claims Jev when the router is off;
+* `continuationNote` reports continuity **from the server's block**, quotes the seam
+  the server measured, and never reports an uncontinued clip as continued nor invents
+  seam numbers that were not sent;
+* the chat region is pure under the same trap globals as the guard;
+* a **wiring** check for the three behaviours the user named — no `reset` in the body,
+  the dropdown sends (`planIfReady('select')`), and the noise that is sent comes from
+  the decision rather than from the control — with a negative control that mutates all
+  four and requires every check to go red.
+
+Six of the cases are **negative controls**, because a check that cannot fail is not a
+check. `node` is a build-time tool, not a Python dependency: the pytest bridge skips
+with a reason when it is not on `PATH`.
 
 ### 8.2 A 400 `no_prompt_given` that came from the page
 
@@ -1128,3 +1259,110 @@ usually Chinese, and the bubble is product copy for the person speaking rather t
 developer diagnostic. It is one table (`MESSAGES`) plus one prefix
 (`CONSERVATIVE_PREFIX`) in `src/ardy_mlx/router/jev.py` — changing the language is
 changing those, and nothing else.
+
+---
+
+## 10. Continuity: a new prompt is not a reset
+
+A prompt change used to be a restart. Every `/api/plan` sampled from `x_T` with
+`first_heading_angle = 0` and no history, so the character snapped back toward the
+origin and into a fresh pose, and the page began playing from frame 0. That is what
+"换 prompt 不许 reset" is about.
+
+### 10.1 What a continuation is
+
+With `reset` absent (the default) the server generates the next clip **from the clip
+on screen**, and it does so by handing the window kernel a real history instead of
+writing a second window loop:
+
+1. the previous clip's trailing frames — capped at the checkpoint's own crop budget,
+   `layout.default_history_frames` (160 for Core/20fps/H40), and always a whole number
+   of 4-frame tokens — become the next window's **clean history**;
+2. they are handed over **re-centred on their own last frame**, which is the frame the
+   window logic expects its next frame to be relative to;
+3. `ArdySampler` (B's loop) drives `make_step_fn` (A's window kernel, the one the
+   multi-window golden comparison validated) for `ceil(duration / horizon)` windows,
+   with the new prompt's embedding;
+4. the accumulated root translation — the frame the page is looking at — is added back
+   in world space, and the heading is the one the loop recomputes from the seed;
+5. **frame 0 of the served clip is the previous clip's own last frame, carried over
+   verbatim.** The model's first new frame is one frame *after* it, so
+   `[carried, generated…]` is the gapless continuation and the clip keeps the length
+   the duration asked for.
+
+The model's loop only ever accumulates translation *within* one call, so step 4 is the
+part that cannot live inside the model: it is the carried state, and it is why "the
+character keeps walking from where it was" rather than "the character keeps its pose
+but teleports to the origin".
+
+### 10.2 The measured seam
+
+Two `/api/plan` calls against one server, no `reset` on the second:
+`A person walks forward.` then `A person jogs forward.`, 2.0 s each, random noise
+(2.0 s → 40 frames at 20 fps). The criterion is the previous clip's **last** frame
+against the new clip's **first** frame:
+
+| | max joint Δ | root Δ |
+|---|---|---|
+| **continuation** — clip B frame 0 vs clip A frame −1 | **0.000 mm** | **0.000 mm** |
+| continuation — the model's *own* next frame (B frame 1) vs A frame −1 | 117.96 mm | 55.14 mm |
+| A's own frame-to-frame motion (frame −1 vs frame −2) — the natural scale | 97.35 mm | 59.52 mm |
+| **negative control** — the same second call with `"reset": true` | **1244.99 mm** | **1097.17 mm** |
+
+Read the last row as the point of the table: a reset jumps a metre back to the origin
+(and the clip's first frame is at `[0.002, 0.910, −0.001]`), while a continuation's
+seam is **one frame of the clip's own motion** — 117.96 mm against the 97.35 mm the
+clip already moves between two adjacent frames. `continuation.seam` reports those
+numbers on every response, measured on the frames being served.
+
+### 10.3 What is *not* continuous, and where that is said
+
+* **Acceleration** is not continuous. The 4-frame conditioning window has no
+  acceleration channel; this was already recorded in `0005`/§3 and it is stated on the
+  page (`<b>acceleration is not</b>`), in the drawer's continuity note. Position and
+  velocity are what the seam carries.
+* **Foot skating** is unchanged: no post-processing is built (§6).
+* **Golden noise does not survive a continuation.** The recorded `x_T` belongs to the
+  reference run's *first* window **with the reference run's own history**; injecting it
+  into a window whose history is the page's current clip is not a reproduction of
+  anything. A `noise=golden` request that is being continued therefore falls back to
+  MLX's RNG and reports it (`noise.fallback_from`, `noise.fallback_reason`), rather
+  than quietly producing a clip that looks like a reference reproduction and is not.
+* **The seam is an invariant, not a hope.** If the carried state does not survive the
+  request boundary — a wrong anchor, a mixed unit, a dropped translation — the first
+  generated frame lands far from the frame on screen. Past
+  `CONTINUATION_SEAM_LIMIT_M = 0.25` (a quarter of a metre in 50 ms, i.e. 5 m/s: above
+  any motion in this checkpoint and four times what these prompts actually produce) the
+  request fails by name with `continuation_seam_too_far` and **serves nothing**. That
+  guard is not decorative: it caught exactly such a unit bug (`roots` in metres, the
+  anchor in normalised units) during this round, as a 602 mm seam.
+* **A runner with no batch path cannot continue.** `/api/health`'s
+  `continuation.supported` says so, and every plan then reports
+  `reason: "runner_has_no_continuation_path"` — the clip is a fresh one, and the page
+  says that rather than implying a continuation.
+
+### 10.4 Why B's loop rather than A's batch path
+
+`ArdyBatch.generate` has an `init_history_sequence` parameter, and it cannot be used
+here: it reads `init_history_len` from `init_history_sequence.shape[1]`, which is a
+**token** count, while every `*_frame` in the same function is a **frame** count. Any
+real hybrid sequence is therefore read as 4× too short, and the window masks, the
+recentring centre and the frame slice `motion[:, :num_frames]` all land in the wrong
+place. That path has no caller in this repository and no golden comparison, so it is
+left alone (it is A's file, and this round does not touch `src/ardy_mlx/**`).
+
+`ArdySampler` + `make_step_fn` is the supported way to hand one window a history: the
+kernel is the same computation `Ardy._generate_window` performs, and the loop is the
+one that owns the recentring, the translation accumulation and the heading refresh.
+The one difference that matters for a *continuation* is the one `0005` already
+measured and the lead already ruled on: B's loop right-aligns each window on the
+context it holds, so with a real (non-zero) 40-frame history its window geometry —
+`history_len 40 + generation_len 40`, no masked future region — is the reference's
+window 1 exactly. The divergence `0005` recorded is about a *160-frame zero seed*, not
+about a real history.
+
+The residual cost of carrying state across HTTP requests (rather than inside one loop)
+is that `make_step_fn`'s `reuse_latent` cache is per-run: the seed's explicit frames
+are re-encoded to the hybrid representation instead of reusing the denoiser's own
+requantised latent. It is a small, bounded re-encode of clean history, and it is
+recorded here rather than hidden.

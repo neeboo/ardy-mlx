@@ -731,3 +731,87 @@ def test_a_router_that_times_out_over_http_still_draws_and_says_it_did_not_parse
     assert payload["router"]["degraded"] is True
     assert payload["decision"]["source"] == "vector"
     assert "没做语义解析" in payload["decision"]["message"]
+
+
+# --------------------------------------------------------------------------- #
+# continuation over the wire
+# --------------------------------------------------------------------------- #
+def test_health_reports_where_golden_noise_exists_and_what_continuation_is(live_server):
+    """The two facts the page needs *before* it sends anything.
+
+    `golden_references` says which durations have a golden *clip*; this is the
+    different fact of which have a recorded reference ``x_T``, and it is what stops
+    the page asking for `noise=golden` on a duration that cannot supply it.
+    """
+    base, _app = live_server
+    status, body, _ = request(f"{base}/api/health")
+    assert status == 200
+    health = json.loads(body)
+    noise = {round(entry["duration_s"], 1): entry for entry in health["golden_noise"]}
+    assert set(noise) == {2.0, 4.0}, "the two authorised reference runs, and nothing invented"
+    assert noise[2.0]["available"] is True and noise[2.0]["windows"] == 1
+    assert noise[4.0]["available"] is True and noise[4.0]["windows"] == 2
+    assert all(entry["source_files"] for entry in noise.values())
+    # The fake runner has no batch path, and the page is told so by name.
+    assert health["continuation"]["supported"] is False
+    assert health["continuation"]["active"] is False
+    assert health["continuation"]["history_frames"] == CORE.default_history_frames == 160
+    assert "continues the clip" in health["continuation"]["note"]
+
+
+def test_plan_over_http_says_which_continuation_it_was(live_server):
+    """Every plan carries the block, and the first one is honestly not a continuation."""
+    base, _app = live_server
+    status, body, _ = request(f"{base}/api/plan", "POST",
+                              {"prompt": PROMPT_HASH, "seed": 0, "duration": 2, "noise": "random"})
+    assert status == 200, body
+    block = json.loads(body)["continuation"]
+    assert block["requested"] is True, "the page sends no reset"
+    assert block["applied"] is False
+    assert block["reason"] == "no_previous_clip"
+    assert block["seam"] is None
+
+
+def test_reset_over_http_is_a_real_switch_not_a_comment(live_server):
+    """`"reset": true` must reach ``plan()``, and mean something different.
+
+    On the same server, the same request without the flag asks to continue and is
+    refused only because there is nothing on screen yet; with the flag it is a
+    requested reset. Two different `reason`s from one control is what makes the
+    negative control (and the switch) real rather than a claim about the source.
+    """
+    base, app = live_server
+    status, body, _ = request(f"{base}/api/plan", "POST",
+                              {"prompt": PROMPT_HASH, "seed": 0, "duration": 2, "noise": "random"})
+    assert status == 200
+    assert json.loads(body)["continuation"]["reason"] == "no_previous_clip"
+
+    # Give the server something on screen without needing a model, so the flag is
+    # the only difference between the two requests below.
+    app.continuation = ardy_viewer.ContinuationState(
+        frames=np.zeros((1, 40, 330), dtype=np.float32),
+        joints=np.zeros((27, 3), dtype=np.float32),
+        roots=np.zeros(3, dtype=np.float32),
+        contacts=np.zeros(4, dtype=np.uint8),
+        prompt_hash=PROMPT_HASH,
+        prompt_text=PROMPT,
+        model=app.model,
+    )
+
+    status, body, _ = request(f"{base}/api/plan", "POST",
+                              {"prompt": PROMPT_HASH, "seed": 0, "duration": 2, "noise": "random"})
+    without = json.loads(body)["continuation"]
+    assert status == 200
+    assert without["requested"] is True
+    # The fake runner cannot continue, and the payload says *that* -- not "there was
+    # nothing to continue from".
+    assert without["reason"] == "runner_has_no_continuation_path"
+
+    status, body, _ = request(f"{base}/api/plan", "POST",
+                              {"prompt": PROMPT_HASH, "seed": 0, "duration": 2,
+                               "noise": "random", "reset": True})
+    with_reset = json.loads(body)["continuation"]
+    assert status == 200
+    assert with_reset["requested"] is False
+    assert with_reset["reason"] == "reset_requested"
+    assert with_reset["applied"] is False

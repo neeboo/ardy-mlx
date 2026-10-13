@@ -412,3 +412,263 @@ test('negative control: the wiring checks fail on a guard-free copy of the page'
   assert.equal(checks.holdInstallsNothing, false);
   assert.ok(Object.values(wiring(SOURCE)).every(Boolean), 'the real page passes them all');
 });
+
+// ---------------------------------------------------------------------------
+// the chat surface: the drawer, the noise fallback, the status line, continuity
+// ---------------------------------------------------------------------------
+//
+// `pure-chat` is loaded together with `pure-bubble` on purpose: the status line
+// names a route, and the route's vocabulary (`ROUTE_TAGS`) is the bubble's. Two
+// copies of that table would be two places to keep in step.
+
+const CHAT_START = '// --- pure-chat: start';
+const CHAT_END = '// --- pure-chat: end';
+
+/** The marked chat region of the shipped page, verbatim, with the bubble region it reads. */
+function pureChat(source) {
+  return `${pureBubble(source)}\n${markedRegion(source, CHAT_START, CHAT_END)}`;
+}
+
+/** Evaluate the chat region in a fresh context and hand back its functions. */
+function loadChat(context = vm.createContext({})) {
+  return vm.runInContext(
+    `${pureChat(SOURCE)}\n({ advancedOpen, advancedValue, noiseDecision, routerLabel, statusLine, `
+    + `continuationNote, ADVANCED_STORAGE_KEY, ROUTER_LABELS });`,
+    context,
+    { filename: 'viewer/app.js#pure-chat' },
+  );
+}
+
+const chat = loadChat();
+const INDEX_SOURCE = readFileSync(join(HERE, '..', 'viewer', 'index.html'), 'utf8');
+
+test('the advanced drawer is closed until something opens it', () => {
+  // Nothing stored is the state a first visit is in, and it is closed.
+  for (const stored of [undefined, null, '', 'closed', '0', '1', 'true', 'yes', 'OPEN']) {
+    assert.equal(chat.advancedOpen(stored), false, `stored=${JSON.stringify(stored)}`);
+  }
+  // ... and it can open, which is what makes the check above a rule rather than a
+  // constant: an `advancedOpen` that always said false would fail here.
+  assert.equal(chat.advancedOpen('open'), true);
+  assert.equal(chat.advancedValue(true), 'open');
+  assert.equal(chat.advancedValue(false), 'closed');
+  assert.equal(chat.ADVANCED_STORAGE_KEY, 'ardy-viewer-advanced');
+});
+
+test('the drawer ships collapsed in the markup, and the page is what opens it', () => {
+  const details = INDEX_SOURCE.match(/<details[^>]*id="advanced"[^>]*>/);
+  assert.ok(details, 'index.html must carry the advanced drawer as a <details>');
+  assert.doesNotMatch(details[0], /\bopen\b/, 'the advanced drawer must ship collapsed');
+  // The default screen keeps the picture, the conversation, the box and the line.
+  for (const id of ['viewport', 'chat-log', 'composer', 'prompt-text', 'status']) {
+    assert.ok(INDEX_SOURCE.includes(`id="${id}"`), `index.html must still carry #${id}`);
+  }
+  // The page restores and remembers the state -- a drawer that forgets is the
+  // regression this test exists for.
+  assert.match(SOURCE, /els\.advanced\.open = advancedOpen\(storedAdvanced\(\)\)/);
+  assert.match(SOURCE, /rememberAdvanced\(els\.advanced\.open\)/);
+});
+
+test('negative control: a drawer with the open attribute fails the collapsed check', () => {
+  const opened = INDEX_SOURCE.replace('<details id="advanced" class="advanced">',
+    '<details id="advanced" class="advanced" open>');
+  assert.notEqual(opened, INDEX_SOURCE, 'the replacement must have matched');
+  const details = opened.match(/<details[^>]*id="advanced"[^>]*>/);
+  assert.match(details[0], /\bopen\b/, 'the check must be able to see an open drawer');
+  assert.doesNotMatch(INDEX_SOURCE.match(/<details[^>]*id="advanced"[^>]*>/)[0], /\bopen\b/);
+});
+
+test('golden noise is only used for a duration /api/health says has a recorded x_T', () => {
+  const runs = [
+    { duration_s: 2.0, available: true },
+    { duration_s: 4.0, available: true },
+  ];
+  assert.deepEqual(
+    plain(chat.noiseDecision({ requested: 'golden', durationS: 2, goldenNoise: runs })),
+    { mode: 'golden', requested: 'golden', fellBack: false, reason: null, message: null },
+  );
+  // 6 s is a perfectly good plan duration with no recorded reference x_T: the page
+  // was told so, so it must not find out again with a 400.
+  const six = chat.noiseDecision({ requested: 'golden', durationS: 6, goldenNoise: runs });
+  assert.equal(six.mode, 'random');
+  assert.equal(six.fellBack, true);
+  assert.equal(six.reason, 'no_golden_noise_for_duration');
+  assert.match(six.message, /没有金标准噪声/);
+  assert.match(six.message, /2\.0 s、4\.0 s/, 'the message names the durations that do have one');
+  // Choosing random is never second-guessed, whatever is on disk.
+  const random = chat.noiseDecision({ requested: 'random', durationS: 6, goldenNoise: runs });
+  assert.deepEqual(plain(random),
+    { mode: 'random', requested: 'random', fellBack: false, reason: null, message: null });
+});
+
+test('negative control: the fallback is not unconditional in either direction', () => {
+  const runs = [{ duration_s: 2.0, available: true }];
+  // An implementation that always downgraded to random would fail this ...
+  assert.equal(chat.noiseDecision({ requested: 'golden', durationS: 2, goldenNoise: runs }).fellBack, false);
+  // ... and one that always upgraded to golden would fail this.
+  assert.equal(chat.noiseDecision({ requested: 'random', durationS: 2, goldenNoise: runs }).mode, 'random');
+  // A run whose npz is not on disk is not a duration that has an x_T either.
+  const missing = chat.noiseDecision({
+    requested: 'golden', durationS: 2, goldenNoise: [{ duration_s: 2.0, available: false }],
+  });
+  assert.equal(missing.fellBack, true);
+  // No health at all (an older server) is "no recorded x_T", not a crash.
+  assert.equal(chat.noiseDecision({ requested: 'golden', durationS: 2 }).fellBack, true);
+  assert.match(chat.noiseDecision({ requested: 'golden', durationS: 2 }).message, /一个时长都没录过/);
+});
+
+test('the status line says what is connected, what the router is, and what is happening', () => {
+  const off = chat.statusLine({
+    connected: true, router: { state: 'router_unavailable' }, text: '生成中…',
+  });
+  assert.match(off, /已连接/);
+  assert.match(off, /路由：未启用/);
+  assert.match(off, /生成中/);
+  assert.doesNotMatch(off, /Jev/, 'a router that is not asking Jev must not say Jev');
+
+  // A router that *is* reading the sentence says so, with the route it chose.
+  const on = chat.statusLine({
+    connected: true, router: { state: 'ok', route: 'compose' }, text: '就绪',
+  });
+  assert.match(on, /Jev 语义路由（compose）/);
+
+  // A degraded state keeps its own name; it never becomes "ok".
+  const degraded = chat.statusLine({
+    connected: true, router: { state: 'router_timeout', route: null }, text: '就绪',
+  });
+  assert.match(degraded, /路由超时/);
+  assert.doesNotMatch(degraded, /\(/, 'no route to name, so no route is named');
+});
+
+test('negative control: a status line without the router is not the status line', () => {
+  // The failure this exists for: a drop in connection or router reported as a bare
+  // message, so a page that is not asking anyone looks like one that is.
+  const line = chat.statusLine({ connected: false, router: null, text: '连不上' });
+  assert.match(line, /未连接/);
+  assert.match(line, /路由：未知/);
+  assert.doesNotMatch(line, /已连接/);
+  // ... and the router segment is not optional.
+  const withoutRouter = chat.statusLine({ connected: true, text: '就绪' });
+  assert.match(withoutRouter, /路由：未知/);
+});
+
+test('continuity is reported from the server’s block, never inferred from a 200', () => {
+  const payload = {
+    kind: 'plan',
+    continuation: {
+      applied: true, reason: null, history_frames: 40,
+      seam: {
+        carried_frame_joint_mm: 0.0, carried_frame_root_mm: 0.0,
+        model_first_joint_mm: 117.96, model_first_root_mm: 55.14,
+      },
+    },
+  };
+  const note = chat.continuationNote(payload);
+  assert.equal(note.state, 'continue');
+  assert.match(note.text, /接续/);
+  assert.match(note.meta, /历史窗口 40 帧/);
+  assert.match(note.meta, /位移 0\.000 mm/);
+  assert.match(note.meta, /118\.0 mm/, 'the model’s own next step is quoted as measured');
+
+  assert.equal(chat.continuationNote({
+    continuation: { applied: false, reason: 'reset_requested' },
+  }).state, 'reset');
+  assert.equal(chat.continuationNote({
+    continuation: { applied: false, reason: 'no_previous_clip' },
+  }).state, 'fresh');
+  assert.equal(chat.continuationNote({
+    continuation: { applied: false, reason: 'runner_has_no_continuation_path' },
+  }).state, 'unsupported');
+  // A server that says nothing about continuity gets no claim about it.
+  assert.equal(chat.continuationNote({ kind: 'plan' }).state, 'unknown');
+});
+
+test('negative control: an uncontinued clip is never reported as continued', () => {
+  const reset = chat.continuationNote({ continuation: { applied: false, reason: 'reset_requested' } });
+  assert.doesNotMatch(reset.text, /接续/);
+  // ... and a continuation with no measured seam must not invent numbers.
+  const noSeam = chat.continuationNote({
+    continuation: { applied: true, reason: null, history_frames: 160 },
+  });
+  assert.equal(noSeam.state, 'continue');
+  assert.doesNotMatch(noSeam.meta, /mm/, 'no seam measured, so no seam claimed');
+});
+
+test('the chat region is pure: it runs with no document, no fetch, no state', () => {
+  const trap = new Proxy({}, {
+    get(_target, key) { throw new Error(`the pure region touched ${String(key)}`); },
+  });
+  const isolated = loadChat(vm.createContext({
+    document: trap, window: trap, fetch: trap, state: trap, els: trap,
+    THREE: trap, performance: trap, requestAnimationFrame: trap, localStorage: trap,
+  }));
+  assert.equal(isolated.advancedOpen('open'), true);
+  assert.equal(isolated.noiseDecision({ requested: 'random' }).mode, 'random');
+  assert.match(isolated.statusLine({ connected: true, text: 'x' }), /已连接/);
+  assert.equal(isolated.continuationNote({ continuation: { applied: false } }).state, 'other');
+});
+
+// ---------------------------------------------------------------------------
+// the wiring of the three behaviours the user named
+// ---------------------------------------------------------------------------
+
+/** The properties of the shipped page that make the three behaviours load-bearing. */
+function chatWiring(source) {
+  const generate = functionBody(source, 'generateClip');
+  const planBodyAt = generate.indexOf('planBody(resolved, { seed, duration, noise })');
+  return {
+    // 1. a prompt change is not a reset: no `reset` key is ever put in the body...
+    noResetInBody: !/\breset\s*:/.test(generate),
+    // ... and the body is still built by the pure builder.
+    bodyFromPlanBody: planBodyAt >= 0,
+    // 2. everything that can plan goes through the one guarded entry point, and the
+    //    dropdown is one of them: picking an entry sends it.
+    selectSends: /els\.promptSelect\.addEventListener\('change', \(\) => \{[\s\S]{0,400}?planIfReady\('select'\)/
+      .test(source),
+    enterSends: source.includes("planIfReady('enter')"),
+    // 3. the noise that is sent is the decision, not the raw control -- and it is
+    //    decided before the body is built.
+    noiseFromDecision: /const noise = applyNoiseDecision\(\)\.mode;/.test(generate)
+      && generate.indexOf('applyNoiseDecision().mode') < planBodyAt,
+    // The fallback is applied on every control that can move the duration.
+    noiseFallbackOnControls: (source.match(/applyNoiseDecision\(\)/g) || []).length >= 4,
+    // The response's own continuation block is what the page draws.
+    announceFromPayload: /announceContinuation\(payload\)/.test(generate),
+  };
+}
+
+test('wiring: no reset, select sends, and the noise is the decision', () => {
+  const checks = chatWiring(SOURCE);
+  for (const [name, ok] of Object.entries(checks)) {
+    assert.ok(ok, `viewer/app.js chat wiring check failed: ${name}`);
+  }
+  // The pure builder really does leave `reset` out of the body, which is what "not
+  // passing reset" means on the wire.
+  const sent = JSON.parse(JSON.stringify(
+    guard.planBody({ prompt: 'walk' }, { seed: 0, duration: 2, noise: 'random' }),
+  ));
+  assert.deepEqual(Object.keys(sent).sort(), ['duration', 'noise', 'prompt', 'seed']);
+});
+
+test('negative control: each of those wiring checks can go red', () => {
+  const broken = SOURCE
+    .replace('const noise = applyNoiseDecision().mode;', 'const noise = els.noiseSelect.value;')
+    .replace("planIfReady('select');", 'updatePromptHelp();')
+    .replace('announceContinuation(payload);', '')
+    .replace('planBody(resolved, { seed, duration, noise })',
+      'planBody(resolved, { seed, duration, noise, reset: true })');
+  const checks = chatWiring(broken);
+  assert.equal(checks.noResetInBody, false);
+  assert.equal(checks.selectSends, false);
+  assert.equal(checks.noiseFromDecision, false);
+  assert.equal(checks.announceFromPayload, false);
+  assert.ok(Object.values(chatWiring(SOURCE)).every(Boolean), 'the real page passes them all');
+});
+
+test('negative control: the docs’ own claim is checked against the markup it describes', () => {
+  // The drawer summarises what continuity means, including the one thing that is
+  // *not* continuous. A page that claims otherwise is the failure this guards.
+  assert.match(INDEX_SOURCE, /<b>acceleration is not<\/b>/);
+  assert.match(INDEX_SOURCE, /foot skating/);
+  assert.match(INDEX_SOURCE, /NOT<\/b> aligned with the golden clip|not<\/b> aligned with the golden clip/);
+});

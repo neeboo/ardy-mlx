@@ -73,6 +73,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from collections import OrderedDict
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
@@ -819,6 +820,120 @@ def build_noise_fn(noise: str, duration_s: float, runner, seed: Optional[int]):
 
 
 # --------------------------------------------------------------------------- #
+# continuation: what the next prompt starts from
+# --------------------------------------------------------------------------- #
+# A prompt change is not a restart. The page sends no ``reset``, so a request that
+# arrives while a clip is on screen is generated *from* that clip: its trailing
+# frames become the window's clean history, the accumulated translation and the
+# heading are carried over, and the served clip opens on the frame the page is
+# already showing. ``ArdySampler`` is the loop that hands one window to
+# ``make_step_fn`` -- the same window kernel the multi-window golden comparison
+# validated -- so nothing here re-implements the window advance
+# (``docs/decisions/0007-streaming-demo.md``).
+
+#: What ``/api/plan``'s ``continuation`` block means, in one sentence a reader can
+#: check against the frames.
+CONTINUATION_NOTE = (
+    "a prompt change continues the clip that is on screen: the trailing frames are the "
+    "window's clean history, the accumulated root translation and the heading are kept, "
+    "and frame 0 of this clip is the previous clip's own last frame (carried over verbatim, "
+    "not regenerated). Pass reset=true to start from noise instead."
+)
+
+#: Why a continuation was asked for and did not happen.
+CONTINUATION_NO_PREVIOUS = "no_previous_clip"
+CONTINUATION_RESET = "reset_requested"
+CONTINUATION_MODEL_CHANGED = "model_changed"
+CONTINUATION_UNSUPPORTED = "runner_has_no_continuation_path"
+
+#: Golden noise reproduces the reference only from its own beginning: the recorded
+#: x_T belongs to the reference run's *first* window with the reference run's own
+#: history, so injecting it into a window whose history is the page's current clip
+#: is not a reproduction of anything. A continuation therefore falls back to MLX's
+#: own RNG, by name, and says so in the payload and on the page.
+CONTINUATION_NOISE_FALLBACK = "golden noise does not survive a continuation"
+
+#: How far the first generated frame may sit from the frame on screen before the
+#: request is refused instead of answered. One frame is 50 ms at 20 fps, so a
+#: quarter of a metre is 5 m/s -- faster than any motion in this checkpoint, and
+#: well above the 60 mm/frame these prompts actually produce. It is a *carry-over*
+#: invariant: a wrong anchor or a mixed unit lands here, loudly, rather than in a
+#: clip that silently teleports.
+CONTINUATION_SEAM_LIMIT_M = 0.25
+
+
+def continuation_history_frames(layout) -> int:
+    """How many frames of the previous clip condition the next window.
+
+    The checkpoint's own crop budget, never a new constant: ``default_history_frames``
+    (160 for Core/20fps/H40) is what the window logic was validated with.
+    """
+    return int(layout.default_history_frames)
+
+
+@dataclass
+class ContinuationState:
+    """The clip on screen, in the form the next window needs.
+
+    ``frames`` are **normalised** 330-dim explicit features in world coordinates --
+    the space ``MotionRep.normalize``/``unnormalize`` bracket and the space the
+    window loop hands back and forth. ``joints``/``roots``/``contacts`` are the last
+    frame exactly as it was served, so the next request can open on the frame the
+    page is already showing rather than on a new one.
+    """
+
+    frames: np.ndarray        # [1, T, 330] normalised explicit, world frame
+    joints: np.ndarray        # [27, 3]     metric world joint positions
+    roots: np.ndarray         # [3]         metric world root position
+    contacts: np.ndarray      # [4]         foot contacts, 0/1
+    prompt_hash: str
+    prompt_text: str
+    model: str
+
+
+def continuation_decision(
+    previous: Optional[ContinuationState],
+    *,
+    reset: bool,
+    can_continue: bool,
+    model: str,
+) -> dict:
+    """Whether this request continues the previous clip, and if not, why. **Pure.**
+
+    The order matters: an explicit ``reset`` is honoured before anything else, so
+    the negative control ("a forced reset must jump back to the origin") is the
+    same code path a browser would take, not a claim about it.
+    """
+    if reset:
+        return {"requested": False, "applied": False, "reason": CONTINUATION_RESET}
+    if previous is None:
+        return {"requested": True, "applied": False, "reason": CONTINUATION_NO_PREVIOUS}
+    if previous.model != model:
+        return {"requested": True, "applied": False, "reason": CONTINUATION_MODEL_CHANGED}
+    if not can_continue:
+        return {"requested": True, "applied": False, "reason": CONTINUATION_UNSUPPORTED}
+    return {"requested": True, "applied": True, "reason": None}
+
+
+def _with_injected_noise(step_fn, noise_fn):
+    """Give the sampler loop the caller's ``x_T`` instead of its own draw.
+
+    ``ArdySampler`` draws a fresh ``randn`` per window internally; the loop's own
+    step function is the one place a window's noise can be replaced without
+    touching the loop. The wrapper keeps the loop's contract -- one
+    ``DenoiseResult`` per ``DenoiseRequest`` -- and changes nothing else.
+    """
+
+    def step_with_noise(request):
+        shape = tuple(int(v) for v in np.asarray(request.generation_noise).shape)
+        return step_fn(replace(request, generation_noise=noise_fn(int(request.step), shape)))
+
+    step_with_noise.batch = getattr(step_fn, "batch", None)
+    step_with_noise.reset = getattr(step_fn, "reset", None)
+    return step_with_noise
+
+
+# --------------------------------------------------------------------------- #
 # encoding helpers
 # --------------------------------------------------------------------------- #
 def encode_float32(array: np.ndarray) -> str:
@@ -924,6 +1039,10 @@ class ViewerApp:
         #: request's ``context.current_action`` reports. The server owns it rather
         #: than the page, because it is the server that knows what it last drew.
         self.last_action: Optional[str] = None
+        #: The clip on screen, in the form the *next* window needs (see
+        #: :class:`ContinuationState`). ``None`` until one has been planned, and
+        #: replaced -- never silently reused across a ``reset``.
+        self.continuation: Optional[ContinuationState] = None
         self.lock = threading.Lock()
         self.runner = None
         self.error: Optional[str] = None
@@ -1291,6 +1410,31 @@ class ViewerApp:
                 }
                 for duration, path in sorted(GOLDEN_RUNS.items())
             ],
+            # Which durations have a *recorded x_T* (a different fact from which
+            # have a golden clip). The page uses this to decide, before sending
+            # anything, whether "golden" noise is even possible for the duration it
+            # is about to ask for -- instead of discovering it with a 400.
+            "golden_noise": [
+                {
+                    "duration_s": duration,
+                    "available": bool(files),
+                    "windows": len(files),
+                    "source_files": [_display_path(path) for path in files],
+                }
+                for duration in sorted(GOLDEN_RUNS)
+                for files in (golden_noise_files(duration),)
+            ],
+            "continuation": {
+                # A prompt change is not a restart: the next plan is generated from
+                # the clip on screen unless it is explicitly reset.
+                "supported": self.continuation_supported(),
+                "active": self.continuation is not None,
+                "history_frames": continuation_history_frames(self.layout),
+                "frames": (int(self.continuation.frames.shape[1]) if self.continuation else None),
+                "prompt_hash": (self.continuation.prompt_hash if self.continuation else None),
+                "prompt_text": (self.continuation.prompt_text if self.continuation else None),
+                "note": CONTINUATION_NOTE,
+            },
             "limits": {
                 "text_encoder": (
                     "a local MLX text encoder is available (the sibling llm2vec-mlx checkout, "
@@ -1432,6 +1576,7 @@ class ViewerApp:
         diffusion_steps: Optional[int] = None,
         cfg_weight=None,
         include_frames: bool = False,
+        reset: bool = False,
     ) -> dict:
         if self.runner is None:
             raise ViewerError(
@@ -1486,28 +1631,72 @@ class ViewerApp:
         weights = self._cfg_weight(cfg_weight)
         windows = duration_to_windows(duration, self.layout)
 
+        # Whether this request continues the clip on screen or starts a new one.
+        # Decided before the noise is built, because a continuation changes what
+        # "golden noise" can honestly mean (see ``CONTINUATION_NOISE_FALLBACK``).
+        continuation_choice = continuation_decision(
+            self.continuation,
+            reset=reset,
+            can_continue=self.continuation_supported(),
+            model=self.model,
+        )
+        noise_requested = noise
+        noise_sidecar_extra: Dict[str, object] = {}
+        if continuation_choice["applied"] and noise == "golden":
+            noise = "random"
+            noise_sidecar_extra = {
+                "requested": noise_requested,
+                "fallback_from": noise_requested,
+                "fallback_reason": CONTINUATION_NOISE_FALLBACK,
+            }
+
         noise_fn, noise_sidecar = build_noise_fn(noise, duration, self.runner, seed)
+        noise_sidecar = {**noise_sidecar, **noise_sidecar_extra}
 
         runner = self.runner
         original = runner.embedding
+        carried: Optional[ContinuationState] = self.continuation if continuation_choice["applied"] else None
+        served_norm: Optional[np.ndarray] = None
         try:
             # The runner caches one embedding; swap in this prompt's. Cheap (an
             # mx.array of [1, L, 4096]) and it keeps the MLX call in one place.
             runner.embedding = embedding
             with self.lock:
                 started = time.perf_counter()
-                out = runner.generate(
-                    num_frames=frames_wanted,
-                    num_steps=num_steps,
-                    cfg_weight=weights,
-                    history_frames=None,
-                    noise_fn=noise_fn,
-                    seed=seed,
-                    windows=windows,
-                )
-                generated = out["frames"]
-                mx.eval(generated)
-                generate_ms = (time.perf_counter() - started) * 1000.0
+                if continuation_choice["applied"]:
+                    # Generated *from* the clip on screen: the trailing frames are
+                    # the window's clean history and the accumulated translation
+                    # and heading are kept. Nothing is reset, and the clip is not
+                    # replayed from frame 0.
+                    generated, served_norm, run_info = self._generate_continued(
+                        runner=runner,
+                        embedding=embedding,
+                        previous=carried,
+                        frames_wanted=frames_wanted,
+                        num_steps=num_steps,
+                        weights=weights,
+                        seed=seed,
+                        noise_fn=noise_fn,
+                    )
+                    mx.eval(generated)
+                    generate_ms = (time.perf_counter() - started) * 1000.0
+                else:
+                    out = runner.generate(
+                        num_frames=frames_wanted,
+                        num_steps=num_steps,
+                        cfg_weight=weights,
+                        history_frames=None,
+                        noise_fn=noise_fn,
+                        seed=seed,
+                        windows=windows,
+                    )
+                    generated = out["frames"]
+                    run_info = {
+                        "offsets": [int(value) for value in out["offsets"]],
+                        "history_frames": int(out["history_frames"]),
+                    }
+                    mx.eval(generated)
+                    generate_ms = (time.perf_counter() - started) * 1000.0
         finally:
             runner.embedding = original
 
@@ -1516,6 +1705,39 @@ class ViewerApp:
         joints = np.asarray(posed, dtype=np.float32)[0]
         roots = np.asarray(generated[..., 0:3], dtype=np.float32)[0]
         contacts = (np.asarray(generated[..., -4:], dtype=np.float32) > 0.5)[0]
+
+        # The seam, measured on the frames that are about to be served. Frame 0 is
+        # the previous clip's own last frame, so the first number is a measurement
+        # of the carry-over rather than a promise; the second is the model's own
+        # next step, which is the one to compare against a reset.
+        seam = None
+        if continuation_choice["applied"] and carried is not None:
+            seam = {
+                "carried_frame_joint_mm": float(np.abs(joints[0] - carried.joints).max() * 1000.0),
+                "carried_frame_root_mm": float(np.linalg.norm(roots[0] - carried.roots) * 1000.0),
+                "model_first_joint_mm": float(np.abs(joints[1] - carried.joints).max() * 1000.0),
+                "model_first_root_mm": float(np.linalg.norm(roots[1] - carried.roots) * 1000.0),
+                "previous_last_root": [float(value) for value in carried.roots],
+                "model_first_root": [float(value) for value in roots[1]],
+            }
+
+        # The state the *next* prompt continues from: the clip exactly as it was
+        # served, in the space the window loop hands back and forth. Recorded from
+        # what the page will draw -- not from an intermediate tensor -- so "what
+        # the next clip starts from" and "what is on screen" cannot disagree.
+        if self.continuation_supported():
+            motion_rep = runner.batch.motion_rep
+            if served_norm is None:
+                served_norm = np.asarray(motion_rep.normalize(generated), dtype=np.float32)
+            self.continuation = ContinuationState(
+                frames=np.asarray(served_norm, dtype=np.float32),
+                joints=np.array(joints[-1], dtype=np.float32, copy=True),
+                roots=np.array(roots[-1], dtype=np.float32, copy=True),
+                contacts=np.array(contacts[-1], dtype=np.uint8, copy=True),
+                prompt_hash=entry["prompt_hash"],
+                prompt_text=entry["text"],
+                model=self.model,
+            )
 
         payload = {
             "kind": "plan",
@@ -1562,9 +1784,23 @@ class ViewerApp:
                 ),
             },
             "noise": noise_sidecar,
-            "num_autoregressive_steps": max(len(out["offsets"]) - 1, 0),
-            "offsets": [int(v) for v in out["offsets"]],
-            "history_frames": int(out["history_frames"]),
+            "num_autoregressive_steps": max(len(run_info["offsets"]) - 1, 0),
+            "offsets": list(run_info["offsets"]),
+            "history_frames": int(run_info["history_frames"]),
+            # What the next ``/api/plan`` without ``reset`` will start from. The
+            # page sends no reset flag, so this is the normal path, not an option.
+            "continuation": {
+                "requested": bool(continuation_choice["requested"]),
+                "applied": bool(continuation_choice["applied"]),
+                "reason": continuation_choice["reason"],
+                "history_frames": int(run_info["history_frames"]) if continuation_choice["applied"] else None,
+                "seam": seam,
+                "previous": (
+                    {"prompt_hash": carried.prompt_hash, "prompt_text": carried.prompt_text}
+                    if (continuation_choice["applied"] and carried is not None) else None
+                ),
+                "note": CONTINUATION_NOTE,
+            },
             "postprocess": False,
             "reference": REFERENCE,
             "timing": {
@@ -1594,6 +1830,148 @@ class ViewerApp:
         if include_frames:
             payload["frames_330_b64"] = encode_float32(np.asarray(generated, dtype=np.float32)[0])
         return payload
+
+    # -- continuation ----------------------------------------------------
+    def continuation_supported(self) -> bool:
+        """Whether this runner can generate *from* a state instead of from noise.
+
+        ``scripts/ardy_viewer.py`` builds :class:`~ardy_mlx.sampling.pipeline.MlxRunner`,
+        whose ``batch`` is the assembled ``ArdyBatch``. A stand-in runner (the
+        viewer's tests, and anything else that only implements ``generate``) has no
+        batch, and the page is told so by name rather than being handed a clip that
+        silently restarted.
+        """
+        batch = getattr(self.runner, "batch", None)
+        return all(
+            hasattr(batch, attribute)
+            for attribute in ("denoiser", "tokenizer", "motion_rep", "gen_horizon_len")
+        )
+
+    def _generate_continued(
+        self,
+        *,
+        runner,
+        embedding,
+        previous: Optional[ContinuationState],
+        frames_wanted: int,
+        num_steps: int,
+        weights,
+        seed: Optional[int],
+        noise_fn,
+    ):
+        """One clip generated from the clip on screen (never from frame 0).
+
+        Two things are carried over, and they are carried separately because they
+        live in different places:
+
+        * **the pose and the recentred state** -- the previous clip's trailing
+          frames become the window's clean history, exactly as window *n+1* of a
+          multi-window run would have been handed window *n*'s output;
+        * **the world position and the heading** -- the model's own loop only ever
+          accumulates translation *within* one call, so the accumulated root
+          translation comes from the frame the page is showing (``previous.roots``)
+          and the heading is recomputed by the loop from the seed's first frame.
+
+        The served clip opens on the previous clip's last frame, carried over
+        verbatim: the model's first new frame is one frame *after* it, so
+        ``[carried, generated...]`` is the gapless continuation and the clip keeps
+        the requested length.
+        """
+        from ardy_mlx.model.ardy import make_step_fn
+        from ardy_mlx.sampling.autoregressive import ArdyAutoregressiveConfig, ArdySampler
+        from ardy_mlx.sampling.window import shift_root_xy
+
+        if previous is None:  # pragma: no cover - the decision never lets this through
+            raise ViewerError(
+                "no_continuation_state",
+                "a continuation was requested but nothing is on screen to continue from",
+            )
+        batch = runner.batch
+        motion_rep = batch.motion_rep
+        history = min(continuation_history_frames(self.layout), int(previous.frames.shape[1]))
+        history -= history % NUM_FRAMES_PER_TOKEN
+        if history < NUM_FRAMES_PER_TOKEN:
+            raise ViewerError(
+                "continuation_state_too_short",
+                f"the clip on screen holds {previous.frames.shape[1]} frame(s); a window needs "
+                f"at least {NUM_FRAMES_PER_TOKEN}",
+                status=500,
+            )
+        tail = np.asarray(previous.frames[:, -history:, :], dtype=np.float32)
+        # The window logic expects the newest frame to be the origin the next one is
+        # relative to, so the seed is the tail re-centred on its own last frame. The
+        # world position is put back from the same frame at the end. **Everything
+        # here is in the normalised space the frames are carried in** -- mixing in a
+        # metric root would offset the new clip by the stats' mean (and is exactly
+        # what ``CONTINUATION_SEAM_LIMIT_M`` below is there to catch).
+        anchor = np.asarray(previous.frames[0, -1, [0, 2]], dtype=np.float32)
+        seed_frames = tail.copy()
+        seed_frames[0, :, 0] -= anchor[0]
+        seed_frames[0, :, 2] -= anchor[1]
+
+        config = ArdyAutoregressiveConfig(
+            layout=self.layout,
+            num_frames=history + frames_wanted,
+            history_frames=history,
+            num_steps=num_steps,
+            cfg_weight=weights,
+            seed=seed,
+            text_embeddings=embedding.embeddings,
+            text_mask=embedding.mask,
+        )
+        step_fn = make_step_fn(
+            batch,
+            embedding.embeddings,
+            embedding.mask,
+            num_steps=num_steps,
+            cfg_weight=weights,
+            crop_history_length=history,
+        )
+        if noise_fn is not None:
+            step_fn = _with_injected_noise(step_fn, noise_fn)
+        sampler = ArdySampler(config, step_fn, initial_history_frames=mx.array(seed_frames))
+        result = sampler.run()
+
+        # ``result.translated()`` is the new motion in the seed's own frame; adding
+        # the previous clip's last root puts it back where the page is looking.
+        shift = mx.array(np.array([[anchor[0], 0.0, anchor[1]]], dtype=np.float32))
+        world_norm = shift_root_xy(result.translated(), shift)
+        carried_norm = mx.array(tail[:, -1:, :])
+        # The stats are per feature channel, so the root is read *after* the whole
+        # frame is un-normalised rather than by slicing first.
+        seam_gap_m = float(
+            np.abs(
+                np.asarray(motion_rep.unnormalize(world_norm[:, :1, :]), dtype=np.float32)[0, 0, 0:3]
+                - np.asarray(motion_rep.unnormalize(carried_norm), dtype=np.float32)[0, 0, 0:3]
+            ).max()
+        )
+        if seam_gap_m > CONTINUATION_SEAM_LIMIT_M:
+            # The first generated frame is 50 ms after the frame the page is
+            # showing. No motion in this checkpoint crosses a quarter of a metre in
+            # one frame (that is 5 m/s); a seam beyond it is a bug in the carry-over
+            # -- a wrong anchor, a mixed unit, a lost translation -- and shipping it
+            # would be exactly the silent "the character teleported" this feature
+            # exists to prevent.
+            raise ViewerError(
+                "continuation_seam_too_far",
+                f"the first generated frame sits {seam_gap_m * 1000:.1f} mm from the frame on "
+                f"screen (the limit is {CONTINUATION_SEAM_LIMIT_M * 1000:.0f} mm for one frame)",
+                detail=(
+                    "the carried state, not the model, is at fault: the world position or the "
+                    "re-centred history did not survive the request boundary. Nothing is served "
+                    "rather than serving a clip that jumps."
+                ),
+                status=500,
+            )
+        served_norm = mx.concatenate(
+            [carried_norm, world_norm[:, : max(frames_wanted - 1, 0), :]], axis=1
+        )
+        generated = motion_rep.unnormalize(served_norm)
+        run_info = {
+            "offsets": [int(value) for value in result.offsets],
+            "history_frames": history,
+        }
+        return generated, np.asarray(served_norm, dtype=np.float32), run_info
 
     @staticmethod
     def _cfg_weight(values) -> Tuple[float, float]:
@@ -1729,6 +2107,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                         diffusion_steps=_opt_int(params.get("diffusion_steps"), "diffusion_steps"),
                         cfg_weight=_opt_cfg(params.get("cfg_weight")),
                         include_frames=_opt_bool(params.get("include_frames")),
+                        reset=_opt_bool(params.get("reset")),
                     ))
                 else:  # /api/reference
                     if method != "GET":

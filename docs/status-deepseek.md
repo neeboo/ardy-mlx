@@ -908,3 +908,131 @@ all four files restored byte-for-byte
 - **隐私是真实变化**（新增边界 14）：开启路由时用户那句话离开本机，本地测试无法观测这件事。
 - **浏览器运行时仍需人眼确认**（上一轮边界 13 仍然成立）：气泡的 DOM、颜色与点击路径没有任何
   本仓库的测试声称覆盖。
+
+---
+
+## 17. 第 9 轮（2026-10-13）· chatbox 界面 ＋ 换 prompt 不 reset ＋ 6/8 s 不再 400
+
+**本轮动**：`viewer/{index.html,app.js,style.css}`、`scripts/ardy_viewer.py`、
+`tests/viewer_js_guard.test.mjs`、`tests/test_viewer_api.py`、`tests/test_viewer_http.py`、
+`docs/VIEWER.md`、本文件。
+**一个字未改**：`src/ardy_mlx/**`（含 `router/**` 的判定语义与阈值）、`scripts/ardy_{generate,align}.py`、
+`tests/test_model_*.py`、`tests/test_io_*.py`、`NOTICE`、`LICENSE`、`pyproject.toml`、
+根 `.gitignore`、`~/dev/llm2vec-mlx`。未 push，权重/向量不入库。
+
+### 17.1 界面：默认视图变成 chatbox
+
+**旧结构**：左侧 3D 画面 ＋ 画面上两块浮层（HUD 统计表、气泡），右侧一列控件（Prompt、
+缓存向量下拉、Seed、Duration、Noise、Generate/Reload、Playback、Reference、统计表、限制说明）。
+
+**新结构**：左侧 3D 画面（**没有任何浮层**），右侧对话栏：
+
+```
+┌ 3D canvas ────────────────┬ 对话栏 ─────────────────────────────┐
+│                           │ ARDY / MLX · Motion viewer          │
+│                           │ ● 已连接 · 路由：… · 生成中…          │  ← 唯一状态行
+│                           │ ┌───────────────────────┐           │
+│                           │ │ 用户气泡（右侧，蓝底）  │           │
+│                           │ └───────────────────────┘           │
+│                           │ ┌───────────────────────┐           │
+│                           │ │ 角色气泡（左侧，中文）  │           │  ← decision.message
+│                           │ │ state=… · route=… p=… │           │  ← 小字：路由/置信度/params/来源
+│                           │ └───────────────────────┘           │
+│                           │ [ 说一句动作，回车发送 ] [ 发送 ]     │  ← 唯一输入
+│                           │ ▸ 高级 / Advanced（默认折叠）         │
+└───────────────────────────┴─────────────────────────────────────┘
+```
+
+- **默认可见**：画面、对话、输入框、一条状态行（连接／路由／生成中）。
+- **折叠区（`<details id="advanced">`，默认收起，状态写进 `localStorage['ardy-viewer-advanced']`）**：
+  缓存向量下拉、prompt/编码器说明、Seed、Duration、噪声模式、旧的 Generate/Reload、
+  播放控制（暂停／帧滑杆／相机）、Reference(golden)、足部接触点／地面轨迹开关、
+  连续性读数、**HUD**（从画面上搬进来，id 一个没少）、统计表、两条诚实标注
+  （脚滑／无后处理／加速度不连续／金标准只覆盖 2 s 与 4 s）。
+- **气泡语义**：用户气泡靠右、角色气泡靠左、系统提示居中；`data-state` 沿用原来的颜色语言
+  （thinking/routed/hold/degraded/error/plain），所以**降级判定仍然画不成正常判定**；
+  待发状态先显示 `读到了「…」`，回来后**原地替换**成服务端的结论；日志自动滚到底。
+- 默认噪声改为 **random**；把 `golden` 切到没有录音 `x_T` 的时长时，页面**自动回落 random** 并
+  在面板与对话里明说「这个时长（6.0 s）没有金标准噪声（录过 x_T 的只有 2.0 s、4.0 s），
+  这次用本机随机噪声。」；服务端那条具名错误 `no_golden_noise_for_duration` **保留不变**。
+
+### 17.2 换 prompt 不 reset：机制
+
+页面**不发** `reset`（body 仍是 `{prompt, seed, duration, noise}`，`planBody()` 一个字未改）。
+服务端 `reset` 默认 **false**，于是：上一段的尾部帧（≤ `default_history_frames` 160 帧、4 的整数倍）
+作为下一窗口的**干净历史**，先把它们**以自身末帧为原点重新居中**，交给 `ArdySampler`（B 的循环）
+＋ `make_step_fn`（A 的窗口内核，即多窗口金标准验证过的那条）跑 `ceil(duration/horizon)` 个窗口，
+新 prompt 的向量在这一段生效；最后把**画面那一帧的世界位移**加回去，heading 由循环从种子首帧重算。
+**返回片段第 0 帧就是上一段的末帧本身**（原样带过来，不是重新生成），模型自己的第一帧紧随其后
+——所以 `[带过来的帧, 新生成的帧…]` 是无缝接续，且片段长度仍等于请求时长。
+
+为什么不用 A 的 `init_history_sequence`：它按 `init_history_sequence.shape[1]`（**token** 数）当
+`init_history_len`（全函数其余地方都是**帧**），任何真实 hybrid 序列都会被读成 1/4 长，窗口 mask、
+重定心中心与 `motion[:, :num_frames]` 的切片全部错位。该路径在本仓库没有任何调用者、也没有金标准，
+属于 A 的文件，本轮**不动**。详见 `docs/VIEWER.md` §10.4。
+
+### 17.3 验证（原始输出，服务端 8851；8850 上原有的旧进程未动）
+
+```
+$ curl -s -X POST .../api/plan -d '{"seed":0,"duration":2,"noise":"random"}'      # 不带 prompt
+HTTP 400 {"error": "no_prompt_given", …}
+$ curl -s -X POST .../api/plan -d '{"prompt":"A person walks forward.","duration":6,"noise":"golden"}'
+HTTP 400 {"error": "no_golden_noise_for_duration", "message": "no recorded reference x_T for 6.00 s", …}
+
+duration=2s HTTP 200 frames=40  windows=1 generate_ms= 198.1 total_ms= 201.1 offsets=[0, 40]
+duration=4s HTTP 200 frames=80  windows=2 generate_ms= 266.5 total_ms= 268.1 offsets=[0, 40, 80]
+duration=6s HTTP 200 frames=120 windows=3 generate_ms= 427.6 total_ms= 429.4 offsets=[0, 40, 80, 120]
+duration=8s HTTP 200 frames=160 windows=4 generate_ms= 670.3 total_ms= 671.9 offsets=[0, 40, 80, 120, 160]
+```
+
+连续性（同一服务、连续两次 `/api/plan`、**不传 reset**；A="A person walks forward." 2.0 s、
+B="A person jogs forward." 2.0 s、random）：
+
+| 量 | max 关节 Δ | 根位移 Δ |
+|---|---|---|
+| **接续** B 的第 0 帧 vs A 的末帧 | **0.000 mm** | **0.000 mm** |
+| 接续 B 的**模型自产第 1 帧** vs A 的末帧 | 117.96 mm | 55.14 mm |
+| A 自己相邻两帧（自然尺度） | 97.35 mm | 59.52 mm |
+| **负对照**：同一请求带 `"reset": true` | **1244.99 mm** | **1097.17 mm** |
+
+reset 那条的根位置落在 `[0.002, 0.910, -0.001]`——**回零跳变**，判据能失败。
+服务端每次响应都自带 `continuation.seam`（上面的数就是它测出来的），另有
+`CONTINUATION_SEAM_LIMIT_M = 0.25` 的**接缝不变量**：一帧 50 ms 走 0.25 m = 5 m/s，超过它
+（单位混用、锚点错、位移丢失）直接具名 `continuation_seam_too_far` **500，不出片**。
+这条守卫抓到过本轮一个真实 bug（`roots` 用米、锚点用归一化单位，接缝 602 mm）。
+
+`golden` 噪声在接续里回落（2.0 s 本身有录音 `x_T`，所以这是接续自己的规则）：
+
+```
+noise={"mode":"random","requested":"golden","fallback_from":"golden",
+       "fallback_reason":"golden noise does not survive a continuation", …}
+continuation.applied=true
+```
+
+### 17.4 测试计数
+
+```
+$ node --check viewer/app.js          # exit 0
+$ node tests/viewer_js_guard.test.mjs # tests 33 / pass 33 / fail 0   （上轮 20，只增不减）
+$ ./.venv/bin/python -m pytest -q     # 423 passed, 1 xfailed        （上轮 411 + 1 xfailed）
+```
+
+新增 13 条 Node（抽屉默认收起＋负对照、噪声回落双向负对照、状态行＋负对照、接续文案＋
+"没接续不许说接续"负对照、chat 纯函数区、不打 reset／选中即发／噪声取自判定的 wiring ＋负对照、
+文档与标记一致）与 12 条 pytest（`test_viewer_api.py` 8 条：首段没有可接续的、接续后首帧
+逐关节等于上一段末帧、`reset` 负对照、接续里 golden 回落＋"新片段 golden 照常"负对照、
+能力检查、接缝正例、**接缝负对照（丢位移必须具名拒绝）**、历史窗口上限；`test_viewer_http.py`
+3 条：health 报 golden_noise/continuation、plan 报接续块、`reset` 是真的开关；另有 1 条并入既有文件）。
+
+### 17.5 残留未知（本轮新增）
+
+- **浏览器运行时仍需人眼**（边界 13 仍成立）：气泡的 DOM、配色、滚动、抽屉展开形态没有任何本仓库
+  的测试声称覆盖。本轮**没有**用 CGEvent/AX/osascript 合成输入，页面渲染未经验证。
+- **接续路径是 B 的循环**：`ArdySampler` + `make_step_fn` 的**单窗口窗口几何**与参考的 window 1
+  一致（40 帧历史 + 40 帧生成、无 mask 掉的 future 区），但**整条链没有金标准**——`0005` 的 lead
+  批准已经把 B 的循环定为"不能用金标准判"。因此"接续比 reset 更连续"有测量支撑，"接续的动作质量"
+  没有金标准支撑。
+- **跨请求无法复用 `reuse_latent`**：种子的 explicit 帧要重新编码成 hybrid（同一次 run 内不会），
+  是干净的、有界的重编码，但确实与参考的 `requantize` 路径不同。
+- **`continuation.seam` 的"模型自产第 1 帧"只是 50 ms 之后的一帧**：它衡量的是接缝是否像"正常的一帧"，
+  不是整段动作的质量。
