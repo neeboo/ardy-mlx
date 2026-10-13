@@ -29,18 +29,25 @@ Every non-obvious constant carries the reference ``file:line`` it was read from
 
 Numerical status
 ----------------
-``scripts/ardy_align.py`` compares this port against the single authorised
-reference run on the Core / 20 fps / Horizon40 checkpoint. Measured worst-case
+``scripts/ardy_align.py`` compares this port against the two authorised
+reference runs on the Core / 20 fps / Horizon40 checkpoint. Measured worst-case
 absolute residues (float32 on both sides, different hardware):
 
 * tokenizer ``encode -> decode`` round trip: ``<= 7.0e-06``
 * denoiser single step (all 10 DDIM steps): ``<= 5.4e-05``
 * whole 40-frame clip (``frames (T, 330)``): ``<= 3.9e-05``
+* whole 80-frame clip, two windows (``frames (T, 330)``): see
+  ``artifacts/golden-run-4s/RUN-RECORD.md``
+
+The sampling side (B, ``ardy_mlx.sampling``) talks to this package through
+:func:`ardy_mlx.model.ardy.make_step_fn`, which returns the
+``DenoiseRequest -> DenoiseResult`` callable its ``ArdySampler`` expects.
 """
 
 from __future__ import annotations
 
 __all__ = [
+    "Ablation",
     "ArdyBatch",
     "AutoLatentClassifierFreeGuidedModelSeparated",
     "AutoLatentTwostageDenoiser",
@@ -51,6 +58,7 @@ __all__ = [
     "Stats",
     "TransformerEncoderBlock",
     "WeightStore",
+    "make_step_fn",
 ]
 
 
@@ -60,6 +68,10 @@ def __getattr__(name: str):
         from .ardy import ArdyBatch
 
         return ArdyBatch
+    if name in ("Ablation", "make_step_fn"):
+        from . import ardy as _ardy
+
+        return {"Ablation": _ardy.Ablation, "make_step_fn": _ardy.make_step_fn}[name]
     if name in ("AutoLatentTwostageDenoiser", "AutoLatentClassifierFreeGuidedModelSeparated"):
         from .denoiser import (
             AutoLatentClassifierFreeGuidedModelSeparated,

@@ -219,8 +219,14 @@ class AutoLatentTwostageDenoiser:
         lengths = history_len + generation_len
 
         # ---- stage 1 -> stage 2: convert the predicted global root to a local root
+        # ``lengths`` must be forwarded: it selects which frame gets the repeated
+        # velocity (tools.py:66-79). On a single-window clip ``lengths`` equals the
+        # tensor length and the distinction is invisible; on window 0 of a 4.0 s
+        # clip it is 40 against an 80-frame tensor (the trailing 40 frames are the
+        # zeroed *future* region), and ignoring it corrupts the local-root
+        # condition for every generation token.
         local_root_motion = mr.global_root_to_local_root(
-            global_root_motion_pred, normalized=True
+            global_root_motion_pred, normalized=True, lengths=lengths
         )  # normalised 4-vector
         local_root_flat = local_root_motion.reshape(bs, num_tokens, self.nframe_local_root_dim)
         x_new = mx.concatenate([local_root_flat, latent_body_motion], axis=-1)  # 144

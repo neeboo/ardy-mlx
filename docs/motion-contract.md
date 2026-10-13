@@ -699,6 +699,44 @@ MAX_WINDOW_SECONDS = 10
 
 - **多窗口**（`--duration > 2.0`，即 >1 个 horizon）的 history cropping / 多次 recenter /
   `first_heading_angle` 更新路径：已按 `ardy_model.py:620-680` 实现，但**本轮只有单窗口金标准**。
+  → **第 3 轮已补**，见 §10。
 - 带 `--constraints` 的路径（`motion_mask`/`observed_motion` 非零）本轮**完全没跑**。
 - §2.4 MotionBricks/Unity 转换：仍待定（`0002` 裁定 v1 不做）。
+
+## 10. 实测确认（A 侧第 3 轮 · 2026-10-13，**只加注记，未改任何字段/维度/顺序**）
+
+本节同样是**纯注记**：契约的字段、维度、顺序一律未动。证据来自 `0003` 授权的**第二次、也是最后一次**
+参考运行（同 prompt、`--seed 0`、`--no-postprocess`、文本编码器 CPU bf16，**只把 `--duration` 改成 4.0**
+→ 80 帧 @20fps = **2 个 horizon**）。运行记录见 `artifacts/golden-run-4s/RUN-RECORD.md`；
+逐窗口对齐数字见 `docs/status-deepseek.md`。容差仍为 `0003` 冻结的 **1e-3**，并附 11 条负对照。
+
+**§5.x 的多窗口算术：现在有金标准支持（数字级）**
+
+| 契约小节 | 实测确认 | 残差 |
+|---|---|---|
+| §5.3 窗口规划 | w0 `history_start_frame`/`history_end_frame` = `0`/`0`，`total_tokens` = 20；w1 = `0`/`40`，`total_tokens` = 20 | 几何**完全相同** |
+| §5.3 token mask | 两窗口的 `history/generation/future` token mask 与参考 dump **逐元素相等** | 相等 |
+| §5.4 每步末帧重定心 | `center_frame_index` = `39`（w0）、`79`（w1） | 相等 |
+| §5.4 平移累积 | w1 收到的 `global_transl` = `[-0.04001, 0, 0.13138]`（= w0 的 `center_pos`） | 1.5e-06 |
+| §5.5 `first_heading_angle` 同步更新 | w0 传入 `0.0`，w1 传入 **`0.0026115`**（来自重定心后的 w0 root motion 第 0 帧） | 1.6e-07 |
+| §5.7 解码分块 | 分块方案 `[(0,0,10), (0,10,20)]`（crop=160 时两块的 `history_token_start` 都为 0） | 见 N12 |
+
+**新增注记（契约里没写、但 B 必须知道，否则会静默错）**
+
+| # | 注记 | 证据 | 误用后果（实测） |
+|---|---|---|---|
+| N10 | **速度"复制末帧"的落点是 `lengths − 1`，不是张量的最后一帧。** `compute_vel_xyz`/`compute_vel_angle` 收一个 `lengths`（`tools.py:58-105`）：先补零，再 `v[lengths−1] = v[clamp(lengths−2,0)]`。denoiser 传的是 **`lengths = history_len + generation_len`**（`auto_latent_twostage_denoiser.py:219`），而张量长度是 `history_len + generation_len + future_len`。单窗口时二者相等（40 vs 40）所以看不出来；**4.0 s 的 w0 是 40 vs 80** | `tools.py:66-79`、`:100-110`、`auto_latent_twostage_denoiser.py:219` | 忽略 `lengths`：local root 条件全错，整段 `frames` 错 **6.75**（容差的 6750 倍） |
+| N11 | 无约束路径下 **`future_token_mask` 恒为全 False**（`latent_utils.py:207`：`torch.zeros_like(history_token_mask)`），与 `future_mask`（帧级）**不是**同一件事。80 帧 w0 的 `future_mask` 有 40 帧为真，而 `future_token_mask` 是 20 个 0 | `latent_utils.py:199-220` | 用 `future_mask` 推 token mask：attention key padding 改变，`frames` 错 **1.34** |
+| N12 | `crop_history_length is not None` 时**必须走分块解码** `get_explicit_motion_from_hybrid_autoregressive`（`ardy_model.py:684-691`），不能用整段 `get_explicit_motion_from_hybrid`。两者差的不只是浮点归约顺序：每一块只拿到自己那段（crop 后）的历史，`lengths` 也跟着变，local root 条件因此不同 | `latent_utils.py:103-140` | 整段解码 vs 分块解码差 **4.4e-02**（容差的 44 倍） |
+| N13 | `history_frames`（裁剪预算）在 80 帧时**根本没触发截断**：`history_start_frame = max(0, history_end_frame − 160)` 在两窗口下都是 0。所以"裁剪长度差一帧"这类负对照在 `--duration 4.0` 上是**空转**（实测 `crop=164` 与 `crop=160` 输出逐位相同）；要证伪裁剪必须把 crop 压到会真正截断的值（实测 `crop=4`：`frames` 错 1.00） | `ardy_model.py:630-634` | 用空转的 crop 负对照会得出"裁剪已对齐"的假结论 |
+
+**仍未验证（保留为残留未知）**
+
+- 带 `--constraints` 的路径（`motion_mask`/`observed_motion` 非零），含 `future_token_mask` 非零时
+  的 `future_constraints_proj`：两次运行都**没有约束**，N11 只覆盖了全 False 那一支。
+- 真正发生历史截断的多窗口（>200 帧，或显式小 `crop_history_length`）：本轮金标准只有 80 帧，
+  截断分支**没有**金标准，只有纯算术单测与 `crop=4` 负对照。
+- seed / CUDA RNG 语义对齐（沿用 `0003` 的残留未知）。
+- §2.4 MotionBricks/Unity 转换：仍待定。
+
 

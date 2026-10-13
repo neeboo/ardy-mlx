@@ -1,0 +1,6 @@
+# Golden-run data derived from NVIDIA weights: NOTICE forbids redistribution.
+# These live on disk for alignment only and must never be committed.
+# (The repo-root .gitignore ignores "out/" but not "raw/", so this file closes
+# that gap without touching the root .gitignore. Same rule as golden-run/.)
+raw/
+out/

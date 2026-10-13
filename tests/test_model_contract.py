@@ -117,6 +117,53 @@ def test_velocity_last_frame_repeats_the_previous(motion_rep):
     np.testing.assert_allclose(vel[3], vel[2])
 
 
+def test_velocity_repeats_at_lengths_minus_one_not_at_the_sequence_end():
+    """``lengths`` selects the repeated frame (tools.py:66-79).
+
+    The denoiser passes ``lengths = history_len + generation_len`` while the tensor
+    spans ``history_len + generation_len + future_len`` frames. On a single-window
+    clip those are equal, so the distinction is invisible; on window 0 of a 4.0 s
+    clip ``lengths == 40`` against an 80-frame tensor, and ignoring ``lengths``
+    corrupts the local-root condition for **every** generation token (measured:
+    ``frames`` error 6.75, i.e. 6750x the tolerance).
+    """
+    from ardy_mlx.model.motion_rep import compute_vel_xyz
+
+    p = np.arange(8 * 3, dtype=np.float32).reshape(1, 8, 1, 3)
+    raw = 20.0 * (p[:, 1:] - p[:, :-1])
+    raw = np.concatenate([raw, np.zeros((1, 1, 1, 3), dtype=np.float32)], axis=1)
+
+    default = np.asarray(compute_vel_xyz(mx.array(p), fps=20.0))
+    expected_default = raw.copy()
+    expected_default[0, 7] = raw[0, 6]
+    np.testing.assert_allclose(default, expected_default, atol=1e-5)
+
+    cut = np.asarray(compute_vel_xyz(mx.array(p), fps=20.0, lengths=mx.array([4.0])))
+    expected_cut = raw.copy()
+    expected_cut[0, 3] = raw[0, 2]
+    np.testing.assert_allclose(cut, expected_cut, atol=1e-5)
+    # the tail past `lengths` is *not* overwritten, and the two differ
+    assert not np.allclose(cut, default)
+
+
+def test_local_root_only_changes_at_lengths_minus_one(motion_rep):
+    """The same rule, one level up: ``global_root_to_local_root(..., lengths=L)``."""
+    mr, _, _ = motion_rep
+    rng = np.random.default_rng(0)
+    root = mx.array(rng.normal(size=(1, 8, 5)).astype(np.float32))
+    full = np.asarray(mr.global_root_to_local_root(root, normalized=False))
+    cut = np.asarray(mr.global_root_to_local_root(root, normalized=False, lengths=mx.array([4.0])))
+    np.testing.assert_allclose(full[0, :3], cut[0, :3], atol=1e-5)
+    # indices 4..6 are raw finite differences in both, so they agree
+    np.testing.assert_allclose(full[0, 4:7], cut[0, 4:7], atol=1e-5)
+    # exactly two frames move: the one that receives the repeated velocity in each
+    # variant -- index 3 for lengths=4, index 7 for lengths=None
+    assert not np.allclose(full[0, 3], cut[0, 3])
+    assert not np.allclose(full[0, 7], cut[0, 7])
+    # the y component is a copy of the input and never depends on the velocities
+    np.testing.assert_allclose(full[0, :, 3], cut[0, :, 3], atol=0.0)
+
+
 # ------------------------------------------------------------------------ FSQ
 def test_fsq_bound_formula_and_bounds():
     z = mx.array([0.0, 0.05, -0.05, 3.0, -3.0])

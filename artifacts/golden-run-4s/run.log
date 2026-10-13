@@ -1,0 +1,46 @@
+MONITOR_PID=3417821 MEM_MONITOR_PID=3417822
+START_UTC=2026-10-13T04:19:41Z
+GIT=693f74d13b3d04a0a22ce127ee79c929dd89756b
+GIT_STATUS_BEFORE=0
+CMD: /home/mc/services/ardy-engine/venv/bin/python scripts/generate.py "A person walks forward." --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --num_samples 1 --seed 0 --no-postprocess --checkpoints_dir /home/mc/services/ardy-engine/checkpoints --output /home/mc/ardy-golden-2026-10-13-4s/out/golden_core_h40_4s_seed0
+Using device: cuda:0
+Setting up text encoder (mode=local); first run may take a while...
+Loading weights:   0%|          | 0/290 [00:00<?, ?it/s]Loading weights: 100%|██████████| 290/290 [00:00<00:00, 13175.06it/s]
+sparsify_token_seq: False
+Loaded model: ARDY-Core-RP-20FPS-Horizon40
+Will generate 'A person walks forward.' with 80 frames (4.0s at 20 fps)
+Using 10 denoising steps
+Using 160 history frames per autoregressive step
+/home/mc/services/ardy-engine/ardy/ardy/model/llm2vec/llm2vec_wrapper.py:100: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone() or sourceTensor.detach().clone().requires_grad_(True), rather than torch.tensor(sourceTensor).
+  encoded_text = torch.tensor(encoded_text).to(self._device)
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:06,  1.37it/s] 80%|████████  | 8/10 [00:00<00:00, 12.41it/s]100%|██████████| 10/10 [00:00<00:00, 11.53it/s]
+  0%|          | 0/10 [00:00<?, ?it/s] 80%|████████  | 8/10 [00:00<00:00, 71.53it/s]100%|██████████| 10/10 [00:00<00:00, 71.61it/s]
+Saving the npz output to /home/mc/ardy-golden-2026-10-13-4s/out/golden_core_h40_4s_seed0.npz
+	Command being timed: "/home/mc/services/ardy-engine/venv/bin/python scripts/generate.py A person walks forward. --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --num_samples 1 --seed 0 --no-postprocess --checkpoints_dir /home/mc/services/ardy-engine/checkpoints --output /home/mc/ardy-golden-2026-10-13-4s/out/golden_core_h40_4s_seed0"
+	User time (seconds): 70.59
+	System time (seconds): 43.68
+	Percent of CPU this job got: 298%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:38.26
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 13255268
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 101657
+	Minor (reclaiming a frame) page faults: 7694535
+	Voluntary context switches: 176184
+	Involuntary context switches: 8235
+	Swaps: 0
+	File system inputs: 40355648
+	File system outputs: 130504
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+EXIT_CODE=0
+END_UTC=2026-10-13T04:20:20Z
+GIT_STATUS_AFTER=0
+1097 MiB
+DONE

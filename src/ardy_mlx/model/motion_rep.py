@@ -84,21 +84,49 @@ def diff_angles(angles: mx.array, fps: float) -> mx.array:
     return fps * mx.arctan2(sin_diff, cos_diff)
 
 
-def compute_vel_xyz(positions: mx.array, fps: float) -> mx.array:
+def _repeat_diff_at_last(velocity: mx.array, lengths: Optional[mx.array]) -> mx.array:
+    """``compute_vel_xyz`` / ``compute_vel_angle``'s scatter (tools.py:66-79, 100-110).
+
+    The reference pads the finite-difference sequence with one zero **and then**
+    writes ``v[lengths-1] = v[clamp(lengths-2, min=0)]`` with a gather/scatter.
+    ``lengths`` is *not* the tensor's time extent in general: the denoiser passes
+    ``lengths = history_len + generation_len`` while the tensor spans
+    ``history_len + generation_len + future_len`` frames. On a single-window clip
+    the two coincide, which is exactly why the difference is invisible until a
+    second window exists (window 0 of the 4.0 s run: ``lengths = 40`` over an
+    80-frame tensor).
+
+    ``lengths is None`` means "the whole sequence is valid", i.e. the last entry
+    is replaced -- which is what every call site that omits ``lengths`` gets.
+    """
+    b, t = velocity.shape[0], velocity.shape[1]
+    if t < 2:
+        return velocity
+    if lengths is None:
+        idx = mx.full((b,), t - 1, dtype=mx.int32)
+    else:
+        idx = mx.maximum(lengths.astype(mx.int32).reshape(b) - 1, 0)
+    src = mx.maximum(idx - 1, 0)
+    rows = mx.arange(b)
+    src_vals = velocity[rows, src]  # [B, ...]
+    ar = mx.arange(t)[None, :]
+    hit = (ar == idx[:, None]).reshape((b, t) + (1,) * (velocity.ndim - 2))
+    return mx.where(hit, src_vals[:, None], velocity)
+
+
+def compute_vel_xyz(positions: mx.array, fps: float, lengths: Optional[mx.array] = None) -> mx.array:
     """``compute_vel_xyz`` (ardy/motion_rep/tools.py:34-80).
 
-    ``v[t] = fps * (p[t+1] - p[t])``, zero-padded at the end, then the last
-    velocity is overwritten with the previous one (so the final frame repeats
-    ``v[T-2]`` rather than staying zero).
+    ``v[t] = fps * (p[t+1] - p[t])``, zero-padded at the end, then
+    ``v[lengths-1]`` is overwritten with ``v[lengths-2]`` (so the final valid
+    frame repeats the previous velocity rather than staying zero). See
+    :func:`_repeat_diff_at_last` for why ``lengths`` matters.
     """
     velocity = fps * (positions[:, 1:] - positions[:, :-1])
     b = velocity.shape[0]
     pad = mx.zeros((b, 1) + tuple(velocity.shape[2:]), dtype=velocity.dtype)
     velocity = mx.concatenate([velocity, pad], axis=1)
-    if velocity.shape[1] >= 2:
-        last = velocity[:, -2:-1]
-        velocity = mx.concatenate([velocity[:, :-1], last], axis=1)
-    return velocity
+    return _repeat_diff_at_last(velocity, lengths)
 
 
 class MotionRep:
@@ -248,6 +276,10 @@ class MotionRep:
 
         So the local-root condition handed to the Stage-A decoder and to the
         Stage-B body stage is in *normalised* space, not metres and m/s.
+
+        ``lengths`` is forwarded to the two velocity helpers, where it decides
+        **which** frame receives the repeated velocity (``lengths - 1``, not the
+        tensor's last frame). Omitting it means "the whole sequence is valid".
         """
         if normalized:
             root_features = self.global_root_stats.unnormalize(root_features)
@@ -256,10 +288,9 @@ class MotionRep:
         cos = heading[..., 0]
         sin = heading[..., 1]
         heading_angle = mx.arctan2(sin, cos)
-        rot_vel = diff_angles(heading_angle, self.fps)
-        rot_vel = _pad_last(rot_vel)
+        rot_vel = _pad_last(diff_angles(heading_angle, self.fps), lengths)
         # reference: compute_vel_xyz(root_pos[..., None, :], ...)[..., 0, [0, 2]]
-        vel4 = compute_vel_xyz(root_pos[:, :, None, :], self.fps)
+        vel4 = compute_vel_xyz(root_pos[:, :, None, :], self.fps, lengths=lengths)
         vel3 = vel4.reshape(vel4.shape[0], vel4.shape[1], vel4.shape[3])  # [B, T, 3]
         vel = mx.stack([vel3[..., 0], vel3[..., 2]], axis=-1)  # planar (x, z)
         global_root_y = root_pos[..., 1]
@@ -269,17 +300,16 @@ class MotionRep:
         return local_root
 
 
-def _pad_last(x: mx.array) -> mx.array:
-    """Zero-pad one step at the end, then copy the previous sample into it.
+def _pad_last(x: mx.array, lengths: Optional[mx.array] = None) -> mx.array:
+    """Zero-pad one step at the end, then repeat ``x[lengths-2]`` at ``x[lengths-1]``.
 
-    Mirrors the ``einops.pack`` + ``scatter/gather`` tail of ``compute_vel_angle``
-    (tools.py:88-105): the final velocity equals the second-to-last one.
+    Mirrors the ``einops.pack`` + ``gather/scatter`` tail of ``compute_vel_angle``
+    (tools.py:88-110). ``lengths=None`` means the whole sequence is valid, so the
+    repeated index is the last frame -- the single-window behaviour.
     """
     pad = mx.zeros(x.shape[:-1] + (1,), dtype=x.dtype)
     padded = mx.concatenate([x, pad], axis=-1)
-    if padded.shape[-1] >= 2:
-        padded = mx.concatenate([padded[..., :-1], padded[..., -2:-1]], axis=-1)
-    return padded
+    return _repeat_diff_at_last(padded, lengths)
 
 
 def core_preset() -> dict:
