@@ -1,0 +1,3614 @@
+{
+  "converter": "scripts/ardy_convert.py",
+  "checkpoint_dir": "checkpoints/ARDY-Core-RP-20FPS-Horizon40",
+  "files": [
+    {
+      "name": "tokenizer.safetensors",
+      "source_sha256": "58a887e299a3a6779b5b4ff361b452c4349d45b513b5957f2a961d393623abcd",
+      "converted_sha256": "489543ca208885955d581b00aaabc754a4aeb97c70964d70c0c296bd08d90138",
+      "tensor_count": 204,
+      "total_params": 35430052,
+      "dtypes": [
+        "F32"
+      ],
+      "tensors": [
+        {
+          "name": "pose_net.decoder.external_cond_blocks.0.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.external_cond_blocks.0.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            528
+          ],
+          "params": 270336
+        },
+        {
+          "name": "pose_net.decoder.input_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.input_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            128
+          ],
+          "params": 65536
+        },
+        {
+          "name": "pose_net.decoder.output_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1316
+          ],
+          "params": 1316
+        },
+        {
+          "name": "pose_net.decoder.output_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1316,
+            512
+          ],
+          "params": 673792
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.0.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.1.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.2.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.3.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.4.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.5.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.6.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.decoder.seqTransEncoder.layers.7.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.decoder.target_cond_blocks.0.bias",
+          "dtype": "F32",
+          "shape": [
+            128
+          ],
+          "params": 128
+        },
+        {
+          "name": "pose_net.decoder.target_cond_blocks.0.weight",
+          "dtype": "F32",
+          "shape": [
+            128,
+            325
+          ],
+          "params": 41600
+        },
+        {
+          "name": "pose_net.encoder.input_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.input_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1300
+          ],
+          "params": 665600
+        },
+        {
+          "name": "pose_net.encoder.output_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            128
+          ],
+          "params": 128
+        },
+        {
+          "name": "pose_net.encoder.output_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            128,
+            512
+          ],
+          "params": 65536
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.0.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.1.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.2.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.3.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.4.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.5.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.6.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            512
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            1024
+          ],
+          "params": 524288
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            1536
+          ],
+          "params": 1536
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            1536,
+            512
+          ],
+          "params": 786432
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            512
+          ],
+          "params": 512
+        },
+        {
+          "name": "pose_net.encoder.seqTransEncoder.layers.7.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            512,
+            512
+          ],
+          "params": 262144
+        }
+      ]
+    },
+    {
+      "name": "denoiser.safetensors",
+      "source_sha256": "1019d0bf269cf8d1b3e3e9b4a384a58c112672959b071279ddb65814d77660cd",
+      "converted_sha256": "5c7cb3acb4896e7cd449def39860d94298d119a96f12ca462a6b65d5d595732b",
+      "tensor_count": 224,
+      "total_params": 155823252,
+      "dtypes": [
+        "F32"
+      ],
+      "tensors": [
+        {
+          "name": "denoiser.backbone.body_model.embed_text.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.embed_text.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            4096
+          ],
+          "params": 4194304
+        },
+        {
+          "name": "denoiser.backbone.body_model.embed_timestep.time_embed.0.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.embed_timestep.time_embed.0.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.body_model.embed_timestep.time_embed.2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.embed_timestep.time_embed.2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.body_model.learned_prefix_embedding.embedding.weight",
+          "dtype": "F32",
+          "shape": [
+            3,
+            1024
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.body_model.linear_first_heading_angle.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.linear_first_heading_angle.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.body_model.output_linear.bias",
+          "dtype": "F32",
+          "shape": [
+            128
+          ],
+          "params": 128
+        },
+        {
+          "name": "denoiser.backbone.body_model.output_linear.weight",
+          "dtype": "F32",
+          "shape": [
+            128,
+            1024
+          ],
+          "params": 131072
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.0.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.1.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.2.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.3.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.4.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.5.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.6.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.body_model.seqTransEncoder.layers.7.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.embed_text.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.embed_text.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            4096
+          ],
+          "params": 4194304
+        },
+        {
+          "name": "denoiser.backbone.root_model.embed_timestep.time_embed.0.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.embed_timestep.time_embed.0.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.embed_timestep.time_embed.2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.embed_timestep.time_embed.2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.learned_prefix_embedding.embedding.weight",
+          "dtype": "F32",
+          "shape": [
+            3,
+            1024
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.root_model.linear_first_heading_angle.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.linear_first_heading_angle.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.root_model.output_linear.bias",
+          "dtype": "F32",
+          "shape": [
+            20
+          ],
+          "params": 20
+        },
+        {
+          "name": "denoiser.backbone.root_model.output_linear.weight",
+          "dtype": "F32",
+          "shape": [
+            20,
+            1024
+          ],
+          "params": 20480
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.0.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.1.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.2.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.3.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.4.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.5.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.6.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.linear1.bias",
+          "dtype": "F32",
+          "shape": [
+            2048
+          ],
+          "params": 2048
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.linear1.weight",
+          "dtype": "F32",
+          "shape": [
+            2048,
+            1024
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.linear2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.linear2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2048
+          ],
+          "params": 2097152
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.norm1.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.norm1.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.norm2.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.norm2.weight",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.self_attn.in_proj_bias",
+          "dtype": "F32",
+          "shape": [
+            3072
+          ],
+          "params": 3072
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.self_attn.in_proj_weight",
+          "dtype": "F32",
+          "shape": [
+            3072,
+            1024
+          ],
+          "params": 3145728
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.self_attn.out_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.backbone.root_model.seqTransEncoder.layers.7.self_attn.out_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            1024
+          ],
+          "params": 1048576
+        },
+        {
+          "name": "denoiser.future_constraints_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.future_constraints_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2640
+          ],
+          "params": 2703360
+        },
+        {
+          "name": "denoiser.global_root_hybrid_constraints_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.global_root_hybrid_constraints_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2768
+          ],
+          "params": 2834432
+        },
+        {
+          "name": "denoiser.global_root_hybrid_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.global_root_hybrid_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            148
+          ],
+          "params": 151552
+        },
+        {
+          "name": "denoiser.local_root_hybrid_constraints_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.local_root_hybrid_constraints_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            2764
+          ],
+          "params": 2830336
+        },
+        {
+          "name": "denoiser.local_root_hybrid_proj.bias",
+          "dtype": "F32",
+          "shape": [
+            1024
+          ],
+          "params": 1024
+        },
+        {
+          "name": "denoiser.local_root_hybrid_proj.weight",
+          "dtype": "F32",
+          "shape": [
+            1024,
+            144
+          ],
+          "params": 147456
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "tensors": 428,
+    "params": 191253304
+  },
+  "reference": {
+    "repo": "nv-tlabs/ardy",
+    "commit": "693f74d"
+  },
+  "note": "Weights themselves are NOT committed (checkpoints/ is gitignored); this manifest lists names/shapes only. F32 is preserved exactly: no dtype change, no key rename."
+}

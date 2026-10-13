@@ -21,101 +21,38 @@ from __future__ import annotations
 
 import argparse
 import json
-import struct
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# safetensors dtype -> bytes per element (spec, as of the 0.4 header format).
-DTYPE_BYTES = {
-    "BOOL": 1, "U8": 1, "I8": 1, "F8": 1,
-    "I16": 2, "U16": 2, "F16": 2, "BF16": 2,
-    "I32": 4, "U32": 4, "F32": 4,
-    "I64": 8, "U64": 8, "F64": 8,
-}
+# The package is not installed into the venv (decision 0001), so make src/
+# importable exactly the way the tests do.
+_SRC = Path(__file__).resolve().parents[1] / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
+from ardy_mlx.io.safetensors import (  # noqa: E402
+    DTYPE_BYTES,
+    SafetensorsError,
+    param_count,
+    prefix_tree,
+    read_header,
+    tensors_of,
+    validate,
+)
 
-class SafetensorsError(RuntimeError):
-    """The file is not a well-formed safetensors container."""
-
-
-def read_header(path: str | Path) -> Tuple[Dict, int, int]:
-    """Return ``(header, header_len, file_size)`` for a safetensors file.
-
-    The returned header maps tensor name -> ``{"dtype", "shape", "data_offsets"}``
-    plus an optional ``"__metadata__"`` entry.
-    """
-    p = Path(path)
-    file_size = p.stat().st_size
-    if file_size < 8:
-        raise SafetensorsError(f"{p}: too small to be safetensors ({file_size} bytes)")
-
-    with p.open("rb") as fh:
-        raw_len = fh.read(8)
-        (header_len,) = struct.unpack("<Q", raw_len)
-        if header_len <= 0 or 8 + header_len > file_size:
-            raise SafetensorsError(
-                f"{p}: header length {header_len} does not fit in {file_size} bytes"
-            )
-        blob = fh.read(header_len)
-
-    try:
-        header = json.loads(blob.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise SafetensorsError(f"{p}: header is not valid UTF-8 JSON: {exc}") from exc
-    if not isinstance(header, dict):
-        raise SafetensorsError(f"{p}: header is not a JSON object")
-    return header, header_len, file_size
-
-
-def tensors_of(header: Dict) -> Dict[str, Dict]:
-    """Header entries excluding ``__metadata__``."""
-    return {k: v for k, v in header.items() if k != "__metadata__"}
-
-
-def param_count(entry: Dict) -> int:
-    n = 1
-    for dim in entry.get("shape", []):
-        n *= int(dim)
-    return n
-
-
-def validate(header: Dict, header_len: int, file_size: int, path: str | Path) -> List[str]:
-    """Return a list of problems; empty means the data section looks consistent."""
-    problems: List[str] = []
-    data_start = 8 + header_len
-    data_bytes = file_size - data_start
-    pairs = sorted(entry["data_offsets"] for entry in tensors_of(header).values())
-
-    seen_end = 0
-    for start, end in pairs:
-        if start != seen_end:
-            problems.append(f"data_offsets not contiguous at {seen_end} (next starts {start})")
-        if end < start:
-            problems.append(f"data_offsets inverted: [{start},{end}]")
-        seen_end = max(seen_end, end)
-    if pairs and seen_end != data_bytes:
-        problems.append(f"data section ends at {seen_end} but file has {data_bytes} bytes of payload")
-
-    for name, entry in tensors_of(header).items():
-        dtype = entry.get("dtype")
-        if dtype not in DTYPE_BYTES:
-            problems.append(f"{name}: unknown dtype {dtype!r}")
-            continue
-        expected = param_count(entry) * DTYPE_BYTES[dtype]
-        got = entry["data_offsets"][1] - entry["data_offsets"][0]
-        if expected != got:
-            problems.append(f"{name}: shape/dtype imply {expected} bytes, offsets span {got}")
-    return problems
-
-
-def prefix_tree(names: List[str], depth: int = 2) -> List[Tuple[str, int]]:
-    """Count names by their first ``depth`` dot-separated components."""
-    counts: Dict[str, int] = {}
-    for name in names:
-        key = ".".join(name.split(".")[:depth])
-        counts[key] = counts.get(key, 0) + 1
-    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+__all__ = [
+    "DTYPE_BYTES",
+    "SafetensorsError",
+    "read_header",
+    "tensors_of",
+    "param_count",
+    "validate",
+    "prefix_tree",
+    "describe",
+    "diff",
+    "main",
+]
 
 
 def describe(path: str | Path, *, show_names: bool, depth: int) -> int:

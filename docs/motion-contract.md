@@ -658,3 +658,47 @@ MAX_WINDOW_SECONDS = 10
 1. MotionBricks/Unity 的坐标与旋转转换（§2.4）——**待定**。
 2. `<prompt-hash>` 的哈希口径（§7）——本稿取 UTF-8 原文。
 3. 金标准是否含后处理（§6.4）——**建议第一版两侧都跳过**，等人类确认。
+
+## 9. 实测确认（A 侧第 2 轮 · 2026-10-13，**只加注记，未改任何字段/维度/顺序**）
+
+本节是**新增注记**：契约本身的字段、维度、顺序一律未动。证据来自那台机器上**唯一一次**授权参考运行
+（`nv-tlabs/ardy` @ `693f74d`，`ARDY-Core-RP-20FPS-Horizon40`，prompt `A person walks forward.`，
+`--duration 2.0` → 40 帧 @20fps = 1 个 horizon，`--seed 0`，`--no-postprocess`，其余默认）。
+运行记录见 `artifacts/golden-run/RUN-RECORD.md`。
+
+**已确认（数字级）**
+
+1. **§1.3 的 D = 330 与 block 尺寸**：整段 `frames (1,40,330)` 已在 MLX 侧逐元素复现，残差 1.9e-05；
+   `root` 块（前 5 维）与参考 `.npz` 的 `root_positions`/`global_root_heading` 残差 5.1e-06 / 3.0e-06。
+2. **§1.6 的 stats 切片**：`stats/motion/{mean,std}.npy` 是 334 长，模型内部特征 330 长，
+   切片确为 `0..4` + `9..333`（跳过 4 个 local-root 槽位）。
+   **实测：`global_root_stats.unnormalize(frames_norm[:, :, :5])` 与参考 `.npz` 的
+   `[root_positions | global_root_heading]` 逐位相等（max_abs = 0.0）**。
+3. **§3.3 的 hybrid token = 148**、`nframe_root_dim = 20`、`latent_embedding_dim = 128`：
+   dump 到的张量形状与之一致（`(1,10,148)`），且 denoiser **224 张量全部被前向用到**（零未使用）。
+4. **§3.2 的 tokenizer 形状表**：encoder `[512,1300]`/`[128,512]`、decoder `[512,128]`/`[512,528]`/`[1316,512]` 全部核对通过；
+   Stage A 往返（encode→decode）残差 ≤ 7.0e-06。
+5. **§4.x 的调度与采样**：余弦 β 表、`space_timesteps`、`calc_diffusion_vars`、DDIM `eta=0`
+   已按 `diffusion.py` 复刻，**全部 10 个去噪步**逐步对齐（原始输出 ≤ 2.8e-05，CFG 合成 ≤ 5.4e-05，DDIM ≤ 1.2e-05）。
+
+**新增注记（契约里没写、但 B 必须知道，否则会静默错）**
+
+| # | 注记 | 证据 | 误用后果（实测） |
+|---|---|---|---|
+| N1 | `global_root_to_local_root(..., normalized=True)` 的**返回值是归一化后的** local root：先 `global_root_stats.unnormalize` 输入，算完 4 维物理量后再 `local_root_stats.normalize` 输出 | `reps/base.py:145-146` | 误当物理量传给 Stage A decoder：输出错 **0.47**（正确残差 6e-06） |
+| N2 | tokenizer 的 `requantize()` **方法**（带 stats：`unnormalize → round(clamp·32)/32 → normalize`）与 `detokenize()` **内联**的那一次重取整（只有中间一步）**不是同一件事** | `fsq.py:236-238` vs `:257-278` | 混淆后 Stage A 往返错 **1.696** |
+| N3 | FSQ 量化不是朴素 `round(z*32)/32`：先 `tanh(z + atanh(offset/half_l))·half_l − offset`，其中 `half_l=(64−1)·(1+1e-3)/2`、`offset=0.5`；值域**不对称**，实测 `[−1.0, 31/32]` | `finite_scalar_quantization.py:124-131` | 直接量化会让离散层级大范围错位 |
+| N4 | backbone 的 prefix 是 `[text(1) \| timestep(1) \| first_heading_angle(1)]`，且 **denoiser backbone 没有因果掩码**（只传 `src_key_padding_mask`）；`timestep` 是**查正弦 PE 表的第 t 行**（不是把 t 连续嵌入） | `backbone.py:300-396`、`:439-461` | 加因果掩码：单步输出错 **1.28**（正确 5.4e-05） |
+| N5 | `pos_encoding_token_index` 是**相对第一个 generation token** 的（可为负）；`history_len // num_frames_per_token` 是原点 | `auto_latent_twostage_denoiser.py:190-193` | 多窗口时位置编码整体偏移 |
+| N6 | 无约束生成时**约束投影仍然参与计算**（`observed_motion`/`motion_mask` 喂全零，`future_token_mask` 全 False），不要走"跳过"的捷径 | `auto_latent_twostage_denoiser.py:200-260` | `global_root_hybrid_proj` 与 constraints 投影不可互换 |
+| N7 | CFG 三路 batch 时 **`timesteps` 也必须一起三倍化**（以及 `history/generation/future` 的 len、mask、`first_heading_angle`） | `cfg.py:74-116` | 直接 shape 报错（已抓到） |
+| N8 | 金标准里 dump 了参考自己的初始噪声 `x_T`（`(1,10,148)`）——该窗口无历史故 `x == x_T`。对齐应**注入**它，不要试图复刻 CUDA 的 Philox RNG | `ardy_model.py:481` | 复刻 RNG 是另一件事，会掩盖真正的数值差异 |
+| N9 | `global_root_to_local_root` 的末帧速度 = **前一帧复制**（先补零再 scatter），不是 0 | `motion_rep/tools.py:58-105` | 末帧速度静默为 0 |
+
+**仍未验证（保留为残留未知，B 不要据此写死）**
+
+- **多窗口**（`--duration > 2.0`，即 >1 个 horizon）的 history cropping / 多次 recenter /
+  `first_heading_angle` 更新路径：已按 `ardy_model.py:620-680` 实现，但**本轮只有单窗口金标准**。
+- 带 `--constraints` 的路径（`motion_mask`/`observed_motion` 非零）本轮**完全没跑**。
+- §2.4 MotionBricks/Unity 转换：仍待定（`0002` 裁定 v1 不做）。
+
