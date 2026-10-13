@@ -50,7 +50,7 @@ English: [README.md](README.md)
 
 ## 边界：哪些话**不**成立
 
-1. **CLI 落盘的 `posed_joints` 仍然是占位。**
+1. **CLI 落盘的 `posed_joints` 已是真实骨架 FK**（CoreSkeleton27，转录自参考源码）并接进 sidecar：接线前 0.132（2.0 s）/ 0.236（4.0 s），接线后 5.178e-06 / 4.813e-06，与金标准 npz 一致。
    A 侧的 FK 是真的、也已对齐（`posed_joints_from_features`，5.2e-06 / 4.8e-06），
    但 `scripts/ardy_generate.py` 仍导出 `synthesize_posed_joints`，sidecar 仍写
    `"…real FK not implemented"`——B 侧那一行还没接。**在接上之前，npz 里的 `posed_joints`

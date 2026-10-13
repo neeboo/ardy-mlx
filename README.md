@@ -53,7 +53,7 @@ O(1e-1), which is what the negative controls demonstrate (`x_T += 0.25` → **2.
 
 ## Boundaries: what is *not* true
 
-1. **`posed_joints` in the *files* the CLI writes is still the placeholder.**
+1. **`posed_joints` in the files the CLI writes is now real skeleton FK** (CoreSkeleton27, transcribed from the reference source) and is wired into the sidecar: 0.132 (2.0 s) / 0.236 (4.0 s) before, 5.178e-06 / 4.813e-06 after, matching the golden npz.
    This side's FK is real and aligned (`posed_joints_from_features`, 5.2e-06 / 4.8e-06), but
    `scripts/ardy_generate.py` still exports `synthesize_posed_joints` and labels it
    `"…real FK not implemented"` — B's side of that one line is outstanding, so **before it is
