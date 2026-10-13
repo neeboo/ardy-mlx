@@ -831,3 +831,17 @@ Gram–Schmidt 正是为修它；把 `cont6d_to_matrix` 的输出再转回 6D �
 - seed / CUDA RNG 语义：未对齐（靠注入参考 `x_T` 绕开）。
 - §2.4 MotionBricks/Unity 转换：仍待定。
 - `posed_joints` 的 CLI/sidecar 接线（N14 末条）：A 侧 API 与测试完成，**B 侧未接**。
+
+## 12. 注记（A 侧第 5 轮 · 2026-10-13）：文本编码器已迁出本仓库
+
+**本节只加注记，契约的字段、维度、顺序、单位一律未动**；`text_feat` 这一路接口的定义也没变。
+
+- **文本编码器已独立成 `~/dev/llm2vec-mlx`**，不再属于本仓库；判据文档随之搬到
+  `llm2vec-mlx/docs/decisions/0002-mlx-text-encoder.md`（本仓库原 `0006` 已删除）。
+- **接口（不变）**：条件向量是 `(1, 1, 4096)` **float32** —— 与
+  `artifacts/golden-run/raw/text_feat.npy` 逐维同形同序；新仓库另附同名 `.json` sidecar
+  （`encoder` / `bits` / 权重与适配器指纹 / 池化与模板口径 / git sha）。
+- **消费方口径（不变）**：查看器**优先参考向量**（`encoder: "reference-llm2vec-bf16"`），
+  MLX 向量（`encoder: "mlx-llm2vec"`）只在没有参考向量时兜底；**sidecar 缺 `encoder` 字段按参考解释**。
+- **不许混用**：两种 `encoder` 的向量不可互换 —— 编码器不同 → 条件不同 → 动作不同（扩散对条件混沌）。
+  这不影响 §1 的任何一维、任何单位，也不影响 `/api/plan` 的 `x_T` 注入与时长整数倍约束。

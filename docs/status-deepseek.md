@@ -528,3 +528,20 @@ $ git ls-files | grep -E '\.(safetensors|npz|npy)$|golden-run[^/]*/(raw|out)/'
   未跑参考实现；未用合成输入；只动了 `scripts/ardy_preview.py`、`docs/PREVIEW.md`、
   `docs/status-deepseek.md`、`artifacts/preview/**`。GIF 与相机 JSON 入库，
   `golden-run*/{raw,out}` 与任何 `.npz/.npy` **一律不入库**（§12.7 的审计仍为零命中）。
+
+## 13. 文本编码器已迁出：本仓库只留指针（2026-10-13）
+
+**文本编码器不再属于本仓库。** 它已独立成 `~/dev/llm2vec-mlx`（仓库名 `llm2vec-mlx`），
+本仓库与它之间**只有向量文件这一条接口**：
+
+- **接口**：`(1, 1, 4096)` **float32** 池化向量（与 `artifacts/golden-run/raw/text_feat.npy` 同形）
+  ＋ 一个同名 `.json` sidecar，sidecar 至少带 `encoder`（参考向量
+  `"reference-llm2vec-bf16"`、MLX 向量 `"mlx-llm2vec"`）与 `bits`；**缺 `encoder` 字段读作参考向量**。
+- **本仓库的立场不变**：查看器仍**优先使用参考向量**；MLX 向量只在没有参考向量时兜底。
+  本节只是指针，不改任何既有语义（`0004` 契约、`/api/plan` 对齐、时长整数倍等一律不动）。
+- **原来那份判据文档 `docs/decisions/0006-mlx-text-encoder.md` 已删除**，内容整体搬到
+  `llm2vec-mlx` 的 `docs/decisions/0002-mlx-text-encoder.md`（编号按新仓库，阈值一字未改）。
+  随之迁走的还有：文本编码器包（原 `src/ardy_mlx/text/**`，未跟踪、从未提交）、
+  参考向量（原 `artifacts/reference-embeddings/*.npy`，权重派生数据，不入库）、
+  以及"仅编码器"参考运行的记录（原 `artifacts/reference-encoder-run/**`）。
+- 本仓库因此**回到干净状态**：无 `src/ardy_mlx/text/**`、无 `artifacts/reference-*`。
