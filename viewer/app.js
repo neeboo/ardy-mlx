@@ -9,9 +9,15 @@
 //
 // Two rules the page enforces rather than hides:
 //
-//   * a prompt is one of the *cached* embeddings, addressed by its hash. The
-//     server answers a miss with `no_cached_embedding_for_prompt`; this page shows
-//     that name verbatim and never substitutes another prompt;
+//   * a prompt is free text. If it has a cached vector the server uses it; if it
+//     does not, the server encodes it here with the local MLX text encoder and
+//     caches the result. A failure -- no encoder, or an encoder that refuses -- is
+//     shown verbatim by name (`local_encoder_unavailable` / `local_encoder_failed`)
+//     and never becomes a different prompt's clip;
+//   * a vector's *source* is always on screen. A reference bf16 vector is the
+//     conditioning signal the golden clip came from; a locally-encoded one is a
+//     different, equally valid condition. The HUD names which one this clip used,
+//     so a local clip can never be mistaken for a golden comparison;
 //   * `duration` must be a whole number of ARDY generation horizons. The input
 //     steps by one horizon and the server rejects anything else, so the page
 //     cannot quietly round a request into a different clip.
@@ -29,6 +35,9 @@ const html = document.documentElement;
 const els = {
   promptSelect: document.querySelector('#prompt-select'),
   promptHelp: document.querySelector('#prompt-help'),
+  promptText: document.querySelector('#prompt-text'),
+  promptTextGo: document.querySelector('#prompt-text-go'),
+  promptTextHelp: document.querySelector('#prompt-text-help'),
   seedInput: document.querySelector('#seed-input'),
   seedNext: document.querySelector('#seed-next'),
   durationInput: document.querySelector('#duration-input'),
@@ -57,6 +66,8 @@ const els = {
     fps: document.querySelector('#hud-fps'),
     noise: document.querySelector('#hud-noise'),
     embedding: document.querySelector('#hud-embedding'),
+    source: document.querySelector('#hud-source'),
+    encode: document.querySelector('#hud-encode'),
   },
   stats: {
     model: document.querySelector('#stat-model'),
@@ -71,6 +82,11 @@ const els = {
     noise: document.querySelector('#stat-noise'),
     embedding: document.querySelector('#stat-embedding'),
     prompt: document.querySelector('#stat-prompt'),
+    source: document.querySelector('#stat-source'),
+    quantization: document.querySelector('#stat-quantization'),
+    encode: document.querySelector('#stat-encode'),
+    total: document.querySelector('#stat-total'),
+    encoder: document.querySelector('#stat-encoder'),
     endpoint: document.querySelector('#stat-endpoint'),
   },
 };
@@ -288,8 +304,42 @@ async function loadHealth() {
   els.stats.params.textContent = fmtCount(health.parameters);
   els.stats.coldStart.textContent = fmtMs(health.cold_start_s * 1000);
   els.hud.model.textContent = health.model;
+  updateEncoderHelp(health);
   html.dataset.viewerStatus = 'ready';
   return health;
+}
+
+/** Say exactly what the local encoder is, in the words `/api/health` used.
+ *
+ * The point of this line is that "you can type any prompt" is a claim about a
+ * specific artifact at a specific precision. If the encoder is missing the panel
+ * says so, and says which prompts still work (the cached ones).
+ */
+function updateEncoderHelp(health) {
+  const encoder = health.encoder || { enabled: false, state: 'disabled' };
+  const details =
+    `${encoder.encoder_id || 'no local encoder'} · ${encoder.quantization || '—'}`;
+  els.stats.encoder.textContent =
+    encoder.available ? `${details}` : `${encoder.state}: ${encoder.reason || '—'}`;
+  els.stats.encoder.title = encoder.repo || '';
+  if (encoder.available) {
+    els.promptText.disabled = false;
+    els.promptTextGo.disabled = false;
+    els.promptTextHelp.textContent =
+      `Any prompt works. A prompt with no cached vector is encoded here by the local MLX `
+      + `text encoder (${encoder.quantization}), about half a second once, then cached. `
+      + `A locally-encoded vector is close to — not identical to — the reference bf16 one, `
+      + `so its clip is a valid sample that is NOT aligned with the golden clip.`;
+    els.promptTextHelp.classList.remove('warn');
+  } else {
+    els.promptText.disabled = true;
+    els.promptTextGo.disabled = true;
+    els.promptTextHelp.textContent =
+      `No local text encoder is usable (${encoder.reason || encoder.state}). Only the `
+      + `cached prompts below can be run; a new prompt fails by name as `
+      + `local_encoder_unavailable rather than being substituted.`;
+    els.promptTextHelp.classList.add('warn');
+  }
 }
 
 function populatePrompts(health) {
@@ -307,7 +357,10 @@ function populatePrompts(health) {
   for (const entry of health.embeddings) {
     const option = document.createElement('option');
     option.value = entry.prompt_hash;
-    option.textContent = `${entry.text}  ·  ${entry.prompt_hash.slice(0, 10)}`;
+    option.textContent = `${entry.text}  ·  ${sourceLabel(entry)}`;
+    option.title = entry.quantization
+      ? `${entry.encoder_id} · ${entry.quantization}`
+      : entry.encoder_id;
     els.promptSelect.append(option);
   }
   els.promptSelect.disabled = false;
@@ -320,6 +373,13 @@ function selectedEmbedding() {
   return (state.health?.embeddings ?? []).find((entry) => entry.prompt_hash === hash) ?? null;
 }
 
+/** A short, always-visible name for where a cached vector came from. */
+function sourceLabel(entry) {
+  if (entry.source === 'reference') return 'reference bf16';
+  if (entry.source === 'local') return `local MLX ${entry.bits ? entry.bits + '-bit' : ''}`.trim();
+  return `unlabelled (${entry.source})`;
+}
+
 function updatePromptHelp() {
   const entry = selectedEmbedding();
   if (!entry) {
@@ -327,8 +387,17 @@ function updatePromptHelp() {
     return;
   }
   els.promptHelp.textContent =
-    `prompt sha256 ${entry.prompt_hash} · embedding ${entry.embedding_sha256.slice(0, 16)}… · `
-    + `${entry.tokens} token(s)`;
+    `${sourceLabel(entry)} · ${entry.encoder_id} · prompt ${entry.prompt_hash} · `
+    + `embedding ${entry.embedding_sha256.slice(0, 16)}… · ${entry.tokens} token(s)`;
+}
+
+/** The prompt to send: the free-text box when it has content, else the dropdown. */
+function requestedPrompt() {
+  const typed = els.promptText.value.trim();
+  if (typed) return { prompt: typed, text: typed, typed: true };
+  const entry = selectedEmbedding();
+  if (!entry) return null;
+  return { prompt: entry.prompt_hash, text: entry.text, typed: false, entry };
 }
 
 function populateDuration(health) {
@@ -369,11 +438,11 @@ function updateGoldenHelp() {
 
 async function generateClip() {
   if (state.busy) return;
-  const entry = selectedEmbedding();
-  if (!entry) {
-    showError('no_cached_embedding_for_prompt',
-      'Select a cached prompt first; this viewer cannot encode text.');
-    setStatus('No cached embedding selected.', true);
+  const requested = requestedPrompt();
+  if (!requested) {
+    showError('no_prompt_given',
+      'Type a prompt, or pick a cached embedding from the list.');
+    setStatus('No prompt given.', true);
     return;
   }
   const duration = Number(els.durationInput.value);
@@ -382,18 +451,33 @@ async function generateClip() {
   state.busy = true;
   els.generate.disabled = true;
   clearError();
-  setStatus(`Generating ${duration.toFixed(1)} s with ${noise} noise…`);
+  // The encoding step is invisible to the user otherwise: a cache miss costs about
+  // half a second before sampling even starts, and the status line says so rather
+  // than making the whole request look slow.
+  setStatus(
+    `Generating ${duration.toFixed(1)} s with ${noise} noise`
+    + (requested.typed ? ` — encoding ${JSON.stringify(requested.text)} locally first…` : '…'));
   const requestId = ++state.requestId;
   const startedAt = performance.now();
   try {
     const payload = await getJson('/api/plan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: entry.prompt_hash, seed, duration, noise }),
+      body: JSON.stringify({ prompt: requested.prompt, seed, duration, noise }),
     });
     if (requestId !== state.requestId) return;
     installClip(payload, 'mine');
-    setStatus(`Generated ${payload.frames} frames in ${fmtMs(payload.generate_ms)}.`);
+    const timing = payload.timing || {};
+    const encoded = timing.encode_ms;
+    setStatus(
+      `Generated ${payload.frames} frames in ${fmtMs(timing.total_ms ?? payload.generate_ms)}`
+      + (encoded ? ` (encoded the prompt in ${fmtMs(encoded)} first)` : ' (prompt was cached)')
+      + `.`);
+    // A prompt that was just encoded is now in the cache, so refresh the list and
+    // select it -- otherwise the dropdown would still show the old set and the next
+    // Generate would look like it had ignored the text box.
+    await loadHealth().catch(() => {});
+    syncPromptSelect(payload.embedding && payload.embedding.prompt_hash);
   } catch (error) {
     if (requestId !== state.requestId) return;
     const name = error.errorName || 'request_failed';
@@ -406,16 +490,32 @@ async function generateClip() {
   }
 }
 
+/** Point the dropdown at a prompt hash when it is present; leave it alone otherwise. */
+function syncPromptSelect(promptHash) {
+  if (!promptHash) return;
+  const option = [...els.promptSelect.options].find((item) => item.value === promptHash);
+  if (option) {
+    els.promptSelect.value = promptHash;
+    updatePromptHelp();
+  }
+}
+
 async function loadReference(force = false) {
   if (!state.health) return;
   const duration = Number(els.durationInput.value);
+  // The golden clip belongs to one prompt. Compare against the clip actually on
+  // screen when there is one -- the text box may name a prompt the dropdown does not
+  // list yet -- so the reference is never loaded for a different prompt than the
+  // motion beside it.
   const entry = selectedEmbedding();
-  const key = `${duration}|${entry ? entry.prompt_hash : ''}`;
+  const shown = state.clip && state.clip.meta ? state.clip.meta.embedding : null;
+  const promptHash = (shown && shown.prompt_hash) || (entry ? entry.prompt_hash : '');
+  const key = `${duration}|${promptHash}`;
   if (!force && state.goldenKey === key && state.golden) return;
   try {
     const payload = await getJson(
       `/api/reference?duration=${encodeURIComponent(duration)}`
-      + `&prompt=${encodeURIComponent(entry ? entry.prompt_hash : '')}`);
+      + `&prompt=${encodeURIComponent(promptHash)}`);
     state.golden = payload;
     state.goldenKey = key;
     installClip(payload, 'golden');
@@ -492,6 +592,23 @@ function updateHudForClip(payload) {
   els.hud.embedding.textContent = `${payload.embedding.prompt_hash} · ${payload.embedding.embedding_sha256.slice(0, 12)}…`;
   els.hud.embedding.title = payload.embedding.embedding_path;
 
+  // Where the conditioning vector came from. This is the one label that must never
+  // be wrong: "reference bf16" means the clip is comparable with the golden one,
+  // "local MLX" means it is a different, equally valid sample.
+  const provenance = payload.embedding.provenance || {};
+  const isReference = payload.embedding.source_kind === 'reference';
+  els.hud.source.textContent = isReference
+    ? 'reference bf16 (golden)'
+    : `${provenance.label || payload.embedding.source_kind}${payload.embedding.bits ? ` ${payload.embedding.bits}-bit` : ''}`;
+  els.hud.source.className = `hud-value ${isReference ? 'is-golden' : 'is-mine'}`;
+  els.hud.source.title = provenance.note || '';
+
+  const timing = payload.timing || {};
+  els.hud.encode.textContent = timing.encode_ms === null || timing.encode_ms === undefined
+    ? 'cached'
+    : fmtMs(timing.encode_ms);
+  els.hud.encode.className = 'hud-value';
+
   els.stats.generate.textContent = fmtMs(payload.generate_ms);
   els.stats.frames.textContent = fmtCount(payload.frames);
   els.stats.windows.textContent = String(payload.windows);
@@ -499,6 +616,14 @@ function updateHudForClip(payload) {
   els.stats.noise.textContent = payload.noise.mode === 'golden' ? 'golden x_T' : `random (seed ${payload.noise.seed})`;
   els.stats.embedding.textContent = payload.embedding.embedding_sha256;
   els.stats.prompt.textContent = `${payload.embedding.text} (${payload.embedding.prompt_hash})`;
+  els.stats.source.textContent = provenance.label || payload.embedding.source_kind;
+  els.stats.source.className = isReference ? 'is-golden' : 'is-mine';
+  els.stats.source.title = provenance.note || '';
+  els.stats.quantization.textContent = payload.embedding.quantization || '—';
+  els.stats.encode.textContent = timing.encode_ms === null || timing.encode_ms === undefined
+    ? 'not needed (cached)'
+    : fmtMs(timing.encode_ms);
+  els.stats.total.textContent = fmtMs(timing.total_ms);
   els.stats.endpoint.textContent = payload.served_by;
 }
 
@@ -585,9 +710,24 @@ function frame() {
 // wiring
 // ---------------------------------------------------------------------------
 els.generate.addEventListener('click', generateClip);
+// Enter is the whole interaction for the text box: type a prompt, press Enter.
+els.promptText.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  generateClip();
+});
+els.promptTextGo.addEventListener('click', generateClip);
+els.promptText.addEventListener('input', () => {
+  // Typing is a statement of intent: clear the failure from the previous attempt so
+  // the panel does not still be shouting about a prompt that is no longer on screen.
+  if (!els.errorBox.hidden) clearError();
+});
 els.reload.addEventListener('click', () => { loadHealth().catch(() => {}); generateClip(); });
 els.promptSelect.addEventListener('change', () => {
   updatePromptHelp();
+  // Picking from the list is a different request from what is typed, so clear the box
+  // rather than leave two answers to "which prompt am I generating?" on screen.
+  els.promptText.value = '';
   state.goldenKey = null;
   if (els.goldenToggle.checked) loadReference(true);
 });
@@ -676,7 +816,13 @@ async function boot() {
   requestAnimationFrame(frame);
   try {
     const health = await loadHealth();
-    setStatus(`Ready. ${health.embeddings.length} cached prompt(s); cold start ${fmtMs(health.cold_start_s * 1000)}.`);
+    const encoder = health.encoder || {};
+    setStatus(
+      `Ready. ${health.embeddings.length} cached prompt(s); cold start `
+      + `${fmtMs(health.cold_start_s * 1000)}. `
+      + (encoder.available
+        ? `Local text encoder ready (${encoder.quantization}).`
+        : 'No local text encoder: only cached prompts.'));
     updateDurationConstraints();
     await generateClip();
   } catch (error) {

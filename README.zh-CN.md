@@ -63,7 +63,7 @@ English: [README.md](README.md)
 | `scripts/ardy_viewer.py` | 单线程回环 HTTP 服务（MLX 的 GPU stream 是 thread-local，所以**加载与处理请求同一个线程**）；`/api/health`、`/api/plan`、`/api/reference` | [`docs/VIEWER.md`](docs/VIEWER.md) §2、§7 |
 | `/api/plan` 2.0 s / 40 帧，注入金标准 `x_T` | 热态采样 **113–152 ms**，首次 248 ms（机器忙时 350 ms）；`posed_joints` 与金标准 npz 差 **5.178e-06** | `docs/VIEWER.md` §7 |
 | `/api/plan` 4.0 s / 80 帧 / 2 窗口，注入金标准 `x_T` | 采样 **281–315 ms**（机器忙时 794 ms）；差 **4.813e-06** | `docs/VIEWER.md` §7 |
-| prompt 选择 | 只能选**已缓存 embedding**（`artifacts/embeddings/<prompt-hash>.npy`）；找不到就报 `no_cached_embedding_for_prompt`，**绝不回退** | [`embeddings/README.md`](embeddings/README.md) |
+| prompt 选择 | **自由文本**：有缓存向量就用（**参考 bf16 向量优先**），没有就本机编码并按 `(prompt_hash, encoder_id)` 缓存；编码器缺失或拒绝时**具名报错**（`local_encoder_unavailable` / `local_encoder_failed`），**绝不回退** | [`docs/VIEWER.md`](docs/VIEWER.md) §3 |
 | 时长输入 | 必须是 horizon 的整数倍，否则 `duration_not_horizon_multiple` | `docs/VIEWER.md` §2 |
 | 查看器测试 | 4 个文件：接口、HTTP/目录包含、负对照、真权重端到端——前两个不需要 checkpoint | `docs/VIEWER.md` §8 |
 | 加载器 | 查看器与 `--backend mlx` 共用 `pipeline.build_mlx_runner`；有测试断言两者逐位产出同一段动作 | `docs/VIEWER.md` §5 |
@@ -92,8 +92,11 @@ English: [README.md](README.md)
 5. **RNG 未与 CUDA 对齐。** MLX 没有 `manual_seed`，本移植按窗口 `mx.random.split`。
    上面每个对齐数字都是**注入参考自己的 `x_T`**（每窗口一份），而不是复刻 Philox；
    因此想复现*参考*片段必须带上这份注入，否则本移植是确定的、但不与 CUDA 逐位相同。
-6. **不移植 8B 文本编码器。** 第一版**只吃预计算文本 embedding**（`[B,L,4096]` ＋ mask），
-   范围就是动作模型与采样；文本编码器的许可问题因此仍然开放（我们从未运行它）。
+6. **8B 文本编码器不移植进本仓库。** 动作模型**只吃预计算文本 embedding**（`[B,L,4096]` ＋ mask）。
+   编码器由独立仓库 `llm2vec-mlx`（`~/dev/llm2vec-mlx`）用 MLX 实现，本仓库**只通过查看器以子进程 + 文件接口**调用它
+   —— 不 import、不共享代码。参考编码器本身仍不在这里运行：有**参考 bf16** 向量的 prompt 用参考向量；
+   本机编码的向量（4-bit group 32，末 2 层与 `embed_tokens` 提到 8-bit）是**另一种条件**，
+   因此它的片段**不能**与金标准对照。见 [`docs/VIEWER.md`](docs/VIEWER.md) §3、§6。
 
 复现数字前还有两件必须知道的事，都在 **B 的文件**里，我们只报告不改（契约 §11 N16）：
 CLI 自己的 `--history-frames` 默认值是 `None`，**会同时关掉裁剪、heading 刷新与分块解码**，
@@ -140,7 +143,7 @@ scripts/ardy_viewer.py      浏览器查看器的 HTTP 服务（＋ 生成接口
 viewer/                     页面本体：index.html、app.js、rig.js（CoreSkeleton27）、
                             style.css，以及 vendor/ 下一份逐字节复制的 three.js
 artifacts/embeddings/       查看器可选的缓存文本 embedding（**不入库**）
-embeddings/README.md        怎么新增一个 prompt 的 embedding
+embeddings/README.md        怎么新增一个（参考）prompt embedding
 docs/motion-contract.md     A/B 数据契约（字段、单位、逐行证据）
 docs/VIEWER.md              查看器：起停、接口、页面功能、复用与归属、诚实边界
 docs/decisions/             裁定：checkpoint 条款、容差、契约问题、两条基线

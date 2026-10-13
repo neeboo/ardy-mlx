@@ -138,6 +138,16 @@ class FakeRunner:
             level = float(np.abs(noise).mean())
             frames[:, 1] += 0.05 * level
             frames[:, 2] += 0.10 * level
+        # ...and the same for the conditioning vector. Without this the fake would
+        # ignore its own input, and a test that "the clip changed with the prompt"
+        # could never fail -- a green test that proves nothing. The coupling is a
+        # mean of the embedding's bytes, so it is deterministic and differs for any
+        # two distinct vectors.
+        if self.embedding is not None:
+            vector = np.asarray(self.embedding.embeddings)
+            condition = float(np.abs(vector).mean()) % 1.0
+            frames[:, 1] += 0.02 * condition
+            frames[:, 2] += 0.04 * condition
         return {
             "frames": frames[None, ...],
             "offsets": [0] + [self.layout.horizon * (i + 1) for i in range(windows)],
@@ -317,7 +327,13 @@ def test_health_is_json_and_names_everything_the_page_shows(live_server):
     assert len(body["skeleton"]["jointParents"]) == 27
     assert [r["duration_s"] for r in body["golden_references"]] == [2.0, 4.0]
     assert [e["prompt_hash"] for e in body["embeddings"]] == [pipeline.prompt_hash("A person walks forward.")]
-    assert body["limits"]["text_encoder"].startswith("not ported")
+    assert body["limits"]["text_encoder"].startswith("a local MLX text encoder is available")
+    # The encoder block is part of the contract the page reads, even here where no
+    # encoder was wired in: the state has to be sayable, not absent.
+    assert body["encoder"]["state"] == "disabled"
+    assert body["embeddings_detail"]["cache_keys"] == [
+        [pipeline.prompt_hash("A person walks forward."), "reference-llm2vec-bf16"]
+    ]
 
 
 def test_health_reports_an_unloaded_model_instead_of_pretending(live_server):

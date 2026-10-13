@@ -845,3 +845,27 @@ Gram–Schmidt 正是为修它；把 `cont6d_to_matrix` 的输出再转回 6D �
   MLX 向量（`encoder: "mlx-llm2vec"`）只在没有参考向量时兜底；**sidecar 缺 `encoder` 字段按参考解释**。
 - **不许混用**：两种 `encoder` 的向量不可互换 —— 编码器不同 → 条件不同 → 动作不同（扩散对条件混沌）。
   这不影响 §1 的任何一维、任何单位，也不影响 `/api/plan` 的 `x_T` 注入与时长整数倍约束。
+
+## 13. 注记（A 侧第 6 轮 · 2026-10-13）：查看器接上本地编码器，**契约未动**
+
+**本节只加注记**：字段、维度、顺序、单位、`(1, 1, 4096)` 的形状与 float32 类型一律未动；
+`/api/plan` 的 `x_T` 注入与"时长必须是 horizon 整数倍"两条约束也未动。
+
+§12 写的"消费方口径"（参考向量优先、不许混用）本轮**落进了代码**，并补上了实现细节：
+
+- **缓存键是 `(prompt_hash, encoder_id)`**，不再是单独的 `prompt_hash`。侧车多写两个字段：
+  `encoder_id`（如 `mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit`）与
+  `quantization`（全名，如 `4-bit group 32, last-2 layers + embed_tokens at 8-bit`）。
+  纯写 "4-bit" 会与**过不了线的那个 artifact**同名（纯 4-bit group 32 最小 cos 0.9828 < 0.985），
+  所以全名是必须的，不是装饰。
+- **落盘布局**：参考向量在 `artifacts/embeddings/<prompt-hash>.npy`（历史约定不变），
+  本机向量在 `artifacts/embeddings/<encoder-id>/<prompt-hash>.npy`。
+  一个 prompt 因此可以同时持有参考向量与多个精度的本机向量，互不覆盖。
+- **优先级不变**：有参考向量就用参考向量（HUD 明示 `reference bf16 (golden)`）；
+  否则用**当前配置的那一档**本机向量；都没有才现场编码，编码失败**具名报错**
+  （`local_encoder_unavailable` / `local_encoder_failed`），**绝不**退到别的 prompt 或别的编码器的向量。
+- **本机向量不能与金标准对齐**：4-bit 对 16 条参考向量最小 cos 0.9875765（8-bit 0.9997453），
+  但扩散对条件混沌 —— 两个相近但不同的文本向量给出的是**不同但同样有效**的两段动作，
+  **不是**"与金标准一致"。所以本机向量那一路**不参与**金标准对照，这一点写进了 HUD 与文档。
+- **编码器不可用不是错误状态，是具名状态**：`/api/health` 的 `encoder` 块给出
+  `ready` / `unavailable`（带 `reason` 与逐候选检查）/ `disabled` 三态，探测**不加载权重**。

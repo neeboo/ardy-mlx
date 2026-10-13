@@ -545,3 +545,89 @@ $ git ls-files | grep -E '\.(safetensors|npz|npy)$|golden-run[^/]*/(raw|out)/'
   参考向量（原 `artifacts/reference-embeddings/*.npy`，权重派生数据，不入库）、
   以及"仅编码器"参考运行的记录（原 `artifacts/reference-encoder-run/**`）。
 - 本仓库因此**回到干净状态**：无 `src/ardy_mlx/text/**`、无 `artifacts/reference-*`。
+
+## 14. 第 6 轮（2026-10-13）· 查看器接上本机编码：自由文本 → 本机编码 → 本机生成
+
+**本节只加注记，不改既有契约与数值。** §13 说"查看器优先参考向量"，本轮把它连同
+"本机编码"一起落进代码：查看器现在可以输入**任意 prompt**，缺向量就在本机编码。
+
+### 14.1 接口与缓存
+
+- **跨仓调用走文件接口，不改 `llm2vec-mlx` 一个字节**：`subprocess` 跑它 `.venv` 里的
+  `scripts/encode.py --text … --bits 4 --out <tmp>/<prompt-hash>.npy --quiet`，读回
+  `.npy` ＋ `.json`。**没有**跨仓 import、没有拷贝它任何代码、没有改它任何文件。
+  只试对方 `.venv` 自己的解释器；本仓库的 `sys.executable` **不是**候选（那是另一套依赖，
+  会让"编码器缺失"变成"编码器跑在错的 python 上"）。
+- **缓存键 `(prompt_hash, encoder_id)`**：参考向量在 `artifacts/embeddings/<prompt-hash>.npy`，
+  本机向量在 `artifacts/embeddings/<encoder-id>/<prompt-hash>.npy`，**一个 prompt 可同时持有两者**。
+- **量化全名入库**：`encoder_id = mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit`，
+  侧车同时写 `quantization = "4-bit group 32, last-2 layers + embed_tokens at 8-bit"`。
+  名字从 artifact 自己的 manifest 读，不硬编码；纯写 "4-bit" 会与**过不了线**的那个 artifact
+  （纯 4-bit group 32，最小 cos 0.9828 < 0.985）同名，所以必须写全。
+- **优先级**：参考向量 → 当前档本机向量 → 现场编码 → 否则**具名报错**。
+  绝不退到别的 prompt、也绝不用别的编码器的向量（`encoder_variant_not_cached` 只针对显式指定编码器的查询）。
+
+### 14.2 现场验证（HTTP，不点界面、不合成输入）
+
+服务 `nohup ./.venv/bin/python scripts/ardy_viewer.py --port 8850`（旧 PID 56914 已先停掉，
+新 PID 86755）。全新 prompt `A person walks forward and waves.`：
+
+| 量 | 值 |
+|---|---|
+| `timing.encode_ms`（编码子进程，含冷启动） | **1367 ms**（首次）；20 条全新 prompt 的 p50 **974 ms** / p90 993 ms |
+| `timing.generate_ms`（采样） | 221 ms（首次）；p50 129 ms |
+| `timing.total_ms`（服务端整体） | **1598 ms**（首次）；p50 1114 ms |
+| 向量来源 | `local` / `source_kind: local-mlx` |
+| 量化档 | 4-bit group 32, last-2 layers + embed_tokens at 8-bit |
+| 同一 prompt 再来一次 | `encode_ms: null`、`cache_hit: true`、**总 111 ms**、frames 逐位相同 |
+
+**旧 prompt `A person walks forward.` 仍然优先用参考向量，且逐位未变**：
+
+- `source: reference` / `encoder_id: reference-llm2vec-bf16` / `encode_ms: null`；
+- 与"完全停用本机编码器（`--no-local-encoder`）的那台服务"对比，
+  `posed_joints` / `root_positions` / `foot_contacts` **三个数组逐位相同**；
+- 对金标准 npz 的 `posed_joints` `max_abs = 5.1781535e-06`，与 §7/`align-report.json`
+  记录的 **5.178e-06** 一致（不是新的、更好看的数字）。
+
+### 14.3 负向证据（都是具名报错，原文）
+
+```
+POST /api/plan {"prompt": "<2010-token prompt>"}
+502 local_encoder_failed
+message: the local encoder exited 3 for prompt hash a532f2b3a994c000
+detail : encoder exit code: 3
+         encoder refused: prompt needs 2010 tokens, over the reference's max_length 512;
+         truncation would change the pooled vector, so the encoder refuses to guess
+
+POST /api/plan {"prompt": "A person bows politely and stands up."}   # encoder 不可用
+503 local_encoder_unavailable
+message: the local text encoder is not usable: missing scripts/encode.py (…);
+         an interpreter (tried: …/.venv/bin/python, …/.venv/bin/python3);
+         the 4-bit weight manifest (…); run llm2vec-mlx's scripts/build_weights.py first
+```
+
+`encoder_id` 混用（把 8-bit 向量塞进 4-bit 的键、或反过来）在测试里是**具名拒绝**
+或"当作 miss 重新编码"，绝不静默复用：
+`tests/test_viewer_local_encoder.py::{test_negative_mixing_two_encoders_vectors_is_refused,
+test_negative_a_cached_vector_is_never_returned_for_a_different_encoder_key,
+test_negative_a_mislabelled_file_in_an_encoders_directory_is_refused}`。
+
+### 14.4 性能与内存（loadavg 8.41 / 9.15 / 10.07 → 8.96 / 9.23 / 10.08，10 核）
+
+| 量 | 值 |
+|---|---|
+| 编码（整只子进程，HTTP 20 条全新 prompt） | p50 **974 ms**、p90 993 ms |
+| 采样 2.0 s（热缓存） | p50 **108 ms**（忙时 129 ms） |
+| 采样 4.0 s（热缓存） | p50 **257 ms** |
+| 查看器进程峰值 RSS | **1030 MiB**（编码循环中），空闲 938 MiB，起始 334 MiB |
+| 编码子进程峰值 RSS | 4-bit **5190 MiB**；8-bit **7862 MiB** |
+
+编码器与查看器是**两个进程**：5.2 GB 不落在 ARDY checkpoint 的地址空间里，
+编码结束查看器回到 ~0.9 GB。这也是它必须是子进程的原因之一（另两个：两仓解耦、耗时可见）。
+
+### 14.5 测试与纪律
+
+- 本仓库 **332 passed, 1 xfailed**（原 303 + 1，只增不减）。新增
+  `tests/test_viewer_local_encoder.py`（27 条，其中 2 条要真编码器、缺席时**带原因 skip**）。
+- `llm2vec-mlx` **一个字未改**（`git status --short` 为空，HEAD 仍 `7708d08`）。
+- 未 push；权重/向量不入库（§11 的审计仍零命中，见本轮汇报）。

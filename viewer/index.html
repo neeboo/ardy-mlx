@@ -17,6 +17,8 @@
         <span class="hud-key">generate</span><span class="hud-value" id="hud-generate">—</span>
         <span class="hud-key">playback</span><span class="hud-value" id="hud-fps">—</span>
         <span class="hud-key">noise</span><span class="hud-value" id="hud-noise">—</span>
+        <span class="hud-key">vector</span><span class="hud-value" id="hud-source">—</span>
+        <span class="hud-key">encode</span><span class="hud-value" id="hud-encode">—</span>
         <span class="hud-key">embedding</span><span class="hud-value" id="hud-embedding">—</span>
       </div>
     </section>
@@ -25,11 +27,24 @@
       <p class="eyebrow">ARDY / MLX</p>
       <h1>Motion viewer</h1>
       <p class="lede">Every clip on this page is sampled live on this machine by the MLX
-        port. Pick a cached prompt, set a seed, and generate.</p>
+        port, from any prompt you type. A prompt that is not cached yet is encoded here
+        first. Prompts that have a <b>reference</b> vector use it, so those clips stay
+        comparable with the golden reference.</p>
 
       <h2>Prompt</h2>
       <div class="field">
-        <label for="prompt-select">Cached text embedding</label>
+        <label for="prompt-text">Any prompt <span class="hint">(Enter to generate)</span></label>
+        <div class="row">
+          <input id="prompt-text" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="A person walks forward and waves."
+                 aria-label="Prompt text">
+          <button id="prompt-text-go" class="ghost" type="button">Go</button>
+        </div>
+        <p class="help" id="prompt-text-help">—</p>
+      </div>
+
+      <div class="field">
+        <label for="prompt-select">Cached text embeddings</label>
         <select id="prompt-select" aria-label="Cached text embedding"></select>
         <p class="help" id="prompt-help">—</p>
       </div>
@@ -104,6 +119,11 @@
         <div><dt>Injected x<sub>T</sub></dt><dd id="stat-noise">—</dd></div>
         <div><dt>Embedding sha256</dt><dd id="stat-embedding">—</dd></div>
         <div><dt>Prompt hash</dt><dd id="stat-prompt">—</dd></div>
+        <div><dt>Vector source</dt><dd id="stat-source">—</dd></div>
+        <div><dt>Quantization</dt><dd id="stat-quantization">—</dd></div>
+        <div><dt>Encode (local)</dt><dd id="stat-encode">—</dd></div>
+        <div><dt>Total (server)</dt><dd id="stat-total">—</dd></div>
+        <div><dt>Local encoder</dt><dd id="stat-encoder">—</dd></div>
         <div><dt>Endpoint</dt><dd id="stat-endpoint">—</dd></div>
       </dl>
 
@@ -111,13 +131,19 @@
       <div id="error-box" hidden></div>
 
       <p class="note" id="limits">
-        <b>v1 has no text encoder.</b> The prompts in the list are precomputed
-        <code>artifacts/embeddings/&lt;prompt-hash&gt;.npy</code> files, not text encoded on
-        the fly. A prompt with no cached embedding fails by name — the server never
-        falls back to a different one. See <code>embeddings/README.md</code> for how to add
-        one, and <code>docs/VIEWER.md</code> for the rest of the honest boundaries
-        (post-processing is not built, so the clip carries foot skating; the MLX RNG is
-        not CUDA's Philox stream).
+        <b>Read this before comparing clips.</b> A prompt with a cached
+        <b>reference bf16</b> vector is conditioned on that vector, and only those clips
+        are comparable with the <b>Reference (golden)</b> overlay. Any other prompt is
+        encoded <b>on this machine</b> by the local MLX text encoder — close to the
+        reference, but a different artifact, so its motion is a <b>different, equally
+        valid sample</b> and is <b>not</b> aligned with the golden clip. Encoding happens
+        once per prompt and is then cached under
+        <code>artifacts/embeddings/&lt;encoder-id&gt;/&lt;prompt-hash&gt;.npy</code>. If the
+        encoder is missing or refuses, the request fails by name
+        (<code>local_encoder_unavailable</code> / <code>local_encoder_failed</code>) — the
+        server never substitutes another prompt's vector. Post-processing is not built, so
+        the clip carries foot skating, and the MLX RNG is not CUDA's Philox stream. See
+        <code>docs/VIEWER.md</code>.
       </p>
     </aside>
   </main>

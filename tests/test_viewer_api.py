@@ -274,8 +274,43 @@ def test_health_names_the_golden_runs_and_the_limits(app):
     health = app.health()
     assert sorted(r["duration_s"] for r in health["golden_references"]) == [2.0, 4.0]
     assert "text_encoder" in health["limits"]
-    assert "not ported" in health["limits"]["text_encoder"]
+    # The honesty label moved with the feature: the boundary is no longer "there is
+    # no encoder", it is that a locally-conditioned clip is *not* aligned with the
+    # golden one. Both halves have to be in the string, or the label is wrong in one
+    # direction or the other.
+    text_encoder = health["limits"]["text_encoder"]
+    assert "local MLX text encoder is available" in text_encoder
+    assert "NOT" in text_encoder and "golden" in text_encoder
     assert "auth" in health["limits"]
+
+
+def test_health_reports_the_encoder_block_even_when_it_is_disabled(app):
+    """No encoder wired in is a *named state*, not an absent key.
+
+    The page renders ``encoder.state`` directly; a missing block would make "this
+    viewer cannot encode" indistinguishable from "this build is too old to say".
+    """
+    health = app.health()
+    assert health["encoder"]["enabled"] is False
+    assert health["encoder"]["state"] == "disabled"
+    assert health["encoder"]["available"] is False
+    assert health["encoder"]["encoder_id"] is None
+    # And it says how to turn it on, rather than only that it is off.
+    assert "--llm2vec-repo" in health["encoder"]["reason"]
+
+
+def test_health_lists_the_cache_key_of_every_vector(app, embeddings_dir):
+    """``(prompt_hash, encoder_id)`` is the key, and health shows both halves."""
+    health = app.health()
+    digest = pipeline.prompt_hash("A person walks forward.")
+    assert health["embeddings_detail"]["count"] == 1
+    assert health["embeddings_detail"]["variants"] == 1
+    assert health["embeddings_detail"]["cache_keys"] == [[digest, "reference-llm2vec-bf16"]]
+    assert health["embeddings_detail"]["by_source"] == {"reference": 1, "local": 0}
+    # A sidecar with no ``encoder`` field is the historical reference convention --
+    # labelled as the reference, not as "unknown".
+    assert health["embeddings"][0]["encoder_id"] == "reference-llm2vec-bf16"
+    assert health["embeddings"][0]["source"] == "reference"
 
 
 # --------------------------------------------------------------------------- #

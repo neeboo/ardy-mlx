@@ -62,9 +62,9 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import mimetypes
+import os
 import re
 import sys
 import threading
@@ -72,6 +72,7 @@ import time
 import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
@@ -89,6 +90,13 @@ from ardy_mlx.model.skeleton import (  # noqa: E402
     posed_joints_from_features,
 )
 from ardy_mlx.sampling.diffusion import resolve_num_steps  # noqa: E402
+from ardy_mlx.sampling.local_encoder import (  # noqa: E402
+    DEFAULT_LLM2VEC_REPO,
+    LOCAL_ENCODER_SUBDIR,
+    REFERENCE_ENCODER_ID,
+    LocalEncoder,
+    LocalEncoderError,
+)
 from ardy_mlx.sampling.pipeline import (  # noqa: E402
     TextEmbedding,
     build_mlx_runner,
@@ -97,6 +105,7 @@ from ardy_mlx.sampling.pipeline import (  # noqa: E402
     prompt_hash,
     resolve_noise_windows,
     sha256_file,
+    sha256_text,
 )
 
 DEFAULT_MODEL = "ARDY-Core-RP-20FPS-Horizon40"
@@ -185,113 +194,455 @@ def _display_path(path: Path) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# cached embeddings
+# cached embeddings, keyed by (prompt_hash, encoder_id)
 # --------------------------------------------------------------------------- #
-class EmbeddingCache:
-    """The prompts this server can actually run, keyed by prompt hash.
+#: The largest cache we will hash through on every ``/api/health``. Past this, the
+#: directory is summarised rather than re-hashed (see :meth:`EmbeddingCache.list`).
+#: Hashing is cheap per file and the check is what keeps the health endpoint
+#: honest about *these* bytes, but "cheap" stops being true at scale.
+_MAX_FINGERPRINT_ENTRIES = 512
 
-    A prompt is available **only** because a file named after its hash exists.
-    Nothing here can encode text, and nothing here guesses: a lookup miss is a
-    :class:`ViewerError` (``no_cached_embedding_for_prompt``), not a fallback.
+
+def _slug(text: str) -> str:
+    """A filesystem-safe directory name for an encoder id.
+
+    The encoder id is the cache key's second half and contains spaces, ``+`` and
+    commas (it spells out the quantization plan). The directory name is that string
+    with anything awkward folded to ``-``; the **sidecar** keeps the id verbatim, so a
+    directory name is a convenience and never the authority on what a vector is.
+    """
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(text)).strip("-")
+    return slug or "local"
+
+
+def _entry_priority(entry: dict) -> int:
+    """Which vector a prompt should be conditioned on, lower being better.
+
+    A reference vector **always** wins. It is the conditioning signal the golden
+    clip was produced from, so using it is what keeps a viewer clip comparable with
+    the reference at all; a locally-encoded vector is a different (valid) condition
+    and would break that comparison silently. This ordering is the whole reason the
+    two live in separate directories instead of one.
+    """
+    if entry.get("source") == "reference":
+        return 0
+    if entry.get("source") == "local":
+        return 1
+    return 2
+
+
+class EmbeddingCache:
+    """Every text vector this server can condition on, keyed by what produced it.
+
+    A prompt can have more than one vector, and the difference is not cosmetic:
+
+    * the **reference** vector (bf16, encoded on the reference machine) is the
+      conditioning signal the golden clip came from. It lives at
+      ``<embeddings-dir>/<prompt-hash>.npy``, the historical convention.
+    * a **locally encoded** vector (the MLX encoder in ``llm2vec-mlx``) lives at
+      ``<embeddings-dir>/mlx/<prompt-hash>.npy``, so the two never overwrite each
+      other. It is a different model artifact and gives a genuinely different —
+      equally valid — clip.
+
+    The cache key is therefore ``(prompt_hash, encoder_id)``, where ``encoder_id``
+    names the encoder *and its exact precision* (``mlx-llm2vec-4-bit-group-32-…``).
+    Two vectors only ever share a slot when both halves match; a sidecar that cannot
+    say what produced its vector is labelled rather than promoted.
+
+    Nothing here invents a vector. A lookup miss raises
+    :class:`ViewerError` ``no_cached_embedding_for_prompt`` and names both
+    directories and the file that was looked for. Local encoding is a separate,
+    explicit step (:meth:`ardy_viewer.ViewerApp._resolve_embedding`) that fails by
+    name too — this class never substitutes.
     """
 
     def __init__(self, directory: Path = EMBEDDINGS_DIR):
         self.directory = Path(directory)
-        self._entries: Dict[str, dict] = {}
+        self.by_key: Dict[Tuple[str, str], dict] = {}
+        self.by_prompt: Dict[str, Dict[str, dict]] = {}
+        self.text_index: Dict[str, str] = {}
+        self.skipped: List[dict] = []
+        self._fingerprints: "OrderedDict[Tuple[str, int, int], str]" = OrderedDict()
+
+    # -- paths -----------------------------------------------------------
+    def local_variants_dirs(self) -> List[Path]:
+        """Every sub-directory of the cache: one per local encoder.
+
+        The layout is ``<cache>/<prompt-hash>.npy`` for a reference vector and
+        ``<cache>/<encoder-slug>/<prompt-hash>.npy`` for a local one. The directory
+        *is* the encoder half of the cache key, which is why one prompt can hold a
+        reference vector and several precisions of local vector at once without any
+        of them overwriting another — the failure mode a single flat ``mlx/``
+        directory has the moment two precisions are both in use.
+        """
+        if not self.directory.is_dir():
+            return []
+        return sorted(
+            path for path in self.directory.iterdir()
+            if path.is_dir() and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", path.name)
+        )
+
+    def local_dir_for(self, encoder_id: str) -> Path:
+        """Where one encoder's local vectors live: ``<cache>/<slug>/``."""
+        return self.directory / _slug(encoder_id)
+
+    @property
+    def local_variants_dir(self) -> Path:
+        """The default local encoder's directory (kept for direct callers/tests)."""
+        return self.directory / LOCAL_ENCODER_SUBDIR
+
+    def _display(self, path: Path) -> str:
+        try:
+            return str(Path(path).relative_to(REPO_ROOT))
+        except ValueError:
+            return str(Path(path))
+
+    def _scan_roots(self) -> List[Tuple[Path, str]]:
+        """``(directory, source)`` pairs to scan, in precedence order.
+
+        The top level holds **reference** vectors and nothing else: a local vector
+        belongs in a sub-directory, so a file at the top level is a reference vector
+        by construction (the historical convention, and the reason every existing
+        cache keeps working). Each sub-directory is one local encoder. There is no
+        recursion past one level — a deeper directory is not a cache layout and is
+        reported as skipped rather than guessed at.
+        """
+        if not self.directory.is_dir():
+            return []
+        return [(self.directory, "reference")] + [
+            (path, "local") for path in self.local_variants_dirs()
+        ]
 
     # -- discovery -------------------------------------------------------
+    def _fingerprint(self, path: Path, stat: os.stat_result) -> str:
+        """Cached ``sha256`` of a file, keyed by identity *and* mtime/size.
+
+        ``/api/health`` reports these digests and the tests poll it, so it is called
+        far more often than the cache changes. The stat fields are part of the key on
+        purpose: replacing a file with different bytes of the same length still
+        changes ``st_mtime_ns``, so a stale digest cannot survive an edit.
+        """
+        key = (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+        digest = self._fingerprints.get(key)
+        if digest is None:
+            digest = sha256_file(path)
+            self._fingerprints[key] = digest
+            while len(self._fingerprints) > _MAX_FINGERPRINT_ENTRIES:
+                self._fingerprints.popitem(last=False)
+        else:
+            self._fingerprints.move_to_end(key)
+        return digest
+
     def _sidecar(self, npy_path: Path) -> Optional[dict]:
         sidecar = npy_path.with_suffix(".json")
         if not sidecar.is_file():
             return None
         try:
-            return json.loads(sidecar.read_text(encoding="utf-8"))
+            loaded = json.loads(sidecar.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
+        return loaded if isinstance(loaded, dict) else None
+
+    def _scan_entry(self, path: Path, source: str, encoder_default: str) -> dict:
+        """Normalise one ``.npy`` (+ sidecar) into a cache entry.
+
+        Every field a caller reports is derived here from the file's own sidecar, so
+        ``/api/health`` and ``/api/plan`` cannot disagree about where a vector came
+        from. Fields the sidecar does not carry are reported as ``None`` — an
+        explicit unknown, never a plausible default.
+        """
+        stat = path.stat()
+        sidecar = self._sidecar(path) or {}
+        text = sidecar.get("prompt") if isinstance(sidecar.get("prompt"), str) else None
+        encoder_id = sidecar.get("encoder_id")
+        if not isinstance(encoder_id, str) or not encoder_id:
+            # A sidecar without an id: the reference convention (the historical files
+            # predate the field), or a locally-encoded file whose provenance is simply
+            # not recorded. The latter is *labelled unknown*, not attributed.
+            if source == "reference" and isinstance(sidecar.get("encoder"), str):
+                encoder_id = sidecar["encoder"]
+            elif source == "reference":
+                encoder_id = REFERENCE_ENCODER_ID
+            else:
+                encoder_id = "unknown-encoder"
+        quantization = sidecar.get("quantization")
+        if not isinstance(quantization, str):
+            quantization = None
+        token_count = sidecar.get("num_tokens")
+        if not isinstance(token_count, int):
+            token_count = None
+
+        try:
+            array = np.load(path, allow_pickle=False)
+            shape = [int(dim) for dim in array.shape]
+            tokens = int(array.shape[1]) if array.ndim >= 3 else (int(array.shape[0]) if array.ndim else 0)
+        except (OSError, ValueError) as exc:  # unreadable -> listed, but not usable
+            shape, tokens = None, None
+            text = text or f"<unreadable: {exc}>"
+
+        return {
+            "prompt_hash": path.stem,
+            "encoder_id": encoder_id,
+            "source": source,
+            "text": text if text is not None else f"<unknown prompt for {path.stem}>",
+            "has_prompt_text": text is not None,
+            "path": self._display(path),
+            "path_abs": str(path),
+            "embedding_sha256": self._fingerprint(path, stat),
+            "shape": shape,
+            "tokens": tokens,
+            "num_tokens": token_count,
+            "quantization": quantization,
+            "encoder": sidecar.get("encoder"),
+            "note": sidecar.get("note"),
+            "reference_source": sidecar.get("reference_source"),
+            "created_utc": sidecar.get("created_utc"),
+            "git_sha": sidecar.get("git_sha"),
+            "weights_sha256": sidecar.get("weights_sha256"),
+            "manifest_sha256": sidecar.get("manifest_sha256"),
+            "merged_bf16_sha256": sidecar.get("merged_bf16_sha256"),
+            "bits": sidecar.get("bits"),
+            "group_size": sidecar.get("group_size"),
+        }
 
     def refresh(self) -> List[dict]:
-        """Rescan the directory; returns the sorted entry list."""
-        entries: Dict[str, dict] = {}
-        if self.directory.is_dir():
-            for path in sorted(self.directory.glob("*.npy")):
+        """Rescan the cache directory (root = reference, ``mlx/`` = local).
+
+        Returns :meth:`list`. Both directories are read every time: the viewer
+        installs a freshly-encoded vector by writing there, and a refresh is what
+        makes it visible to the next request.
+        """
+        found: List[dict] = []
+        skipped: List[dict] = []
+        for root, source in self._scan_roots():
+            for path in sorted(root.glob("*.npy")):
                 stem = path.stem
                 if not re.fullmatch(r"[0-9a-f]{16}", stem):
-                    # Not one of ours (a scratch file, a README placeholder). It
-                    # is reported as absent rather than guessed at: an embedding
-                    # whose name is not a prompt hash cannot be addressed.
+                    # Not one of ours (a scratch file, a README placeholder). It is
+                    # reported as skipped rather than guessed at: an embedding whose
+                    # name is not a prompt hash cannot be addressed.
+                    skipped.append(
+                        {
+                            "path": self._display(path),
+                            "source": source,
+                            "reason": "file name is not a 16-hex prompt hash",
+                        }
+                    )
                     continue
-                sidecar = self._sidecar(path)
-                text = None
-                if sidecar and isinstance(sidecar.get("prompt"), str):
-                    text = sidecar["prompt"]
                 try:
-                    array = np.load(path, allow_pickle=False)
-                    tokens = int(array.shape[1]) if array.ndim == 3 else int(array.shape[0])
-                    shape = list(array.shape)
-                except (OSError, ValueError) as exc:  # unreadable -> listed, but not usable
-                    tokens, shape = None, None
-                    text = text or f"<unreadable: {exc}>"
-                entries[stem] = {
-                    "prompt_hash": stem,
-                    "text": text if text is not None else f"<unknown prompt for {stem}>",
-                    "has_prompt_text": text is not None,
-                    "path": _display_path(path),
-                    "embedding_sha256": sha256_file(path),
-                    "shape": shape,
-                    "tokens": tokens,
-                    "source": (sidecar or {}).get("source"),
-                    "note": (sidecar or {}).get("note"),
-                }
-        self._entries = entries
+                    entry = self._scan_entry(path, source, REFERENCE_ENCODER_ID)
+                except OSError as exc:
+                    skipped.append(
+                        {"path": self._display(path), "source": source, "reason": str(exc)}
+                    )
+                    continue
+                # The directory is the authority on which encoder a local vector
+                # belongs to; the sidecar is a label that can be edited by hand. When
+                # they disagree the file is still addressable, but it is labelled by
+                # where it lives and the disagreement is reported.
+                recorded = entry["encoder_id"]
+                directory_encoder = root.name
+                if source == "local" and recorded != directory_encoder:
+                    entry["encoder_id"] = directory_encoder
+                    entry["encoder_id_conflict"] = recorded
+                found.append(entry)
+
+        reference_encoder = next(
+            (entry["encoder_id"] for entry in found if entry["source"] == "reference"),
+            REFERENCE_ENCODER_ID,
+        )
+
+        by_prompt: Dict[str, Dict[str, dict]] = {}
+        for entry in sorted(found, key=lambda item: (_entry_priority(item), item["encoder_id"])):
+            by_prompt.setdefault(entry["prompt_hash"], {})[entry["encoder_id"]] = entry
+
+        by_key: Dict[Tuple[str, str], dict] = {}
+        text_index: Dict[str, str] = {}
+        for digest, variants in by_prompt.items():
+            for variant in variants.values():
+                by_key[(digest, variant["encoder_id"])] = variant
+            best = next(iter(variants.values()))
+            if best["has_prompt_text"]:
+                text_index[best["text"]] = digest
+
+        self.by_key = by_key
+        self.by_prompt = by_prompt
+        self.text_index = text_index
+        self.skipped = skipped
+        self.reference_encoder_id = reference_encoder
         return self.list()
 
+    # -- listing ---------------------------------------------------------
     def list(self) -> List[dict]:
-        return [self._entries[key] for key in sorted(self._entries)]
+        """Every prompt once, its preferred (reference-first) vector.
+
+        One prompt with both a reference and a local vector appears **once**, as the
+        reference — that is the entry a request will actually be conditioned on. The
+        alternatives stay addressable through :meth:`variants` and
+        :meth:`resolve_cached`.
+        """
+        entries: List[dict] = []
+        for digest in sorted(self.by_prompt):
+            variants = self.by_prompt[digest]
+            best_id = min(variants, key=lambda key: _entry_priority(variants[key]))
+            entries.append(variants[best_id])
+        return entries
+
+    def variants(self, prompt_hash: str) -> List[dict]:
+        """Every cached vector for one prompt, best first (reference, then local)."""
+        variants = self.by_prompt.get(prompt_hash, {})
+        return [variants[key] for key in sorted(variants, key=lambda k: _entry_priority(variants[k]))]
+
+    def local_variants(self, prompt_hash: str) -> List[dict]:
+        return [entry for entry in self.variants(prompt_hash) if entry["source"] == "local"]
 
     # -- lookup ----------------------------------------------------------
-    def resolve(self, selector: str) -> dict:
-        """Resolve a prompt hash **or** an exact prompt text to a cached entry.
+    def _selector_digest(self, selector: str) -> Optional[str]:
+        """Resolve a selector that names a prompt (hash, full sha256, or text).
 
-        Text is resolved by hashing it, so the text path and the hash path agree
-        by construction. If a selector is neither a cached hash nor the exact text
-        of a cached embedding, this raises -- it never picks "the closest" one.
+        Text is resolved through an index built from the *stored* sidecar texts, so
+        the by-hash path and the by-text path agree by construction and an arbitrary
+        64-hex string can never be mistaken for a prompt it does not describe.
+        """
+        if selector in self.by_prompt:
+            return selector
+        lower = selector.strip().lower()
+        if re.fullmatch(r"[0-9a-f]{64}", lower):
+            for digest, variants in self.by_prompt.items():
+                for entry in variants.values():
+                    if entry["has_prompt_text"] and sha256_text(entry["text"]) == lower:
+                        return digest
+            return None
+        if selector in self.text_index:
+            return self.text_index[selector]
+        digest = prompt_hash(selector)
+        return digest if digest in self.by_prompt else None
+
+    def resolve_cached(self, prompt_hash: str, encoder_id: Optional[str] = None) -> dict:
+        """The cached entry for exactly ``(prompt_hash, encoder_id)``.
+
+        With no ``encoder_id``, the prompt's **preferred** vector is returned — the
+        reference when one exists, otherwise the best local one. With an
+        ``encoder_id``, only that exact key matches: asking for one encoder's vector
+        can never hand back another's.
+        """
+        variants = self.by_prompt.get(prompt_hash)
+        if not variants:
+            return None  # type: ignore[return-value]
+        if encoder_id is not None:
+            return variants.get(encoder_id)
+        best_id = min(variants, key=lambda key: _entry_priority(variants[key]))
+        return variants[best_id]
+
+    def resolve(self, selector: str, encoder_id: Optional[str] = None) -> dict:
+        """Resolve a prompt selector to a **cached** entry, or fail by name.
+
+        This is the cache-only lookup; it never encodes and never substitutes. A
+        miss is ``no_cached_embedding_for_prompt``, naming both directories and the
+        file that was looked for. With ``encoder_id`` given, the miss is instead
+        ``encoder_variant_not_cached``, because the prompt *is* available — just not
+        from that encoder, and silently swapping in the other one is the failure this
+        whole cache layout exists to prevent.
         """
         if selector is None or selector == "":
             raise ViewerError(
                 "no_prompt_given",
                 "a prompt is required: pass the prompt hash of a cached embedding, or its exact text",
             )
-        if selector in self._entries:
-            return self._entries[selector]
-
-        lower = selector.strip().lower()
-        if re.fullmatch(r"[0-9a-f]{64}", lower):
-            # A full SHA-256 of the prompt text (what `shasum` prints). Resolved by
-            # hashing the *stored* texts, so an arbitrary 64-hex string can never be
-            # mistaken for a prompt it does not actually describe.
-            for entry in self._entries.values():
-                if hashlib.sha256(entry["text"].encode("utf-8")).hexdigest() == lower:
-                    return entry
+        digest = self._selector_digest(selector)
+        if digest is not None:
+            entry = self.resolve_cached(digest, encoder_id)
+            if entry is not None:
+                return entry
+            variants = [variant["encoder_id"] for variant in self.variants(digest)]
+            raise ViewerError(
+                "encoder_variant_not_cached",
+                (
+                    f"prompt {digest} is cached, but not from encoder {encoder_id!r}; "
+                    f"the cached encoder(s) are: {', '.join(variants) or '(none)'}"
+                ),
+                detail=(
+                    "Refusing to condition on a different encoder's vector for the same "
+                    "prompt: the two are different artifacts and produce different clips."
+                ),
+            )
 
         digest = prompt_hash(selector)
-        if digest in self._entries:
-            return self._entries[digest]
-
-        available = ", ".join(sorted(self._entries)) or "(none)"
-        try:
-            where = self.directory.relative_to(REPO_ROOT)
-        except ValueError:
-            where = self.directory
+        within = self.directory.relative_to(REPO_ROOT) if self._under_repo(self.directory) else self.directory
+        available = ", ".join(sorted(self.by_prompt)) or "(none)"
         raise ViewerError(
             "no_cached_embedding_for_prompt",
-            f"no cached embedding for this prompt; expected {where}/{digest}.npy",
+            f"no cached embedding for this prompt; expected {within}/{digest}.npy",
             detail=(
                 f"selector={selector[:120]!r} resolves to prompt hash {digest}. "
-                f"Available prompt hashes: {available}. v1 has no text encoder, so an "
-                f"uncached prompt cannot be run -- see embeddings/README.md."
+                f"Available prompt hashes: {available}. The viewer can encode this "
+                f"prompt locally instead (see local_encoder); this error means the "
+                f"cache-only lookup was asked for it."
             ),
         )
 
+    @staticmethod
+    def _under_repo(path: Path) -> bool:
+        try:
+            Path(path).relative_to(REPO_ROOT)
+            return True
+        except ValueError:
+            return False
+
+    # -- installation ----------------------------------------------------
+    def install(self, result) -> dict:
+        """Copy an :class:`EncodeResult` into the cache, sidecar and all.
+
+        The vector the encoder wrote is moved with :func:`os.replace` (atomic within a
+        filesystem), so a reader can never see a half-written ``.npy``: either the
+        entry is absent or it is complete. The sidecar is written *after* the vector
+        and carries the full quantization name, so a cached entry always explains
+        itself.
+
+        The bytes are not re-derived or re-quantized here. This is a copy of the
+        encoder's own output plus its provenance — the same bytes the subprocess
+        wrote, addressed by ``(prompt_hash, encoder_id)``.
+        """
+        target_dir = self.local_dir_for(result.encoder_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        vector_target = target_dir / f"{result.prompt_hash}.npy"
+        staged = Path(result.vector_path)
+        record = result.as_sidecar()
+
+        # A file in this encoder's own directory can only be this encoder's vector, so
+        # a mismatch here means a sidecar was edited or a directory was renamed by
+        # hand. Refuse rather than silently relabel somebody else's bytes.
+        if vector_target.is_file():
+            existing = self._sidecar(vector_target) or {}
+            if existing.get("encoder_id") not in (None, record.get("encoder_id")):
+                raise ViewerError(
+                    "local_encoder_failed",
+                    (
+                        f"{vector_target} already holds a vector from encoder "
+                        f"{existing.get('encoder_id')!r}; refusing to overwrite it with "
+                        f"{record.get('encoder_id')!r}"
+                    ),
+                    status=500,
+                    detail=(
+                        "Two encoders' vectors for one prompt are two cache keys, in two "
+                        "directories. Move the old file aside if that label is wrong."
+                    ),
+                )
+        os.replace(staged, vector_target)
+        sidecar_target = vector_target.with_suffix(".json")
+        sidecar_target.write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+        self.refresh()
+        entry = self.resolve_cached(result.prompt_hash, result.encoder_id)
+        if entry is None:  # pragma: no cover - install() just wrote it
+            raise ViewerError(
+                "local_encoder_failed",
+                f"the encoded vector was written to {vector_target} but did not come back from a rescan",
+                status=500,
+            )
+        return entry
 
 # --------------------------------------------------------------------------- #
 # golden reference runs
@@ -533,6 +884,7 @@ class ViewerApp:
         embeddings_dir: Path = EMBEDDINGS_DIR,
         checkpoint_dir: Optional[Path] = None,
         allow_cpu: bool = False,
+        local_encoder: Optional[LocalEncoder] = None,
     ):
         self.model = model
         self.device = device
@@ -540,11 +892,21 @@ class ViewerApp:
         self.allow_cpu = allow_cpu
         self.embeddings = EmbeddingCache(embeddings_dir)
         self.checkpoint_dir = checkpoint_dir
+        # ``None`` means "no local encoding configured" -- every prompt must then
+        # come out of the cache, exactly as v1 behaved. The CLI resolves the sibling
+        # ``llm2vec-mlx`` checkout and passes an encoder; a test that wants the
+        # cached-only semantics simply does not.
+        self.local_encoder = local_encoder
         self.lock = threading.Lock()
         self.runner = None
         self.error: Optional[str] = None
         self.boot_seconds: Optional[float] = None
-        self.embedding_cache: Dict[str, object] = {}
+        #: ``(prompt_hash, encoder_id)`` -> loaded :class:`TextEmbedding`.
+        self.embedding_cache: Dict[Tuple[str, str], object] = {}
+        #: ``(prompt_hash, encoder_id)`` -> :class:`LocalEncoderError` that is known to
+        #: be reproducible, so a second request answers in microseconds and the page
+        #: shows the original text rather than a fresh, differently-worded one.
+        self.encoder_failures: Dict[Tuple[str, str], LocalEncoderError] = {}
 
     # -- startup ---------------------------------------------------------
     def start(self) -> None:
@@ -571,7 +933,7 @@ class ViewerApp:
         started = time.time()
         try:
             entries = self.embeddings.refresh()
-            embedding = self._embedding_for(entries[0]["prompt_hash"]) if entries else _empty_embedding()
+            embedding = self._embedding_for(entries[0]) if entries else _empty_embedding()
             self.runner = build_mlx_runner(
                 self.model,
                 embedding,
@@ -590,14 +952,232 @@ class ViewerApp:
             self.boot_seconds = time.time() - started
 
     # -- embeddings ------------------------------------------------------
-    def _embedding_for(self, prompt_hash: str):
-        entry = self.embeddings.resolve(prompt_hash)
-        cached = self.embedding_cache.get(entry["prompt_hash"])
+    def _encoder_id(self) -> Optional[str]:
+        """The encoder every local encode is attributed to, or ``None`` when disabled."""
+        return self.local_encoder.status().encoder_id if self.local_encoder is not None else None
+
+    def _cache_key(self, prompt_hash: str, encoder_id: str) -> Tuple[str, str]:
+        return (prompt_hash, encoder_id)
+
+    def _embedding_for(self, entry: dict):
+        """The loaded :class:`TextEmbedding` for one cache entry (keyed by both halves)."""
+        key = self._cache_key(entry["prompt_hash"], entry["encoder_id"])
+        cached = self.embedding_cache.get(key)
         if cached is not None:
             return cached
         embedding = load_text_embedding(entry["path"])
-        self.embedding_cache[entry["prompt_hash"]] = embedding
+        self.embedding_cache[key] = embedding
         return embedding
+
+    def encoder_status(self, *, refresh: bool = True) -> Optional[dict]:
+        if self.local_encoder is None:
+            return None
+        return self.local_encoder.status(refresh=refresh).as_dict()
+
+    def _encoded_provenance(self) -> dict:
+        """What to report when the vector came from this machine."""
+        status = self.local_encoder.status() if self.local_encoder is not None else None
+        return {
+            "kind": "local-mlx",
+            "label": "local MLX (this machine)",
+            "encoder_id": status.encoder_id if status else None,
+            "quantization": status.quantization if status else None,
+            "note": (
+                "encoded on this machine by the MLX port of the LLM2Vec text encoder "
+                "(the sibling llm2vec-mlx checkout, reached through a subprocess). The "
+                "conditioning vector is close to the reference bf16 one but not "
+                "identical, so this clip is a different, equally valid sample -- it is "
+                "not aligned with the golden clip."
+            ),
+        }
+
+    def _reference_provenance(self, entry: dict) -> dict:
+        return {
+            "kind": "reference",
+            "label": "reference bf16 (golden)",
+            "encoder_id": entry["encoder_id"],
+            "quantization": entry.get("quantization") or "bfloat16 (no quantization)",
+            "source": entry.get("reference_source") or entry.get("source"),
+            "note": (
+                "the reference machine's own bf16 vector -- the conditioning signal the "
+                "golden clip was generated from; used preferentially so a viewer clip "
+                "stays comparable with it"
+            ),
+        }
+
+    def _variant_provenance(self, entry: dict) -> dict:
+        if entry["source"] == "reference":
+            return self._reference_provenance(entry)
+        if entry["source"] == "local":
+            provenance = self._encoded_provenance()
+            return {**provenance, "encoder_id": entry["encoder_id"]}
+        return {
+            "kind": "unknown",
+            "label": f"unlabelled ({entry['source']})",
+            "encoder_id": entry["encoder_id"],
+            "quantization": entry.get("quantization"),
+            "note": "this cache entry does not record what produced it",
+        }
+
+    @staticmethod
+    def _priority(entry: dict) -> int:
+        return _entry_priority(entry)
+
+    def _local_error(self, name: str, message: str, *, detail=None, status: int = 400):
+        raise ViewerError(name, message, status=status, detail=detail)
+
+    def _raise_encoder_failure(self, failure: LocalEncoderError, prompt_hash: str):
+        """Turn a :class:`LocalEncoderError` into the viewer's named failure.
+
+        The encoder's own words travel in ``detail`` unchanged: this repository does
+        not paraphrase a failure it does not own, and the page shows the raw text.
+        """
+        detail_parts = [f"prompt hash: {prompt_hash}"]
+        if failure.exit_code is not None:
+            detail_parts.append(f"encoder exit code: {failure.exit_code}")
+        if failure.detail:
+            detail_parts.append(failure.detail)
+        status = 503 if failure.name == "local_encoder_unavailable" else 502
+        raise ViewerError(
+            failure.name,
+            failure.message,
+            status=status,
+            detail="\n".join(detail_parts),
+        )
+
+    def _encode_locally(self, prompt: str, prompt_hash: str) -> dict:
+        """Run the local encoder on one prompt, install the vector, return its entry.
+
+        Called only when no cached vector for *this* prompt exists. The temporary
+        directory is private to the call and removed afterwards, so a failed encode
+        leaves nothing behind for a later request to trip over.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="ardy-encode-") as staging:
+            try:
+                result = self.local_encoder.encode(
+                    prompt, prompt_hash=prompt_hash, out_dir=Path(staging)
+                )
+            except Exception as exc:  # noqa: BLE001 - the adapter may not have run at all
+                # The adapter is supposed to return its failures; if it ever raises,
+                # that is still a named encoder failure and never a substitution.
+                result = LocalEncoderError(
+                    "local_encoder_failed",
+                    f"the local encoder adapter raised {type(exc).__name__}: {exc}",
+                )
+            if isinstance(result, LocalEncoderError):
+                key = self._cache_key(prompt_hash, self._encoder_id() or "unavailable")
+                if result.soft:
+                    self.encoder_failures[key] = result
+                self._raise_encoder_failure(result, prompt_hash)
+            # ``install`` writes the sidecar and rescans, so the returned entry's
+            # embedding_sha256 is of the bytes that are now on disk -- not of the
+            # staging file, which no longer exists.
+            entry = self.embeddings.install(result)
+            return entry, float(result.encode_ms)
+
+    def _reusable_variant(self, prompt_hash: str) -> Optional[dict]:
+        """The cached vector for ``prompt_hash`` this viewer may condition on.
+
+        A **reference** vector always qualifies — that is the vector the golden clip
+        came from, and preferring it is the whole point of the precedence rule. A
+        **local** vector only qualifies when it was produced by the encoder this
+        viewer is *currently* configured for: a vector from a different precision is a
+        different artifact, and quietly conditioning on it while the HUD names the
+        configured encoder is exactly the silent mix the ``(prompt_hash, encoder_id)``
+        key exists to prevent. A non-matching local vector is therefore a miss, and the
+        request either encodes afresh or fails by name.
+        """
+        best = self.embeddings.resolve_cached(prompt_hash)
+        if best is None or best["source"] == "reference":
+            return best
+        configured = self._encoder_id()
+        if configured is None:
+            # No local encoder configured, so there is nothing to encode with and no
+            # precision to match: the labelled local vector is reused as itself, and
+            # the payload reports its own encoder_id rather than the viewer's.
+            return best
+        for variant in self.embeddings.variants(prompt_hash):
+            if variant["source"] != "local":
+                continue
+            if variant["encoder_id"] == configured:
+                return variant
+        return None
+
+    def _embedding_for_request(self, prompt: str) -> Tuple[dict, dict]:
+        """Resolve a prompt to exactly one cache entry, or fail by name.
+
+        The order is fixed and is the whole of the source-precedence rule:
+
+        1. a **reference** vector for this prompt, if one is cached;
+        2. the best **local** vector for this prompt, if one is cached;
+        3. otherwise **encode here** -- and only if the local encoder is configured
+           and usable. A failure at this step is named (``local_encoder_unavailable``
+           or ``local_encoder_failed``) and ends the request.
+
+        There is no fourth branch. In particular, step 3 never falls back to a
+        *different* prompt's vector, and it never falls back to another encoder's
+        vector for the same prompt: both would produce a perfectly convincing clip
+        under the wrong conditioning signal.
+        """
+        if prompt is None or prompt == "":
+            raise ViewerError(
+                "no_prompt_given",
+                "a prompt is required: pass the prompt hash of a cached embedding, or its exact text",
+            )
+
+        digest = self.embeddings._selector_digest(prompt)
+        if digest is not None:
+            cached = self._reusable_variant(digest)
+            if cached is not None:
+                return cached, {"kind": "cache", "encode_ms": None}
+
+        if self.local_encoder is None:
+            if digest is not None and self.embeddings.variants(digest):
+                # The prompt is known to the cache but only from encoders this viewer
+                # is not configured for. Say that, rather than "no cached embedding".
+                variants = [variant["encoder_id"] for variant in self.embeddings.variants(digest)]
+                self._local_error(
+                    "encoder_variant_not_cached",
+                    (
+                        f"prompt {digest} is cached, but not from encoder "
+                        f"{self._encoder_id()!r}; the cached encoder(s) are: "
+                        f"{', '.join(variants) or '(none)'}"
+                    ),
+                    detail=(
+                        "Refusing to condition on a different encoder's vector for the same "
+                        "prompt: the two are different artifacts and produce different clips."
+                    ),
+                )
+            self.embeddings.resolve(prompt)  # raises no_cached_embedding_for_prompt
+
+        key = self._cache_key(prompt_hash(prompt), self._encoder_id() or "unavailable")
+
+        with self.lock:
+            # Re-check under the lock: a pipelined duplicate request must not encode
+            # the same prompt twice (or be answered with a different error).
+            digest = self.embeddings._selector_digest(prompt)
+            if digest is not None:
+                cached = self._reusable_variant(digest)
+                if cached is not None:
+                    return cached, {"kind": "cache", "encode_ms": None}
+            failure = self.encoder_failures.get(key)
+            if failure is not None:
+                self._raise_encoder_failure(failure, key[0])
+
+            status = self.local_encoder.status()
+            if not status.available:
+                failure = LocalEncoderError(
+                    "local_encoder_unavailable",
+                    status.reason or "the local text encoder is not usable",
+                    detail=json.dumps(status.checks, indent=2, sort_keys=True),
+                )
+                self.encoder_failures[key] = failure
+                self._raise_encoder_failure(failure, key[0])
+
+            entry, encode_ms = self._encode_locally(prompt, key[0])
+        return entry, {"kind": "encoded", "encode_ms": encode_ms}
 
     # -- endpoints -------------------------------------------------------
     def health(self) -> dict:
@@ -637,6 +1217,45 @@ class ViewerApp:
             },
             "embeddings": entries,
             "embeddings_dir": _display_path(self.embeddings.directory),
+            "embeddings_detail": {
+                "count": len(entries),
+                # A prompt with both a reference and a local vector has two entries
+                # keyed by (prompt_hash, encoder_id); ``embeddings`` shows the one a
+                # request will use, this shows everything that is addressable.
+                "variants": sum(len(self.embeddings.variants(digest)) for digest in self.embeddings.by_prompt),
+                "cache_keys": [
+                    [prompt_hash, encoder_id]
+                    for (prompt_hash, encoder_id) in sorted(self.embeddings.by_key)
+                ],
+                "by_source": {
+                    source: sum(1 for entry in self.embeddings.by_key.values() if entry["source"] == source)
+                    for source in ("reference", "local")
+                },
+                "local_dirs": [
+                    _display_path(path) for path in self.embeddings.local_variants_dirs()
+                ],
+                "skipped": list(self.embeddings.skipped),
+            },
+            "encoder": self.encoder_status(refresh=True)
+            or {
+                "enabled": False,
+                "available": False,
+                "state": "disabled",
+                "reason": (
+                    "no local text encoder is configured; start the viewer with "
+                    "--llm2vec-repo (or leave the default sibling checkout) to enable it"
+                ),
+                "encoder_id": None,
+                "quantization": None,
+                "bits": None,
+                "repo": None,
+                "interpreter": None,
+                "encode_script": None,
+                "weights_dir": None,
+                "manifest": None,
+                "probe_ms": None,
+                "checks": {},
+            },
             "golden_references": [
                 {
                     "duration_s": duration,
@@ -646,11 +1265,26 @@ class ViewerApp:
                 for duration, path in sorted(GOLDEN_RUNS.items())
             ],
             "limits": {
-                "text_encoder": "not ported in v1: prompts must be pre-cached embeddings",
+                "text_encoder": (
+                    "a local MLX text encoder is available (the sibling llm2vec-mlx checkout, "
+                    "reached by subprocess); an uncached prompt is encoded here, about half a "
+                    "second, once per prompt, then cached. It is a close but different artifact "
+                    "from the reference bf16 encoder, so a locally-conditioned clip is NOT "
+                    "aligned with the golden clip -- it is a different, equally valid sample. "
+                    "Reference bf16 vectors are used preferentially when a prompt has one."
+                ),
+                "tokenization": (
+                    "prompts are encoded and cached whole; there is no token-level conditioning "
+                    "and no prompt interpolation"
+                ),
                 "postprocess": "MotionCorrection (C++ IK/trajectory) is not built; foot skating remains",
                 "rng": "MLX's RNG is not CUDA's Philox stream; only golden noise reproduces the reference",
                 "auth": "none: loopback-only development viewer",
                 "threading": "one request at a time (the MLX GPU stream is thread-local)",
+                "encoder_latency": (
+                    "the local encoder runs in its own process, so the first prompt after a "
+                    "cache miss pays its cold start (about 1-2 s) before the ~0.4 s encode"
+                ),
             },
             "served_by": f"scripts/ardy_viewer.py ({HOST})",
         }
@@ -671,8 +1305,12 @@ class ViewerApp:
                 self.error or "the MLX checkpoint is not loaded",
                 status=503,
             )
-        entry = self.embeddings.resolve(prompt)
-        embedding = self._embedding_for(entry["prompt_hash"])
+        request_started = time.perf_counter()
+        # Resolving the prompt may encode it here (a ~0.4 s subprocess on a cache
+        # miss); the time that takes is reported separately from sampling, so the page
+        # can show which half of the wall clock was the encoder.
+        entry, embedding_source = self._embedding_for_request(prompt)
+        embedding = self._embedding_for(entry)
         frames_wanted = validate_duration(duration, self.layout)
         num_steps = resolve_num_steps(diffusion_steps, NUM_BASE_STEPS)
         weights = self._cfg_weight(cfg_weight)
@@ -733,6 +1371,25 @@ class ViewerApp:
                 "embedding_sha256": entry["embedding_sha256"],
                 "embedding_path": entry["path"],
                 "has_prompt_text": entry["has_prompt_text"],
+                # Which vector this clip was actually conditioned on, and what made it.
+                # The page renders this verbatim in the HUD: a locally-encoded vector
+                # must never be presentable as the reference one.
+                "source": entry["source"],
+                "source_kind": (
+                    "reference" if entry["source"] == "reference"
+                    else "local-mlx" if entry["source"] == "local"
+                    else f"unlabelled ({entry['source']})"
+                ),
+                "encoder_id": entry["encoder_id"],
+                "quantization": entry.get("quantization"),
+                "encoder": entry.get("encoder"),
+                "reference_source": entry.get("reference_source"),
+                "bits": entry.get("bits"),
+                "group_size": entry.get("group_size"),
+                "provenance": (
+                    self._reference_provenance(entry) if entry["source"] == "reference"
+                    else self._variant_provenance(entry)
+                ),
             },
             "noise": noise_sidecar,
             "num_autoregressive_steps": max(len(out["offsets"]) - 1, 0),
@@ -740,6 +1397,19 @@ class ViewerApp:
             "history_frames": int(out["history_frames"]),
             "postprocess": False,
             "reference": REFERENCE,
+            "timing": {
+                # ``encode_ms`` is the encoder subprocess (``None`` when the vector came
+                # out of the cache, in which case nothing was encoded); ``total_ms`` is
+                # the whole request as the server saw it, excluding only the HTTP
+                # framing. The two are measured at different points on purpose: the
+                # page can show "0.9 s, of which 0.4 s was the encoder" without
+                # subtracting anything itself.
+                "encode_ms": embedding_source.get("encode_ms"),
+                "generate_ms": generate_ms,
+                "total_ms": (time.perf_counter() - request_started) * 1000.0,
+                "embedding_source": embedding_source.get("kind"),
+                "cache_hit": embedding_source.get("kind") == "cache",
+            },
             "served_by": f"{HOST} scripts/ardy_viewer.py",
         }
         if include_frames:
@@ -1007,6 +1677,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--checkpoint-dir", default=None, help="checkpoint root override")
     parser.add_argument(
+        "--llm2vec-repo",
+        default=os.environ.get("ARDY_LLM2VEC_REPO", str(DEFAULT_LLM2VEC_REPO)),
+        help=(
+            "the sibling llm2vec-mlx checkout to encode with, run through its own .venv "
+            f"(default {DEFAULT_LLM2VEC_REPO}; never imported, only subprocessed)"
+        ),
+    )
+    parser.add_argument(
+        "--no-local-encoder",
+        action="store_true",
+        help=(
+            "disable local text encoding: every prompt must then have a cached embedding, "
+            "exactly as v1 behaved"
+        ),
+    )
+    parser.add_argument(
+        "--encoder-bits",
+        type=int,
+        default=4,
+        choices=(4, 8),
+        help=(
+            "quantization of the local encoder's weights (default 4). The full precision "
+            "plan -- 4-bit is group 32 with the last two layers and embed_tokens at 8 bits "
+            "-- is read from the artifact manifest and recorded in every sidecar"
+        ),
+    )
+    parser.add_argument(
+        "--encoder-weights-dir",
+        default=None,
+        help="override the encoder's weights directory (default <repo>/weights)",
+    )
+    parser.add_argument(
+        "--encoder-interpreter",
+        default=None,
+        help="override the interpreter used to run the encoder (default <repo>/.venv/bin/python)",
+    )
+    parser.add_argument(
+        "--encoder-timeout",
+        type=float,
+        default=600.0,
+        metavar="SECONDS",
+        help="give up on one encoder subprocess after this long (default 600)",
+    )
+    parser.add_argument(
         "--no-preload",
         action="store_true",
         help="start the HTTP server before loading weights (the page sees model_unavailable)",
@@ -1034,12 +1748,35 @@ def main(argv=None) -> int:
         )
         return 2
 
+    encoder = None
+    if not args.no_local_encoder:
+        encoder = LocalEncoder(
+            repo=Path(args.llm2vec_repo),
+            bits=args.encoder_bits,
+            weights_dir=Path(args.encoder_weights_dir) if args.encoder_weights_dir else None,
+            interpreter=Path(args.encoder_interpreter) if args.encoder_interpreter else None,
+            timeout_s=args.encoder_timeout,
+        )
+        status = encoder.status(refresh=True)
+        if status.available:
+            print(
+                f"[ardy_viewer] local encoder: {status.encoder_id} "
+                f"({status.quantization}) via {status.interpreter}",
+                flush=True,
+            )
+        else:
+            # Not fatal, and said plainly: the viewer still serves every cached prompt,
+            # and an uncached one now fails with local_encoder_unavailable instead of
+            # the old no_cached_embedding_for_prompt. Either way it never substitutes.
+            print(f"[ardy_viewer] WARNING: local encoder unavailable: {status.reason}", flush=True)
+
     app = ViewerApp(
         model=args.model,
         device=args.device,
         embeddings_dir=Path(args.embeddings_dir),
         checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else None,
         allow_cpu=args.allow_cpu,
+        local_encoder=encoder,
     )
 
     # Bind before loading so a port clash is reported immediately instead of after

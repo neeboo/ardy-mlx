@@ -67,7 +67,7 @@ Full documentation, including the API and the honest boundaries:
 | `scripts/ardy_viewer.py` | single-threaded loopback HTTP server (MLX's GPU stream is thread-local, so one thread loads *and* serves); `/api/health`, `/api/plan`, `/api/reference` | [`docs/VIEWER.md`](docs/VIEWER.md) §2, §7 |
 | 2.0 s / 40 frames via `/api/plan`, golden `x_T` | **113–152 ms** sampling warm, 248 ms cold (350 ms on a busy host); `posed_joints` **5.178e-06** vs the golden npz | `docs/VIEWER.md` §7 |
 | 4.0 s / 80 frames / 2 windows via `/api/plan`, golden `x_T` | **281–315 ms** sampling (794 ms on a busy host); `posed_joints` **4.813e-06** | `docs/VIEWER.md` §7 |
-| prompt selection | the **cached embeddings** only (`artifacts/embeddings/<prompt-hash>.npy`); a miss is `no_cached_embedding_for_prompt`, never a fallback | [`embeddings/README.md`](embeddings/README.md) |
+| prompt selection | **free text**: a cached vector if one exists (a **reference** bf16 vector always wins), otherwise encoded locally and cached under `(prompt_hash, encoder_id)`; if the encoder is missing or refuses, the request fails by name (`local_encoder_unavailable` / `local_encoder_failed`) — never a fallback | [`docs/VIEWER.md`](docs/VIEWER.md) §3 |
 | duration input | must be a whole number of generation horizons, else `duration_not_horizon_multiple` | `docs/VIEWER.md` §2 |
 | viewer tests | 4 files: API, HTTP/containment, negative controls, real-weight service — the first two need no checkpoint | `docs/VIEWER.md` §8 |
 | the loader | the viewer and `--backend mlx` share `pipeline.build_mlx_runner`; a test asserts they produce bit-identical frames | `docs/VIEWER.md` §5 |
@@ -100,9 +100,14 @@ Full documentation, including the API and the honest boundaries:
    Every alignment number above injects the reference's *own* `x_T` (one draw per window) instead
    of trying to reproduce Philox. Reproducing a *reference* clip therefore requires that injection;
    without it the port is deterministic but not identical to CUDA.
-6. **The 8B text encoder is not ported.** v1 consumes **precomputed text embeddings**
-   (`[B,L,4096]` + mask) only; the motion model and sampling are the whole scope. The text-encoder
-   licence question is therefore open (it was never run here).
+6. **The 8B text encoder is not ported *into this repository*.** The motion model consumes
+   **precomputed text embeddings** (`[B,L,4096]` + mask). A separate repository,
+   `llm2vec-mlx` (`~/dev/llm2vec-mlx`), ports the encoder on MLX and is reached only through the
+   viewer, as a subprocess over a **file interface** — nothing is
+   imported from it and no code is shared. The reference encoder itself is still not run here:
+   prompts with a **reference bf16** vector use it, and a locally-encoded vector (4-bit group 32,
+   last-2 layers + `embed_tokens` at 8-bit) is a *different* conditioning signal, so its clip is
+   not comparable with a golden one. See [`docs/VIEWER.md`](docs/VIEWER.md) §3 and §6.
 
 Two more things worth knowing before reproducing numbers, both in **B's** file and both reported
 rather than patched (contract §11 N16):
@@ -151,7 +156,7 @@ scripts/ardy_viewer.py      the browser viewer's HTTP server (+ generation endpo
 viewer/                     the page itself: index.html, app.js, rig.js (CoreSkeleton27),
                             style.css, and a byte-identical copy of three.js under vendor/
 artifacts/embeddings/       the cached text embeddings the viewer offers (NOT committed)
-embeddings/README.md        how to add a cached prompt embedding
+embeddings/README.md        how to add a cached (reference) prompt embedding
 docs/motion-contract.md     the A/B data contract (fields, units, evidence line by line)
 docs/VIEWER.md              the viewer: start/stop, API, page features, reuse, boundaries
 docs/decisions/             the rulings: checkpoint terms, tolerance, contract questions, baselines

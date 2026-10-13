@@ -60,6 +60,7 @@ __all__ = [
     "resolve_noise_windows",
     "save_outputs",
     "sha256_file",
+    "sha256_text",
     "synthesize_posed_joints",
 ]
 
@@ -184,6 +185,16 @@ def prompt_hash(prompt: str) -> str:
 
 def prompt_hash_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def sha256_text(text: str) -> str:
+    """Full SHA-256 of a prompt's UTF-8 bytes (the long form of :func:`prompt_hash`).
+
+    The viewer accepts a prompt selector that is a full 64-hex digest — what
+    ``shasum`` prints — as well as the 16-char cache name. Both are computed here, on
+    the same encoding, so the two forms cannot disagree about which prompt they name.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def output_stem(prompt: str, seed: Optional[int]) -> str:
