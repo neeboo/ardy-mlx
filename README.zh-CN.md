@@ -28,7 +28,7 @@ English: [README.md](README.md)
 接口优先：只通过 `docs/motion-contract.md`（数据契约）与 `src/ardy_mlx/io/` 导出的常量互相依赖；改契约＝契约变更。
 
 ## 环境
-仓库内 `.venv`（见 `docs/decisions/0001-python-environment.md`），两个 agent 与人类统一用 `./.venv/bin/python`。
+仓库内 `.venv`（见 `docs/decisions/0001-python-environment.md`），所有命令统一用 `./.venv/bin/python`。
 参考实现与金标准产物在那台 Linux/CUDA 机器上（我们只读、一次运行需人类批准）。
 
 ## 许可证

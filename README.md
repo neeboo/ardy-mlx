@@ -28,7 +28,7 @@ Work order: [`docs/brief-claude-sampling.md`](docs/brief-claude-sampling.md).
 Interface first: the dependency goes only through `docs/motion-contract.md` (the motion contract) and the constants exported by `src/ardy_mlx/io/`; changing the contract is a contract change.
 
 ## Environment
-A repo-local `.venv` (see `docs/decisions/0001-python-environment.md`); both agents and the human all use `./.venv/bin/python`.
+A repo-local `.venv` (see `docs/decisions/0001-python-environment.md`); run everything with `./.venv/bin/python`.
 The reference implementation and the golden outputs are on that Linux/CUDA machine (read-only for us; a single run needs human approval).
 
 ## License
