@@ -301,6 +301,18 @@ Response:
                "replaces_current": true, "expression_placeholder": true},
     "library_entry": null          // {"prompt_hash": "…", "text": "…"} for action == "load_library"
   },
+  "controls": {                    // §9.7. What those parameters ACTUALLY did to this clip
+    "speed": 0.65, "amplitude": 0.656,
+    "applied": ["speed", "amplitude"],   // honest: [] when the engine's own output was served
+    "expression_placeholder": true,      // expression/gaze are carried, never applied
+    "output_frames": 40, "source_frames": 40,   // source_frames > output_frames for speed > 1
+    "saturated_fraction": 0.0,           // >0 means the amplitude angle hit a half turn
+    "preserve_first_frame": false, "identity": false
+  },
+  "motion_stats": {                // the numbers decision 0008 is judged by, on the served clip
+    "frames": 40, "displacement_m": 0.204536, "mean_speed_mps": 0.13216,
+    "joint_rotation_deg": 35.5999
+  },
   "served_by": "127.0.0.1 scripts/ardy_viewer.py"
 }
 ```
@@ -768,12 +780,15 @@ Two small read-plus-additive changes were made to shared code, both recorded her
     correctness here** either: §9.6 records what it answered for four sentences, and
     one of the four did not match the expectation. A judgment is an input to code, not
     a fact.
-15. **The router's parameters are carried, not applied.** `speed`, `amplitude`,
-    `expression` and `gaze` travel in `decision.params`, and the viewer displays them,
-    but nothing in this repository feeds them into the sampler: the clip is still
-    conditioned on the prompt vector alone, and `expression`/`gaze` are explicitly
-    marked `expression_placeholder: true` because the rig has no face and no eyes.
-    Wiring them into continuous motion is the next layer's job (§5).
+15. **The router's parameters are applied — except two that are placeholders.** Since
+    decision `0008`, `speed` and `amplitude` change the clip that is served:
+    `src/ardy_mlx/control/**` resamples the time axis and scales the joint rotation
+    angles, `speed > 1` additionally asks the engine for more source frames, and every
+    plan reports which of them actually ran under `controls.applied`. `expression` and
+    `gaze` are still **not wired to anything**: the rig has no face and no eyes, so they
+    are carried, displayed as `expression/gaze=占位（未生效）`, and marked
+    `expression_placeholder: true`. They never appear in `applied`. The measured
+    separation is in §9.7.
 16. **A continuation carries position and velocity, not acceleration.** The 4-frame
     conditioning window has no acceleration channel, so the seam is continuous in
     position and velocity and **not** in acceleration; the page says so in the
@@ -1079,19 +1094,43 @@ TypeSafe's hosted API** (`https://api.typesafe.ai` by default). That is what
 
 ### 9.2 The question set
 
-Eight questions, asked in **one** request, all against the same state. One question,
+Nine questions, asked in **one** request, all against the same state. One question,
 one judgment; every closed set keeps a way out.
 
 | id | primitive | asks | exit |
 |---|---|---|---|
 | `is_motion` | Noul | does this **ask for or name** a physical action | — (the false case is "about how someone feels") |
 | `known` | Noul | is this something this engine can already do | — |
+| `motion_type_known` | Noul | do the library's action **types** cover the type this sentence requires | — (asked since `0008`; see below) |
 | `route` | Choice | which of four behaviours | `non_motion` is an option, not an absence |
 | `tempo` | Score | how fast | 3 levels, `slow and relaxed` / `normal pace` / `hurried` |
 | `intensity` | Score | how large and forceful | 3 levels, `subtle` / `moderate` / `vigorous` |
 | `emotion` | Choice | the speaker's mood | 平静 / 高兴 / 烦躁 / 低落 |
 | `interrupt` | Noul | replace what is happening now, or wait | — |
 | `library_pick` | Choice | **which** library entry | `none` |
+
+`motion_type_known` exists because `route` alone was not enough. It draws one
+distinction: *doing the same action differently* (walk slowly, walk faster, walk
+backwards) against *doing a different action* (crawl, jump, cartwheel). Its answer is
+**enforced in code**, not trusted: when it reads false, `decide()` refuses both
+`library` and `compose` and answers `generate`, with
+`motion_type_known=… < … -> generate` in `decision.reason`. That is the fix for the
+failure where asking to crawl produced a walk with `speed`/`amplitude` attached —
+those knobs change *how* an existing motion is performed and cannot change *which*
+motion it is. `compose`'s own definition was tightened at the same time: it is now
+"the same action performed differently", no longer "a combination of the engine's
+existing motions".
+
+Because the judgment is only as good as what it is shown, `context` carries the
+library **twice**: `library_entries` (the entries, one by one, for `library_pick`) and
+`library_types` (a short, deduplicated list of action-type labels). The type labels come
+from a vocabulary of motion verbs — `crawl`, `jump`, `hop`, `walk`, `wave`, Chinese
+equivalents included — and a text with no recognisable verb is truncated to 24
+characters rather than dropped. A combined motion keeps both halves
+(`walk+wave`), so "jump while waving" is not read as covered merely because `jump` and
+`wave` exist separately. The list is capped at `LIBRARY_TYPE_LIMIT = 24` entries, and the
+overflow appears as one `…(N more types)` label — the long prose is never pushed into the
+type question.
 
 `library_pick` is asked **speculatively**, in the same request. Without it
 `route = "library"` would name a behaviour ("load the library entry") with no way to
@@ -1107,10 +1146,15 @@ description and the code maps the label back.
 | `route` | `action` | what happens | `starts_new_action` |
 |---|---|---|---|
 | `library` | `load_library` | the clip is conditioned on the picked entry's **own cached vector**, not on the sentence that pointed at it | yes |
-| `compose` | `compose_knobs` | the sentence's own vector, plus `speed`/`amplitude` from the Scores | yes |
-| `generate` | `generate` | the sentence's own vector, neutral knobs | yes |
+| `compose` | `compose_knobs` | the sentence's own vector, plus `speed`/`amplitude` from the Scores — **only legal when `motion_type_known` is true** | yes |
+| `generate` | `generate` | the sentence's own vector, plus `speed`/`amplitude` | yes |
 | `non_motion` | `hold` | **no clip is drawn**; the one on screen stays; the bubble answers | **no** |
-| *(no judgment)* | `vector_fallback` | the sentence's own vector, neutral knobs, and the bubble says no semantic parse happened | yes |
+| *(no judgment)* | `vector_fallback` | the sentence's own vector, and the bubble says no semantic parse happened | yes |
+
+Since `0008` the gate sits between the route and the action: a `library` or `compose`
+reading whose `motion_type_known` is below its floor is **rewritten to `generate`**
+before any of the above runs, and a `library_pick` made against the abandoned route is
+discarded rather than served.
 
 Parameters are computed, not guessed:
 
@@ -1122,7 +1166,13 @@ expression, gaze = EMOTION_PLACEHOLDERS[emotion]             ← **placeholders*
 replaces_current = interrupt >= 0.5
 ```
 
-Thresholds are three different numbers because the three costs are different
+`speed` and `amplitude` are then handed to `src/ardy_mlx/control/**`, which is the
+layer that makes them change the clip (§9.7). A value the control layer cannot honour
+is refused **by name** (`control_speed_out_of_range`, `control_amplitude_out_of_range`,
+`control_speed_not_finite`) with HTTP 400 — never clamped, because a clamped parameter
+means the page claims a speed-up the picture does not show.
+
+Thresholds are four different numbers because the four costs are different
 (`Thresholds` in the module):
 
 | threshold | default | what crossing it does |
@@ -1131,6 +1181,7 @@ Thresholds are three different numbers because the three costs are different
 | `route_top_probability` | 0.5 | the probability mass is split: same branch |
 | `is_motion` | 0.5 | **no new action is started at all** — moving unasked is the worst available outcome |
 | `known` | 0.5 | does not change the action; makes the bubble admit the engine is improvising |
+| `motion_type_known` | 0.5 | **refuses `library` and `compose`**: only `generate` remains |
 
 The **conservative branch** keeps the nearest route but clamps the parameters to the
 gentlest setting (`speed ≤ 1.0`, `amplitude ≤ 1.0`), sets `conservative: true`, and
@@ -1259,6 +1310,62 @@ usually Chinese, and the bubble is product copy for the person speaking rather t
 developer diagnostic. It is one table (`MESSAGES`) plus one prefix
 (`CONSERVATIVE_PREFIX`) in `src/ardy_mlx/router/jev.py` — changing the language is
 changing those, and nothing else.
+
+### 9.7 Measured: the parameters change the clip, and the route gate changes the route
+
+Criteria frozen **before** the code in `docs/decisions/0008-motion-controls.md`. Every
+number below is measured, not asserted; the tests that re-derive them are in
+`tests/test_control_motion.py` and `tests/test_viewer_router.py`.
+
+**a. The parameters change a real clip.** `ARDY-Core-RP-20FPS-Horizon40`, seed 7,
+2.0 s, `reset=true`, `noise=random`, prompt `A person walks forward.` — the shipped
+checkpoint through the shipped viewer path:
+
+| requested | `source_frames` | `applied` | `displacement_m` | `mean_speed_mps` | `joint_rotation_deg` |
+|---|---|---|---|---|---|
+| `speed=0.5` | 40 | `[speed]` | 0.008533 | 0.009842 | 35.0144 |
+| `speed=1.0` | 40 | `[]` | 0.204536 | 0.132160 | 35.5999 |
+| `speed=1.5` | **80** | `[speed]` | 0.730186 | 0.430086 | 46.5249 |
+| `amplitude=0.5` | 40 | `[amplitude]` | 0.204536 | 0.132160 | **17.7999** |
+| `amplitude=1.0` | 40 | `[]` | 0.204536 | 0.132160 | **35.5999** |
+| `amplitude=1.5` | 40 | `[amplitude]` | 0.204536 | 0.132160 | **53.3999** |
+
+* `amplitude 1.5 / 0.5` on the rotation statistic: **3.0000**, with
+  `displacement_m` and `mean_speed_mps` ratio **1.0000** — no crosstalk.
+* `speed` is monotone in both displacement and speed, and `speed > 1` is visible as
+  `source_frames=80`: the conditional-input half is really happening.
+* The speed ratio here is **not** 3, and that is a property of the source rather than a
+  defect. On a **constant-velocity** source the identity holds exactly
+  (`displacement` and `mean_speed` ratios both **3.0000 ± 1 %**), while the real walk
+  starts near standstill — its first 20 frames move at 1.4–3.5 cm/s and it reaches
+  42 cm/s only around frame 30 — so a half-speed clip stays inside the ramp. 0008-A
+  records the correction and the raw profile.
+
+**b. The route gate, with a real key.** `jev-latest` via `typesafe-sdk==0.7.4`, the
+repository's own 35-entry cache, before and after:
+
+| utterance | before (`route`) | after (`route`) | `motion_type_known` | probability |
+|---|---|---|---|---|
+| `跳过去挥挥手` | compose 0.97 | **generate** 0.88 | 0.36 | generate 0.88 / compose 0.02 / library 0.10 |
+| `侧手翻` | — | **generate** 1.00 | 0.21 | generate 1.00 |
+| `慢慢走过去` | compose 0.99 | **compose** 0.95 | 0.94 | compose 0.95 / library 0.05 |
+| `爬下前行` | library 1.00 | **library** 0.99 | 0.90 | library 0.99 / generate 0.01 |
+| `向前跳` | library 1.00 | **library** 1.00 | 0.96 | library 1.00 |
+
+`慢慢走过去` is the counter-example that matters: it is the *same* action performed
+differently, `motion_type_known` reads 0.94, and the route is still `compose`. The gate
+did not turn the tightening into "everything becomes `generate`".
+
+`爬下前行` and `向前跳` stay on `library`, and the reason is a fact about this machine
+rather than about the route: **the embedding cache is the library**, and both sentences
+were typed into the page during the test run, so they were encoded and cached (mtimes
+19:30) — with `library_pick` naming `L29` / `L27`, i.e. those very entries. A library
+entry *is* that motion, so `library` is the correct reading, and it is also the outcome
+the request wanted: the clip is conditioned on a crawl/jump vector instead of on a walk.
+Dropping just those two self-referential entries moves them to `generate` (0.54) and
+`compose` (0.77) respectively. **The library growing with everything ever typed is a
+design property worth its own decision**: it makes `library` reachable for any sentence
+the user has already tried once.
 
 ---
 

@@ -672,3 +672,50 @@ test('negative control: the docs’ own claim is checked against the markup it d
   assert.match(INDEX_SOURCE, /foot skating/);
   assert.match(INDEX_SOURCE, /NOT<\/b> aligned with the golden clip|not<\/b> aligned with the golden clip/);
 });
+
+// ---------------------------------------------------------------------------
+// the applied-controls line: carrying a parameter is not applying it
+// ---------------------------------------------------------------------------
+
+/** A `/api/plan` payload with the server's `controls` block attached. */
+function controlledPayload({ applied = ['speed', 'amplitude'], identity = false,
+  placeholder = true } = {}) {
+  const payload = planPayload({ message: '用现有动作组合：速度 1.35×、幅度 1.40×。' });
+  // The router's own numbers, as `/api/plan` sends them under `decision.params`.
+  payload.decision.params = { speed: 1.35, amplitude: 1.4, expression: 'smile', gaze: 'forward' };
+  payload.controls = {
+    speed: 1.35,
+    amplitude: 1.4,
+    applied,
+    expression_placeholder: placeholder,
+    output_frames: 40,
+    source_frames: 80,
+    saturated_fraction: 0,
+    preserve_first_frame: false,
+    identity,
+  };
+  return payload;
+}
+
+test('a plan that applied its parameters says so, and names the placeholders', () => {
+  const view = bubble.bubbleFromPlan(controlledPayload());
+  assert.match(view.meta, /applied=speed\+amplitude/);
+  // The rig has no face or eyes; the page must not imply the expression reached it.
+  assert.match(view.meta, /expression\/gaze=占位（未生效）/);
+  // The parameters are still shown as what was read, next to what was applied.
+  assert.match(view.meta, /params=/);
+});
+
+test('a neutral decision is reported as applying nothing, not as applying 1.0x', () => {
+  const view = bubble.bubbleFromPlan(controlledPayload({ applied: [], identity: true }));
+  assert.match(view.meta, /applied=none/);
+  assert.doesNotMatch(view.meta, /applied=speed/);
+});
+
+test('negative control: a payload with no controls block claims no application', () => {
+  // Without the server's block the page cannot know, so it must say nothing about it
+  // rather than infer "applied" from the presence of `params`.
+  const view = bubble.bubbleFromPlan(planPayload());
+  assert.doesNotMatch(view.meta, /applied=/);
+  assert.doesNotMatch(view.meta, /占位/);
+});

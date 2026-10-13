@@ -889,3 +889,34 @@ Gram–Schmidt 正是为修它；把 `cont6d_to_matrix` 的输出再转回 6D �
   （骨架没有脸和眼睛）。把它们接进连续动作是下一层的事，不在本轮。
 - **隐私边界变了，需要记在契约旁边**：开启路由时，用户的那句话与 `context`
   会发到托管的 TypeSafe API；`--no-router` 或没有 key 时完全本地。见 VIEWER.md §9.1 与边界 14。
+
+## 15. 注记（第 10 轮 · 2026-10-13）：参数接进采样器，**契约仍未动**
+
+本轮新增 `src/ardy_mlx/control/**`，把 `decision.params` 里的 `speed` / `amplitude`
+**真正接进出片**。判据冻结在 `docs/decisions/0008-motion-controls.md`，实测见
+`docs/VIEWER.md` §9.7 与 `docs/status-deepseek.md` §18。
+
+**上一节（§14）第三条现在不成立了，以本节为准**：
+
+> ~~`decision.params`（`speed` / `amplitude` / `expression` / `gaze`）**只是携带，未接入采样器**~~
+
+`speed` 与 `amplitude` **已接入**，方式是"对**已生成的 `(T, 330)` 帧块**做形变"，也就是发生在
+契约的输出**之后**：
+
+* `speed`：对时间轴线性重采样；`speed > 1` 时**多请求**若干源帧（因此
+  `source_frames > output_frames`，payload 里明示）。`foot_contacts` 取最近邻，
+  `velocities` 随 `speed` 缩放以保持与位置差分自洽。
+* `amplitude`：只缩放 `global_rot_data`（6D 全局关节旋转）的旋转角，经
+  `model/skeleton.py` 既有的 `cont6d_to_matrix` / `matrix_to_cont6d` 往返。
+* `expression` / `gaze`：**仍然只是占位** ✗，标 `expression_placeholder: true`。
+
+**契约逐条确认未动**：
+
+- `(T, 330)` 的**维度、块顺序、单位、foot contact 约定**不变；变的是块里的**数值**，
+  且只在这次请求显式带了控制参数时（两个都等于 1.0 时输出与模型输出**逐位相同**）。
+- `posed_joints` / `root_positions` 的**编码方式**不变；`posed_joints` 仍是对
+  `global_rot_data` + `root_pos` 做 FK，所以 `amplitude` 改变的是真实姿态，不是显示层效果。
+- **一个需要记在契约旁边的已知不一致**：`amplitude != 1.0` 时 `global_rot_data` 被改而
+  `local_joints_positions` 保持原值，两块**不再严格一致**。渲染走 FK（用旋转），因此画面正确；
+  但任何直接读 `local_joints_positions` 的消费者必须知道这一点。
+- 接续时第 0 帧（= 上一段末帧）**豁免** `amplitude`，以保证 `0.000 mm` 这条既有保证不退化。

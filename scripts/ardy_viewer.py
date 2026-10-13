@@ -90,6 +90,13 @@ from ardy_mlx.model.skeleton import (  # noqa: E402
     core_skeleton,
     posed_joints_from_features,
 )
+from ardy_mlx.control import (  # noqa: E402
+    ControlError,
+    MotionControls,
+    apply_controls,
+    motion_stats,
+    required_source_frames,
+)
 from ardy_mlx.router.jev import (  # noqa: E402
     ACTION_LIBRARY,
     JevRouter,
@@ -852,6 +859,13 @@ CONTINUATION_UNSUPPORTED = "runner_has_no_continuation_path"
 #: is not a reproduction of anything. A continuation therefore falls back to MLX's
 #: own RNG, by name, and says so in the payload and on the page.
 CONTINUATION_NOISE_FALLBACK = "golden noise does not survive a continuation"
+
+#: A ``speed`` above 1 asks the engine for more frames than the requested duration
+#: needs, which can be more autoregressive windows than the recorded ``x_T`` holds.
+#: Reusing the last recorded window would silently substitute one noise draw for
+#: another, so the mode drops to MLX's own RNG and says so in the payload -- the same
+#: shape as the continuation fallback above, for the same reason.
+CONTROL_NOISE_FALLBACK = "the control expansion needs more windows than the recorded x_T holds"
 
 #: How far the first generated frame may sit from the frame on screen before the
 #: request is refused instead of answered. One frame is 50 ms at 20 fps, so a
@@ -1629,7 +1643,9 @@ class ViewerApp:
         frames_wanted = validate_duration(duration, self.layout)
         num_steps = resolve_num_steps(diffusion_steps, NUM_BASE_STEPS)
         weights = self._cfg_weight(cfg_weight)
-        windows = duration_to_windows(duration, self.layout)
+        # ``windows`` is computed below, from the *source* frame count: a ``speed`` above
+        # 1 changes how much the engine is asked to produce, so it cannot be derived from
+        # the requested duration alone any more.
 
         # Whether this request continues the clip on screen or starts a new one.
         # Decided before the noise is built, because a continuation changes what
@@ -1640,6 +1656,30 @@ class ViewerApp:
             can_continue=self.continuation_supported(),
             model=self.model,
         )
+
+        # -- the judgment's parameters become sampling inputs, here -----------
+        # Everything above this line only *carried* speed/amplitude; this is the one
+        # place they change what is sampled. ``decision["params"]`` is the router's
+        # output and is treated as untrusted input: a value outside the band fails
+        # loudly under the router's own error name rather than being clamped.
+        try:
+            controls = MotionControls.from_params(
+                decision.get("params"),
+                # Frame 0 of a continuation *is* the previous clip's last frame, and
+                # the seam check below measures exactly that. Exempting it is what keeps
+                # "0.000 mm" true once amplitude is wired in.
+                preserve_first_frame=bool(continuation_choice["applied"]),
+            )
+            source_frames = required_source_frames(
+                frames_wanted, controls.speed, horizon=self.layout.horizon
+            )
+        except ControlError as exc:
+            raise ViewerError(exc.name, exc.message, status=400) from exc
+
+        # ``windows`` now follows the *source* length: a ``speed`` above 1 asks the
+        # engine for more frames, and the noise validation below has to know that.
+        windows = max(int(np.ceil(source_frames / self.layout.horizon)), 1)
+
         noise_requested = noise
         noise_sidecar_extra: Dict[str, object] = {}
         if continuation_choice["applied"] and noise == "golden":
@@ -1648,6 +1688,26 @@ class ViewerApp:
                 "requested": noise_requested,
                 "fallback_from": noise_requested,
                 "fallback_reason": CONTINUATION_NOISE_FALLBACK,
+            }
+        # A control expansion can ask for more autoregressive windows than the recorded
+        # ``x_T`` holds. Reusing the last recorded window would be a silent substitution
+        # of one noise draw for another, so the mode drops to MLX's own RNG and *says so*
+        # -- the same shape as the continuation fallback above.
+        #
+        # Two conditions bound it, and both matter: a duration with **no** recording at all
+        # still has to be refused by name (that is a different failure, and swallowing it
+        # would turn "this duration was never recorded" into a random clip that looks
+        # fine), and a run that needs no more windows than the recording holds is not
+        # affected in any way.
+        recorded_windows = len(golden_noise_files(duration)) if noise == "golden" else 0
+        if noise == "golden" and recorded_windows > 0 and windows > recorded_windows:
+            noise = "random"
+            noise_sidecar_extra = {
+                "requested": noise_requested,
+                "fallback_from": noise_requested,
+                "fallback_reason": CONTROL_NOISE_FALLBACK,
+                "recorded_windows": recorded_windows,
+                "required_windows": int(windows),
             }
 
         noise_fn, noise_sidecar = build_noise_fn(noise, duration, self.runner, seed)
@@ -1672,7 +1732,7 @@ class ViewerApp:
                         runner=runner,
                         embedding=embedding,
                         previous=carried,
-                        frames_wanted=frames_wanted,
+                        frames_wanted=source_frames,
                         num_steps=num_steps,
                         weights=weights,
                         seed=seed,
@@ -1682,7 +1742,7 @@ class ViewerApp:
                     generate_ms = (time.perf_counter() - started) * 1000.0
                 else:
                     out = runner.generate(
-                        num_frames=frames_wanted,
+                        num_frames=source_frames,
                         num_steps=num_steps,
                         cfg_weight=weights,
                         history_frames=None,
@@ -1699,6 +1759,43 @@ class ViewerApp:
                     generate_ms = (time.perf_counter() - started) * 1000.0
         finally:
             runner.embedding = original
+
+        # -- the parameters change the clip, here -----------------------------
+        # ``generated`` is the engine's own output in **physical** units, which is where
+        # "twice as fast" and "half the swing" are meaningful statements. This is the one
+        # line that turns the router's numbers into a different picture; everything above
+        # only carried them. ``output_frames`` is the requested clip length, so a source
+        # expanded for ``speed > 1`` is resampled back down to it.
+        try:
+            controlled = apply_controls(
+                np.asarray(generated, dtype=np.float32),
+                controls,
+                self.layout,
+                output_frames=frames_wanted,
+            )
+        except ControlError as exc:
+            raise ViewerError(exc.name, exc.message, status=500) from exc
+        generated = mx.array(controlled.frames)
+        if (
+            not controlled.identity
+            and continuation_choice["applied"]
+            and self.continuation_supported()
+        ):
+            # The next prompt continues from what is on screen, so the state carried
+            # forward has to be the *controlled* frames. Left as the model's raw output it
+            # would be a state the page never showed. Skipped when the controls are
+            # neutral, so the identity path keeps the exact frames it always did.
+            served_norm = np.asarray(runner.batch.motion_rep.normalize(generated), dtype=np.float32)
+
+        # The three numbers decision 0008 is judged by, on exactly the frames that are
+        # about to be served. Frame 0 is skipped on a continuation because it is the
+        # previous clip's frame and is exempt from the amplitude deformation: including it
+        # would dilute the very statistic the amplitude criterion is about.
+        control_stats = motion_stats(
+            controlled.frames,
+            self.layout,
+            skip_first=bool(continuation_choice["applied"]),
+        )
 
         posed = posed_joints_from_features(generated)
         mx.eval(posed)
@@ -1822,6 +1919,11 @@ class ViewerApp:
             # does about it, including the bubble sentence and the source it names.
             "router": router_block,
             "decision": decision,
+            # What the judgment's parameters actually *did* to this clip. ``applied`` is
+            # the honest list: ``expression``/``gaze`` are placeholders and are never in
+            # it, and ``identity`` says the model's own output was served untouched.
+            "controls": controlled.as_dict(),
+            "motion_stats": control_stats.as_dict(),
             "served_by": f"{HOST} scripts/ardy_viewer.py",
         }
         # The next request's ``context.current_action``. Recorded from the clip that

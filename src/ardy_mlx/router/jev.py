@@ -55,6 +55,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -128,6 +129,7 @@ DEGRADED_STATES: Tuple[str, ...] = (
 # -- question names: also the answer keys --------------------------------------
 Q_IS_MOTION = "is_motion"
 Q_KNOWN = "known"
+Q_MOTION_TYPE = "motion_type_known"
 Q_ROUTE = "route"
 Q_TEMPO = "tempo"
 Q_INTENSITY = "intensity"
@@ -137,6 +139,98 @@ Q_LIBRARY = "library_pick"
 
 #: The label a ``library_pick`` answer carries when no library entry is close enough.
 LIBRARY_NONE = "none"
+
+#: How many distinct action-type labels ``context.library_types`` may carry. The whole
+#: point of the summary is that it is *short*: a model asked to compare one requested
+#: type against a wall of library prose answers a different question than the one asked.
+LIBRARY_TYPE_LIMIT = 24
+#: Longest truncated label kept for an entry the vocabulary does not recognise.
+LIBRARY_TYPE_LABEL_CHARS = 24
+
+#: Action-type vocabulary, **most specific first**: the first pattern that matches wins,
+#: so ``hops on one leg`` is a hop and not a leg. Only the type token is kept -- "under a
+#: table", "slowly", "with both hands" are manner, and manner is exactly what ``compose``
+#: is for, so leaving it in the type summary would blur the distinction this judgment
+#: exists to draw.
+MOTION_TYPE_PATTERNS: Tuple[Tuple[str, str], ...] = (
+    ("crawl", r"crawl|爬"),
+    ("climb", r"climb|staircase|shelf|登|攀"),
+    ("hop", r"hop|单脚跳|单腿跳"),
+    ("jump", r"jump|leap|跳|蹦"),
+    ("skip", r"skip|蹦跳"),
+    ("sprint", r"sprint|冲刺"),
+    ("jog", r"jog|慢跑|小跑"),
+    ("run", r"\brun\b|\bruns\b|\brunning\b|跑"),
+    ("march", r"march|踏步|正步"),
+    ("shuffle", r"shuffle|挪"),
+    ("walk", r"walk|\bwalks\b|walking|走"),
+    ("wave", r"wave|挥"),
+    ("kick", r"kick|踢"),
+    ("dance", r"dance|跳舞"),
+    ("turn", r"turn|转"),
+    ("bow", r"bow|鞠躬"),
+    ("lean", r"lean|靠"),
+    ("stretch", r"stretch|伸展"),
+    ("reach", r"reach|够"),
+    ("sit", r"sit|坐"),
+    ("crouch", r"crouch|蹲"),
+    ("limp", r"limp|跛"),
+    ("trip", r"trip|绊"),
+    ("back away", r"back away|backs away|后退"),
+    ("stand", r"stand|still|stationary|站|不动"),
+)
+
+
+def motion_type_label(text: Optional[str]) -> str:
+    """One library entry's text as a **short action-type label**.
+
+    Two matched types are joined (``walk+wave``) so a combined action is not flattened
+    into one of its halves: "jump while waving" must not read as covered merely because
+    both ``jump`` and ``wave`` exist somewhere in the library. A third and later match is
+    summarised as ``+``, and a text with no recognisable verb (a sentence the user typed
+    that never became a motion description) is truncated rather than dropped, because the
+    library *does* hold it and hiding it would be a different lie.
+    """
+    if not text:
+        return "unknown"
+    lowered = str(text).lower()
+    matched: List[str] = []
+    for name, pattern in MOTION_TYPE_PATTERNS:
+        if re.search(pattern, lowered):
+            if name not in matched:
+                matched.append(name)
+        if len(matched) >= 2:
+            break
+    if not matched:
+        trimmed = str(text).strip()
+        if len(trimmed) > LIBRARY_TYPE_LABEL_CHARS:
+            return trimmed[:LIBRARY_TYPE_LABEL_CHARS] + "…"
+        return trimmed or "unknown"
+    label = "+".join(matched)
+    if len(matched) == 2 and any(
+        re.search(pattern, lowered)
+        for name, pattern in MOTION_TYPE_PATTERNS
+        if name not in matched
+    ):
+        label += "+"
+    return label
+
+
+def library_types(library_entries: Sequence[Mapping[str, Any]], *, limit: int = LIBRARY_TYPE_LIMIT) -> List[str]:
+    """The library as a **short, deduplicated list of action types**.
+
+    This is what ``motion_type_known`` is judged against. It is deliberately not the
+    entries' full texts: those travel under ``library_entries`` (``library_pick`` needs
+    them one by one), and pushing them into the type question as well would ask the model
+    to read the library twice and answer once. Truncation is explicit -- the overflow is
+    reported as one ``…(N more types)`` label, never silently dropped.
+    """
+    labels = sorted({motion_type_label(entry.get("text")) for entry in library_entries})
+    if len(labels) <= limit:
+        return labels
+    kept = labels[: max(limit - 1, 0)]
+    kept.append(f"…({len(labels) - len(kept)} more types)")
+    return kept
 
 # -- question definitions ------------------------------------------------------
 #: Score levels are the model's rubric. They are descriptive on their own (the docs
@@ -187,6 +281,11 @@ class Thresholds:
     #: Below this the request is unfamiliar. It does not change the action -- it makes
     #: the bubble say the engine is improvising.
     known: float = 0.5
+    #: Below this the library does **not** cover the action *type* the sentence asks for,
+    #: and ``library``/``compose`` are refused in favour of ``generate``. It is a gate
+    #: rather than a preference because the alternative is the reported bug: answering a
+    #: request to crawl with "walk, but slower".
+    motion_type_known: float = 0.5
 
 
 THRESHOLDS = Thresholds()
@@ -214,6 +313,11 @@ def build_state(
             "current_action": current_action,
             "known_intents": list(known_intents),
             "library_entries": [dict(entry) for entry in library_entries],
+            # The same library seen as *action types*. Two views of one fact on purpose:
+            # ``library_pick`` needs the entries one by one, and ``motion_type_known``
+            # needs the short list, and a model given only the long one answers the wrong
+            # question (see ``library_types``).
+            "library_types": library_types(library_entries),
         },
     }
 
@@ -298,27 +402,54 @@ def build_questions(
             "false": "It needs an ability the system does not have.",
         },
     )
+    questions[Q_MOTION_TYPE] = sdk.Noul(
+        # The distinction this question exists for, and the reason the first version of
+        # ``route`` was not enough: "walk, but slower" and "crawl" are both *changes to
+        # how motion happens*, but only one of them can be answered by turning a knob on
+        # a motion that already exists. Driving the page found the failure -- asking to
+        # crawl produced a walk with ``speed``/``amplitude`` attached and no crawl.
+        instructions=(
+            "Do the action **types** available in `context.library_types` cover the action "
+            "type that `utterance` requires? "
+            "The comparison is between *doing the same action differently* and *doing a "
+            "different action*: asking to walk slowly, walk faster, walk backwards or walk "
+            "a shorter distance is the **same** action performed differently, so it is "
+            "covered. Asking to crawl, jump, kick or cartwheel when the available types "
+            "contain none of those is a **different** action, so it is not covered. "
+            "Requiring two actions at once (jumping *while* waving) is only covered when "
+            "`context.library_types` itself lists that combined type. "
+            "Answer about the type only; how fast or how large it should be is asked "
+            "elsewhere and must not influence this answer."
+        ),
+        criteria={
+            "true": "The available action types include the type this sentence asks for, so the request is the same action performed differently.",
+            "false": "The sentence asks for an action type that none of the available types is, so a new action has to be generated.",
+        },
+    )
     questions[Q_ROUTE] = sdk.Choice(
         instructions=(
             "Choose how this system should carry out `utterance` -- whether it is phrased "
             "as a request or as a description of an action. "
             "`context.library_entries` are motions that already exist as ready vectors: "
             "choose `library` when one of them is the motion meant. Choose "
-            "`compose` when the sentence is about how an existing motion is performed -- "
-            "its speed, its direction, whether it stops -- or is a combination of "
-            "existing motions. Choose `generate` when it is a physical action "
-            "the library does not contain and that cannot be composed from existing "
-            "motions. Choose `non_motion` when the sentence is not about motion at all."
+            "`compose` when the sentence asks for **the same action** as an existing "
+            "motion, performed differently -- its speed, its direction, whether it stops -- "
+            "and `motion_type_known` is true. Choose `generate` when it is a physical "
+            "action the library does not contain **as a type**, or when it combines "
+            "actions into one that no single library entry is. Choose `non_motion` when "
+            "the sentence is not about motion at all. "
+            "**Changing speed or amplitude is not a way to change which action is "
+            "performed**: a request for a different action type is not `compose`."
         ),
         criteria={
             ROUTE_LIBRARY: "One of `context.library_entries` is the motion meant.",
             ROUTE_COMPOSE: (
-                "How an existing motion is performed (pace, direction, stopping), or a "
-                "combination of the engine's existing motions."
+                "The same action as an existing motion, performed differently (pace, "
+                "direction, stopping), with `motion_type_known` true."
             ),
             ROUTE_GENERATE: (
-                "A physical action the library does not contain and that cannot be "
-                "composed from existing motions."
+                "A physical action the library does not contain as a type, or a "
+                "combination that no single library entry is."
             ),
             ROUTE_NON_MOTION: "The sentence is not about motion. Keep doing whatever is happening.",
         },
@@ -412,7 +543,7 @@ def normalize_judgment(answers: Mapping[str, Any], *, model: Optional[str] = Non
     normalized: Dict[str, Any] = {}
     for name, answer in answers.items():
         normalized[name] = normalize_answer(answer)
-    missing = [name for name in (Q_IS_MOTION, Q_KNOWN, Q_ROUTE) if name not in normalized]
+    missing = [name for name in (Q_IS_MOTION, Q_KNOWN, Q_MOTION_TYPE, Q_ROUTE) if name not in normalized]
     if missing:
         raise BadJudgment(f"the response is missing required answer(s): {', '.join(missing)}")
     if normalized[Q_ROUTE].get("choice") not in ROUTES:
@@ -474,6 +605,10 @@ MESSAGES: Dict[str, str] = {
     ACTION_LIBRARY: "照库里那条来：{library_text}（Jev 读出这句最接近库里已有的一条）。",
     ACTION_COMPOSE: "用现有动作组合：速度 {speed:.2f}×、幅度 {amplitude:.2f}×（Jev 读出 {tempo} / {intensity}）。",
     ACTION_GENERATE: "交给本机 ARDY 生成（Jev 读出库里没有、也不宜从现有动作组合）。",
+    # The bubble for the *type* gate. It says which of the two things went wrong -- the
+    # action type is missing from the library -- because "I will generate something" is
+    # otherwise indistinguishable from the engine not having understood the sentence.
+    "generate_new_type": "这句要的动作类型库里没有（Jev 读 motion_type_known 的概率 {p:.2f}），交给本机 ARDY 生成新动作。",
     "hold_non_motion": "这句不是动作要求（Jev 读 non_motion 的概率 {p:.2f}），保持当前动作。",
     "hold_not_motion": "这句更像在说话而不是要动（Jev 读 is_motion 的概率 {p:.2f}），保持当前动作。",
     "library_unresolved": "Jev 说走库，但没指出是哪一条，先用最接近的组合。",
@@ -581,6 +716,7 @@ def decide(
     is_motion = is_motion_answer.get("noul")
     known_answer = judgment.get(Q_KNOWN) or {}
     known = known_answer.get("noul")
+    motion_type = (judgment.get(Q_MOTION_TYPE) or {}).get("noul")
 
     tempo = (judgment.get(Q_TEMPO) or {}).get("score")
     intensity = (judgment.get(Q_INTENSITY) or {}).get("score")
@@ -627,7 +763,32 @@ def decide(
     if conservative:
         reason += " conservative"
 
-    if route == ROUTE_LIBRARY:
+    # 5 -- the action *type* gate. This is a refusal of two route answers, and it is a
+    # refusal because the failure it prevents is the reported one: a request to crawl or
+    # jump answered by turning ``speed``/``amplitude`` on a walk. Those knobs change *how*
+    # an existing motion is performed; they cannot change *which* motion it is, so a route
+    # that would have used them to stand in for a different action is not a route this
+    # system may take. ``generate`` is the only honest remaining answer.
+    #
+    # A missing reading is *not* a false one: absence means the question was not answered,
+    # and treating that as "the type is unknown" would silently reroute every older or
+    # partial judgment. Only a reading that was actually made and fell below the floor
+    # forces the change.
+    if (
+        route in (ROUTE_LIBRARY, ROUTE_COMPOSE)
+        and motion_type is not None
+        and float(motion_type) < thresholds.motion_type_known
+    ):
+        reason += (
+            f" motion_type_known={float(motion_type):.3f} < {thresholds.motion_type_known}"
+            f" -> {ROUTE_GENERATE}"
+        )
+        route = ROUTE_GENERATE
+        # ``library_entry`` stays None: the lookup was made against a route that no longer
+        # runs, and a picked entry leaking into a ``generate`` decision would put a clip on
+        # screen that the sentence did not ask for.
+        message = MESSAGES["generate_new_type"].format(p=float(motion_type))
+    elif route == ROUTE_LIBRARY:
         library_entry = _picked_entry(library_pick, library_entries)
         if library_entry is None:
             # The route said "one of the library entries" and the speculative lookup

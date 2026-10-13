@@ -317,8 +317,8 @@ function bubblePending(resolved, routerState) {
   };
 }
 
-/** The one-line provenance: what was read, how sure, how long, by whom. */
-function bubbleMeta(router, decision) {
+/** The one-line provenance: what was read, how sure, how long, by whom, what it did. */
+function bubbleMeta(router, decision, controls) {
   const parts = [];
   if (router) {
     const state = router.state || 'unknown';
@@ -343,6 +343,18 @@ function bubbleMeta(router, decision) {
     if (Object.keys(params).length) parts.push(`params=${JSON.stringify(params)}`);
     parts.push(`source=${decision.source}`);
   }
+  // What those parameters actually *did*. The server reports this separately from
+  // `decision.params` because carrying a number and acting on it are different facts, and
+  // a page showing only the former would keep claiming a speed-up it never applied.
+  if (controls) {
+    const applied = Array.isArray(controls.applied) ? controls.applied : [];
+    parts.push(`applied=${applied.length ? applied.join('+') : 'none'}`);
+    if (controls.expression_placeholder) {
+      // Named rather than omitted: `expression`/`gaze` travel in the payload for the next
+      // layer, and the rig has no face or eyes for them to reach today.
+      parts.push('expression/gaze=占位（未生效）');
+    }
+  }
   return parts.join(' · ');
 }
 
@@ -353,8 +365,13 @@ function bubbleMeta(router, decision) {
 function bubbleFromPlan(payload) {
   const router = (payload && payload.router) || null;
   const decision = (payload && payload.decision) || null;
+  const controls = (payload && payload.controls) || null;
   if (!decision) {
-    return { state: 'plain', text: 'Generated from the prompt vector.', meta: bubbleMeta(router, null) };
+    return {
+      state: 'plain',
+      text: 'Generated from the prompt vector.',
+      meta: bubbleMeta(router, null, controls),
+    };
   }
   let bubbleState = 'routed';
   if (decision.starts_new_action === false) bubbleState = 'hold';
@@ -362,7 +379,7 @@ function bubbleFromPlan(payload) {
   return {
     state: bubbleState,
     text: decision.message || '…',
-    meta: bubbleMeta(router, decision),
+    meta: bubbleMeta(router, decision, controls),
   };
 }
 // --- pure-bubble: end --------------------------------------------------------

@@ -137,6 +137,7 @@ def answers_for(route_name=jev.ROUTE_COMPOSE, **overrides):
     answers = {
         jev.Q_IS_MOTION: {"type": "noul", "noul": 0.97},
         jev.Q_KNOWN: {"type": "noul", "noul": 0.85},
+        jev.Q_MOTION_TYPE: {"type": "noul", "noul": 0.9},
         jev.Q_ROUTE: {"type": "choice", "choice": route_name, "confidence": max(probabilities.values()),
                       "probabilities": probabilities},
         jev.Q_TEMPO: {"type": "score", "score": 0.0, "confidence": 1.0,
@@ -504,3 +505,140 @@ def test_the_deadline_flag_reaches_the_router_the_app_builds(embeddings_dir, vie
     assert app.router.status()["state"] == jev.STATE_UNAVAILABLE
     app_off = viewer.ViewerApp(embeddings_dir=embeddings_dir, router_enabled=False)
     assert app_off.router.status()["state"] == jev.STATE_DISABLED
+
+# --------------------------------------------------------------------------- #
+# the parameters reach the sampler (decision 0008 section 1)
+# --------------------------------------------------------------------------- #
+def _tempo_answer(level: float) -> dict:
+    """A full ``tempo`` answer. The local ``answers_for`` *replaces* keys, so an override
+    has to be a whole answer object rather than a bare number."""
+    return {
+        "type": "score",
+        "score": level,
+        "confidence": 0.9,
+        "probabilities": {str(i): (0.9 if i == int(level) else 0.05) for i in range(3)},
+        "legend": {str(i): name for i, name in enumerate(jev.TEMPO_LEVELS)},
+    }
+
+
+def _intensity_answer(level: float) -> dict:
+    return {
+        "type": "score",
+        "score": level,
+        "confidence": 0.9,
+        "probabilities": {str(i): (0.9 if i == int(level) else 0.05) for i in range(3)},
+        "legend": {str(i): name for i, name in enumerate(jev.INTENSITY_LEVELS)},
+    }
+
+
+def _answers(route_name=jev.ROUTE_COMPOSE, *, tempo: float = 1.0, intensity: float = 1.0, **overrides):
+    answers = answers_for(route_name, **overrides)
+    answers[jev.Q_TEMPO] = _tempo_answer(tempo)
+    answers[jev.Q_INTENSITY] = _intensity_answer(intensity)
+    return answers
+
+
+def test_the_router_parameters_reach_the_sampler_and_change_the_clip(router_app):
+    """The reported bug, end to end: the knobs must alter what is sampled.
+
+    ``tempo=2.0`` maps to ``speed=1.35`` and ``intensity=2.0`` to ``amplitude=1.4``, so a
+    2.0 s request has to ask the engine for more source frames than it serves, and the
+    served clip has to carry the deformation.
+    """
+    app = router_app(FakeRouter(answers=_answers(tempo=2.0, intensity=2.0)))
+    runner = app.runner
+    payload = app.plan(prompt=PROMPT, seed=3, duration=2.0, noise="random")
+
+    decision_params = payload["decision"]["params"]
+    assert decision_params["speed"] == pytest.approx(1.35)
+    assert decision_params["amplitude"] == pytest.approx(1.4)
+
+    # Conditional input: the engine was asked for more frames than the clip shows.
+    assert runner.calls[-1]["num_frames"] == 80
+    assert payload["controls"]["source_frames"] == 80
+    assert payload["controls"]["output_frames"] == 40
+    assert payload["controls"]["applied"] == ["speed", "amplitude"]
+    assert payload["controls"]["identity"] is False
+
+    # Post-hoc deformation: the served clip is the length that was asked for, and its
+    # statistics are reported rather than judged by eye.
+    assert payload["frames"] == 40
+    stats = payload["motion_stats"]
+    assert set(stats) == {"frames", "displacement_m", "mean_speed_mps", "joint_rotation_deg"}
+    assert stats["frames"] == 40
+    assert stats["joint_rotation_deg"] > 0.0
+
+
+def test_a_neutral_decision_serves_the_engine_output_untouched(router_app):
+    app = router_app(FakeRouter(answers=_answers(tempo=1.0, intensity=1.0)))
+    runner = app.runner
+    payload = app.plan(prompt=PROMPT, seed=3, duration=2.0, noise="random")
+
+    assert payload["decision"]["params"]["speed"] == pytest.approx(1.0)
+    assert payload["decision"]["params"]["amplitude"] == pytest.approx(1.0)
+    # No expansion, and the identity path is named as such.
+    assert runner.calls[-1]["num_frames"] == 40
+    assert payload["controls"]["applied"] == []
+    assert payload["controls"]["identity"] is True
+    assert payload["controls"]["source_frames"] == payload["controls"]["output_frames"] == 40
+
+
+def test_an_out_of_range_parameter_fails_by_name_rather_than_being_clamped(router_app, monkeypatch):
+    """A clamped parameter is the failure mode: the page would say one thing and show another.
+
+    The router's own tempo mapping cannot produce an out-of-range speed (it clamps the
+    *score*), so the payload has to come from somewhere else to exercise the viewer's
+    guard -- which is exactly the untrusted-input case the guard exists for.
+    """
+    app = router_app(FakeRouter())
+
+    def out_of_range(*args, **kwargs):
+        return jev.Decision(
+            route=jev.ROUTE_COMPOSE,
+            action=jev.ACTION_COMPOSE,
+            starts_new_action=True,
+            conservative=False,
+            source="jev",
+            reason="test",
+            message="test",
+            params={"speed": 5.0, "amplitude": 1.0},
+        )
+
+    monkeypatch.setattr(ardy_viewer, "decide_route", out_of_range)
+    with pytest.raises(ardy_viewer.ViewerError) as excinfo:
+        app.plan(prompt=PROMPT, seed=3, duration=2.0, noise="random")
+    assert excinfo.value.name == "control_speed_out_of_range"
+    assert excinfo.value.status == 400
+
+
+def test_the_control_expansion_names_its_noise_fallback(router_app):
+    """Golden noise does not cover the extra windows; the payload says so, by name.
+
+    Silently reusing the last recorded window would be one noise draw standing in for
+    another, which is the substitution this repository refuses everywhere else.
+    """
+    app = router_app(FakeRouter(answers=_answers(tempo=2.0)))
+    payload = app.plan(prompt=PROMPT, seed=3, duration=2.0, noise="golden")
+    noise = payload["noise"]
+    assert noise["requested"] == "golden"
+    assert noise["mode"] == "random"
+    assert noise["fallback_from"] == "golden"
+    assert noise["fallback_reason"] == ardy_viewer.CONTROL_NOISE_FALLBACK
+    assert noise["recorded_windows"] < noise["required_windows"]
+
+
+def test_expression_and_gaze_are_displayed_but_never_listed_as_applied(router_app):
+    answers = answers_for()
+    answers[jev.Q_EMOTION] = {
+        "type": "choice", "choice": "高兴", "confidence": 0.9, "probabilities": {"高兴": 0.9}
+    }
+    app = router_app(FakeRouter(answers=answers))
+    payload = app.plan(prompt=PROMPT, seed=3, duration=2.0, noise="random")
+    params = payload["decision"]["params"]
+    assert params["expression"] == "smile" and params["gaze"] == "forward"
+    # The rig has no face and no eyes: carried, displayed, explicitly not wired, and never
+    # claimed to have been applied.
+    assert params["expression_placeholder"] is True
+    assert payload["controls"]["expression_placeholder"] is True
+    assert "expression" not in payload["controls"]["applied"]
+    assert "gaze" not in payload["controls"]["applied"]

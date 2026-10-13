@@ -64,6 +64,7 @@ def answers_for(
     route_probabilities=None,
     is_motion=0.97,
     known=0.85,
+    motion_type_known=0.9,
     tempo=1.0,
     intensity=1.0,
     emotion="平静",
@@ -80,6 +81,7 @@ def answers_for(
     return {
         jev.Q_IS_MOTION: {"type": "noul", "noul": is_motion},
         jev.Q_KNOWN: {"type": "noul", "noul": known},
+        jev.Q_MOTION_TYPE: {"type": "noul", "noul": motion_type_known},
         jev.Q_ROUTE: {
             "type": "choice",
             "choice": route,
@@ -158,7 +160,7 @@ def test_an_empty_library_is_passed_as_an_empty_list_not_omitted():
 def test_each_question_asks_one_thing_and_every_closed_set_keeps_a_way_out():
     questions = jev.build_questions(LIBRARY)
     assert list(questions) == [
-        jev.Q_IS_MOTION, jev.Q_KNOWN, jev.Q_ROUTE, jev.Q_TEMPO,
+        jev.Q_IS_MOTION, jev.Q_KNOWN, jev.Q_MOTION_TYPE, jev.Q_ROUTE, jev.Q_TEMPO,
         jev.Q_INTENSITY, jev.Q_EMOTION, jev.Q_INTERRUPT, jev.Q_LIBRARY,
     ]
     # The primitive each question was built with, read off the SDK objects themselves.
@@ -166,6 +168,7 @@ def test_each_question_asks_one_thing_and_every_closed_set_keeps_a_way_out():
     assert kinds == {
         jev.Q_IS_MOTION: "noul",
         jev.Q_KNOWN: "noul",
+        jev.Q_MOTION_TYPE: "noul",
         jev.Q_ROUTE: "choice",
         jev.Q_TEMPO: "score",
         jev.Q_INTENSITY: "score",
@@ -414,6 +417,7 @@ def test_normalize_judgment_reads_the_real_sdk_answer_objects():
     answers = {
         jev.Q_IS_MOTION: NoulAnswer(type="noul", noul=0.97),
         jev.Q_KNOWN: NoulAnswer(type="noul", noul=0.85),
+        jev.Q_MOTION_TYPE: NoulAnswer(type="noul", noul=0.9),
         jev.Q_ROUTE: ChoiceAnswer(type="choice", choice="compose", confidence=0.83,
                                   probabilities={"library": 0.11, "compose": 0.83, "generate": 0.06, "non_motion": 0.0}),
         jev.Q_TEMPO: ScoreAnswer(type="score", score=0.0, confidence=1.0,
@@ -726,3 +730,115 @@ def test_building_a_client_without_the_sdk_is_named_unavailable_rather_than_rais
     monkeypatch.setitem(sys.modules, "typesafe_sdk", None)
     error = jev._classify(RuntimeError("typesafe-sdk is not installed: ImportError"))
     assert error[0] == jev.STATE_UNAVAILABLE
+
+
+# --------------------------------------------------------------------------- #
+# the action-type gate (decision 0008 section 3)
+# --------------------------------------------------------------------------- #
+def test_the_state_carries_a_short_action_type_summary():
+    state = jev.build_state(
+        "爬下前行",
+        library_entries=[
+            {"prompt_hash": "a", "text": "A person crawls under a table."},
+            {"prompt_hash": "b", "text": "A person jumps over a puddle."},
+            {"prompt_hash": "c", "text": "A person walks forward and waves."},
+            {"prompt_hash": "d", "text": "A person walks forward."},
+        ],
+    )
+    types = state["context"]["library_types"]
+    # Deduplicated, short, and one label per *type* rather than one per entry.
+    assert types == ["crawl", "jump", "walk", "walk+wave"]
+    # The long texts still travel under `library_entries`; the summary must not be them.
+    assert all(len(label) <= jev.LIBRARY_TYPE_LABEL_CHARS + 1 for label in types)
+
+
+def test_a_long_library_is_truncated_explicitly_not_silently():
+    # The distinguishing part sits inside the kept prefix, so the labels stay distinct and
+    # the cap is what this test actually exercises.
+    entries = [
+        {"prompt_hash": str(i), "text": f"Move {i:03d} performed by a person in an odd way."}
+        for i in range(jev.LIBRARY_TYPE_LIMIT + 10)
+    ]
+    types = jev.library_types(entries)
+    assert len(types) == jev.LIBRARY_TYPE_LIMIT
+    assert types[-1].startswith("…(") and "more types" in types[-1]
+
+
+def test_the_type_vocabulary_keeps_a_combined_action_combined():
+    # Flattening "walks forward and waves" to `walk` would make "jump while waving" look
+    # covered by the union of two unrelated entries.
+    assert jev.motion_type_label("A person walks forward and waves.") == "walk+wave"
+    assert jev.motion_type_label("A person crawls under a table.") == "crawl"
+    assert jev.motion_type_label("向前跳") == "jump"
+    assert jev.motion_type_label("A person does something odd.") == "A person does something …"
+    assert jev.motion_type_label(None) == "unknown"
+
+
+def test_an_unknown_action_type_forces_generate_over_compose():
+    """The reported bug, as a test: crawl must not become "walk, but slower"."""
+    judgment = judgment_for(
+        jev.ROUTE_COMPOSE, motion_type_known=0.05, tempo=1.6, intensity=1.4
+    )
+    decision = jev.decide(judgment, state=jev.STATE_OK, library_entries=LIBRARY)
+    assert decision.route == jev.ROUTE_GENERATE
+    assert decision.action == jev.ACTION_GENERATE
+    assert "motion_type_known" in decision.reason
+    # The knobs are still *reported* -- they are what a generate would be asked for -- but
+    # the action they were about to stand in for is gone.
+    assert decision.params["speed"] != 1.0
+
+
+def test_an_unknown_action_type_also_forces_generate_over_library():
+    judgment = judgment_for(
+        jev.ROUTE_LIBRARY, motion_type_known=0.1, library_pick="L1"
+    )
+    decision = jev.decide(judgment, state=jev.STATE_OK, library_entries=LIBRARY)
+    assert decision.route == jev.ROUTE_GENERATE
+    # The speculative lookup was made against a route that no longer runs, so its pick
+    # must not be served as if the sentence had meant it.
+    assert decision.library_entry is None
+
+
+def test_a_known_action_type_leaves_the_route_alone():
+    """The other half of the gate: "walk, but slower" must still be able to compose."""
+    judgment = judgment_for(jev.ROUTE_COMPOSE, motion_type_known=0.95, tempo=0.0)
+    decision = jev.decide(judgment, state=jev.STATE_OK, library_entries=LIBRARY)
+    assert decision.route == jev.ROUTE_COMPOSE
+    assert decision.action == jev.ACTION_COMPOSE
+    assert "motion_type_known" not in decision.reason
+
+
+def test_a_missing_type_reading_is_not_treated_as_a_false_one():
+    """Absence is not a reading. Treating it as "unknown" would reroute older judgments."""
+    judgment = judgment_for(jev.ROUTE_COMPOSE, motion_type_known=0.9)
+    judgment.pop(jev.Q_MOTION_TYPE)
+    decision = jev.decide(judgment, state=jev.STATE_OK, library_entries=LIBRARY)
+    assert decision.route == jev.ROUTE_COMPOSE
+
+
+def test_the_type_reading_is_required_rather_than_defaulted():
+    answers = answers_for()
+    answers.pop(jev.Q_MOTION_TYPE)
+    with pytest.raises(jev.BadJudgment) as excinfo:
+        jev.normalize_judgment(answers, model="jev-fake", latency_ms=1.0)
+    assert jev.Q_MOTION_TYPE in str(excinfo.value)
+
+
+def test_the_bubble_says_the_action_type_was_the_missing_thing():
+    judgment = judgment_for(jev.ROUTE_COMPOSE, motion_type_known=0.02)
+    decision = jev.decide(judgment, state=jev.STATE_OK, library_entries=LIBRARY)
+    assert "motion_type_known" in decision.message
+    assert "生成" in decision.message
+
+
+def test_the_route_question_no_longer_offers_composing_as_type_substitution():
+    questions = jev.build_questions(LIBRARY)
+    route = questions[jev.Q_ROUTE]
+    compose_criterion = route.criteria[jev.ROUTE_COMPOSE]
+    assert "same action" in compose_criterion
+    assert "motion_type_known" in compose_criterion
+    # The old wording let a *combination* of existing motions be `compose`, which is how a
+    # jump-plus-wave request could be answered by knobs on a walk.
+    assert "combination of the engine's existing motions" not in route.instructions
+    assert "motion_type_known" in route.instructions
+    assert "not a way to change which action" in route.instructions

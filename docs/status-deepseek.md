@@ -1036,3 +1036,111 @@ $ ./.venv/bin/python -m pytest -q     # 423 passed, 1 xfailed        （上轮 4
   是干净的、有界的重编码，但确实与参考的 `requantize` 路径不同。
 - **`continuation.seam` 的"模型自产第 1 帧"只是 50 ms 之后的一帧**：它衡量的是接缝是否像"正常的一帧"，
   不是整段动作的质量。
+
+---
+
+## 18. 第 10 轮（2026-10-13）· 参数真正进采样器 ＋ 路由按"动作类型"收紧
+
+起于 HEAD `2481e6a`。判据**先冻结**在 [`docs/decisions/0008-motion-controls.md`](decisions/0008-motion-controls.md)，
+再动代码。用户的现场实测暴露两件事：`speed`/`amplitude` 只被**携带与显示**、没有接进采样器；
+`compose` 把"动作类型完全不同"（爬、跳）当成"参数组合"。
+
+### 18.1 参数真的生效了（不是只显示）
+
+新增 `src/ardy_mlx/control/**`（本人所有），`sampling/**` 与 `model/**` 的既有语义**未改**：
+
+* `speed` —— **条件输入 ＋ 后处理**：`source_frames = T_out`（`s ≤ 1`）或
+  `ceil_to_horizon(T_out · s)`（`s > 1`，因为读指针会越过源尾，尾部冻结会把速度统计拉回 1.0）；
+  然后对时间轴线性重采样 `out[i] = lerp(src, i·s)`。`velocities` 块乘 `s` 保持自洽，
+  `foot_contacts` 取最近邻（插值会造出不存在的半接触态），`global_root_heading` 重新归一化
+  （且仅在真的插值过时才做）。
+* `amplitude` —— **纯后处理**：只缩放 `global_rot_data` 的旋转角（轴不变、角度 × amplitude），
+  经 `model/skeleton.py` 自己的 `cont6d_to_matrix` / `matrix_to_cont6d`，所以不会与 checkpoint
+  的约定漂移。平移块不碰。
+* `expression` / `gaze` —— **仍未生效** ✗，继续标 `expression_placeholder: true`，且
+  `controls.applied` 里**永不出现**。
+
+实测（真 checkpoint、seed 7、2.0 s、`reset`、`noise=random`）：
+
+| 请求 | `source_frames` | `applied` | `displacement_m` | `mean_speed_mps` | `joint_rotation_deg` |
+|---|---|---|---|---|---|
+| `speed=0.5` | 40 | `[speed]` | 0.008533 | 0.009842 | 35.0144 |
+| `speed=1.0` | 40 | `[]` | 0.204536 | 0.132160 | 35.5999 |
+| `speed=1.5` | **80** | `[speed]` | 0.730186 | 0.430086 | 46.5249 |
+| `amplitude=0.5` | 40 | `[amplitude]` | 0.204536 | 0.132160 | **17.7999** |
+| `amplitude=1.0` | 40 | `[]` | 0.204536 | 0.132160 | **35.5999** |
+| `amplitude=1.5` | 40 | `[amplitude]` | 0.204536 | 0.132160 | **53.3999** |
+
+* 旋转幅度比 **3.0000**；同两档下位移/速度比 **1.0000**（零串扰）。
+* **负对照**：`speed=amplitude=1.0` 时输出与输入**逐位相同**（`np.array_equal` 为真），
+  且 `controls.identity=True`、`applied=[]`。
+
+### 18.2 冻结判据被我自己写错了一条，如实记下
+
+`0008` 原第 2/3 条写"位移比 ≈ 速度比"。**这个恒等式只对匀速源成立**。真实金标准走路有起步段
+（前 20 帧 1.4–3.5 cm/s，约第 30 帧才到 42 cm/s），所以 `speed=0.5` 的片段整段落在起步段里，
+比值跑到 **13.82**。已在 `0008-A` 修订（原表保留不删）：匀速合成源上恒等式收 **3.0000 ± 1%**，
+真实片段改判"单调 ＋ 明显可分"并报告实测值。这不是放宽——是把一个**写错的前提**改正，
+且发生在任何验收结论写下之前。
+
+### 18.3 路由按动作类型收紧
+
+* 新增 Noul `motion_type_known`：库里已有的动作**类型**是否覆盖这句话要求的类型；
+  instruction 里写明"同一动作换节奏/幅度（真）"与"换一种动作（假）"的对比。
+* `decide()` 里**代码强制**：`motion_type_known` 低于阈值时，`library`/`compose` 一律改判
+  `generate`，`reason` 里写 `motion_type_known=… < … -> generate`，且把针对废弃路由的
+  `library_pick` 丢掉。模型只回答封闭问题，把答案变成动作的仍然只有一处。
+* `compose` 语义收紧为"**同一个动作**换节奏/方向/幅度"，不再包含"把两个已有动作拼起来"。
+* `state` 新增 `context.library_types`：**去重后的短类型标签**（动作词表，含中文；
+  双动词保留为 `walk+wave` 以免"跳着挥手"被当成已知；无动词的截断到 24 字；
+  上限 24 条，溢出记成 `…(N more types)`）——整库长文本仍走 `library_entries`，不塞进类型问题。
+
+真实调用（`jev-latest` / `typesafe-sdk==0.7.4`，本仓库 35 条缓存）：
+
+| 句子 | 改前 | 改后 | `motion_type_known` |
+|---|---|---|---|
+| `跳过去挥挥手` | compose 0.97 | **generate 0.88** | 0.36 |
+| `侧手翻` | — | **generate 1.00** | 0.21 |
+| `慢慢走过去` | compose 0.99 | **compose 0.95** | 0.94 |
+| `爬下前行` | library 1.00 | **library 0.99** | 0.90 |
+| `向前跳` | library 1.00 | **library 1.00** | 0.96 |
+
+**与用户预期不符的一点，如实说明**：用户期望前两句也走 `generate`。它们走 `library` 的原因是
+**缓存即库** —— 这两句正是用户在 19:30 自己敲进页面的，已被编码并缓存，`library_pick` 直接指到
+它们本身（`L29` / `L27`）。库里有这一条，`library` 就是正确读数，而且效果正是用户要的：
+片段改为以 crawl/jump 向量为条件，而不是"用走的调速度"。只把这两条自指条目去掉后，二者变为
+`generate`(0.54) / `compose`(0.77)。**"库 = 所有敲过的句子"这一点值得单独立一条决定**：
+它让任何试过一次的句子都能命中 `library`。
+
+### 18.4 既有保证没有退化
+
+* **接续**：`preserve_first_frame` 让第 0 帧的旋转**逐位保留**（并显式跳过不必要的
+  heading 归一化）。实测 `amplitude=1.0` 时第 0 帧 vs 上一段末帧 = **0.000 mm**（精确 0.0），
+  `amplitude=1.5` 时 = **0.000238 mm**（显示仍是 **0.000 mm**，来自既有的
+  normalize→unnormalize 往返，不是这一次改动引入的）。
+* **失败具名**：`control_speed_out_of_range` / `control_amplitude_out_of_range` /
+  `control_speed_not_finite` / `control_speed_not_a_number` / `control_source_too_short` /
+  `control_source_frames_exceed_cap` / `control_output_frames_invalid`，一律不钳位。
+* **噪声不静默替换**：`speed > 1` 需要更多窗口时，金标准 `x_T` 覆盖不到，改为随机噪声并在
+  `noise` sidecar 里具名 `fallback_reason = CONTROL_NOISE_FALLBACK`（沿用既有的接续回落形状）；
+  完全没有录制的时长仍然**照旧拒绝**，不被这条回落吞掉。
+* **key 仍不进前端**：既有测试原样通过。
+
+### 18.5 本轮数字
+
+* `pytest -q`：**466 passed + 1 xfailed**（上一轮 423 + 1；新增 43 条，未减）。
+* `node --test tests/viewer_js_guard.test.mjs`：**36 passed**（上一轮 33；新增 3 条，未减）。
+* `node --check viewer/app.js`：通过。
+* 权重/向量未入库（见本轮验收的审计零命中）。
+* 新增文件：`src/ardy_mlx/control/{__init__,motion,stats}.py`、`tests/test_control_motion.py`、
+  `docs/decisions/0008-motion-controls.md`。
+
+### 18.6 本轮的诚实边界
+
+* `expression` / `gaze`：**显示与占位**，未生效 ✗。
+* `amplitude` 只改 `global_rot_data`，不改 `local_joints_positions`：渲染走 FK（用旋转）所以画面
+  是对的，但特征向量里这两块不再严格一致 —— 已知取舍。
+* 接续时 `amplitude` 从第 1 帧起生效，接缝处有一个单位的幅度不连续。
+* `speed` / `amplitude` 是**形变**，不是模型重新学的动作：`speed` 会带来脚滑，极端幅度下姿态
+  不完全自洽。
+* 浏览器渲染仍需人眼；本轮**没有**用 CGEvent/AX/osascript 合成输入。

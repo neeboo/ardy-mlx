@@ -249,6 +249,7 @@ def _answers(route_name, *, probabilities=None, is_motion=0.97, library_pick=jev
     return {
         jev.Q_IS_MOTION: {"type": "noul", "noul": is_motion},
         jev.Q_KNOWN: {"type": "noul", "noul": 0.85},
+        jev.Q_MOTION_TYPE: {"type": "noul", "noul": 0.9},
         jev.Q_ROUTE: {"type": "choice", "choice": route_name, "confidence": max(probabilities.values()),
                       "probabilities": probabilities},
         jev.Q_TEMPO: {"type": "score", "score": 0.0, "confidence": 1.0,
