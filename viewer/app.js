@@ -391,13 +391,125 @@ function updatePromptHelp() {
     + `embedding ${entry.embedding_sha256.slice(0, 16)}… · ${entry.tokens} token(s)`;
 }
 
-/** The prompt to send: the free-text box when it has content, else the dropdown. */
+// --- pure-prompt-guard: start (no DOM, no fetch, no state) -------------------
+//
+// Everything between these two markers is a pure function of plain data, and is
+// evaluated and tested on its own by `tests/viewer_js_guard.test.mjs` under node.
+// The page has no browser test harness, so the *decision* to send a request is
+// kept here -- where a test can run it -- and the call sites only adapt DOM values
+// into these arguments.
+//
+// Why this exists at all: `/api/plan` reads `params.get("prompt")`, and
+// `JSON.stringify` **drops undefined values**. A request built from a prompt that
+// never resolved is therefore not "a request with an empty prompt", it is a body
+// with no `prompt` key at all: `{"seed":0,"duration":2,"noise":"golden"}`. The
+// server answers that correctly and by name -- 400 `no_prompt_given` -- but it is
+// the page's mistake, and it must not be reachable from any control.
+
+/** What the page says when there is nothing to plan yet. Never an error box. */
+const NO_PROMPT_HINT = 'Type a prompt, or pick a cached embedding from the list.';
+
+/**
+ * Which prompt a `/api/plan` body would carry -- or `null` when there is none.
+ *
+ * The free-text box wins when it has content after trimming (whitespace is not a
+ * prompt); otherwise the selected cached embedding's hash. Pure.
+ */
+function resolveRequest(input) {
+  const given = input || {};
+  const typed = typeof given.typed === 'string' ? given.typed.trim() : '';
+  if (typed) return { source: 'text', prompt: typed, text: typed, entry: null };
+  const entry = given.entry;
+  const hash = entry && typeof entry.prompt_hash === 'string' ? entry.prompt_hash.trim() : '';
+  if (!hash) return null;
+  return {
+    source: 'cached',
+    prompt: hash,
+    text: typeof entry.text === 'string' ? entry.text : hash,
+    entry,
+  };
+}
+
+/**
+ * The one guard: a resolved request is planned only when it names a prompt.
+ *
+ * A caller that skips this and builds the body anyway cannot produce a *nearly*
+ * right request -- it produces one that is refused with `no_prompt_given`. That is
+ * what makes this check load-bearing rather than decorative, and
+ * `tests/viewer_js_guard.test.mjs` asserts both halves of that sentence.
+ */
+function shouldPlan(resolved) {
+  return !!resolved && typeof resolved.prompt === 'string' && resolved.prompt.trim() !== '';
+}
+
+/** The exact body `/api/plan` is given. Pure, so a test can assert on it. */
+function planBody(resolved, options) {
+  const given = options || {};
+  return {
+    prompt: resolved ? resolved.prompt : undefined,
+    seed: given.seed,
+    duration: given.duration,
+    noise: given.noise,
+  };
+}
+
+/**
+ * Whether `/api/reference` should be asked for this duration at all.
+ *
+ * `/api/health` already reports `golden_references`, so a duration without a
+ * golden run is a fact the page was told, not something to discover with a 404 in
+ * the console. `available: false` means the run is configured but its `out/*.npz`
+ * is not on disk -- also a 404, also known in advance. Pure.
+ */
+function referenceDecision(input) {
+  const given = input || {};
+  const runs = Array.isArray(given.goldenReferences) ? given.goldenReferences : [];
+  // `Number(null)` is 0, so a malformed entry is filtered by shape rather than
+  // coerced: matching duration 0 to a null record would load the wrong clip's guard.
+  const durationOf = (run) => (
+    run && run.duration_s !== null && run.duration_s !== undefined
+      && Number.isFinite(Number(run.duration_s))
+      ? Number(run.duration_s)
+      : null
+  );
+  const seconds = Number(given.duration);
+  if (!Number.isFinite(seconds)) {
+    return { fetch: false, reason: 'no_duration', message: 'Choose a duration first.' };
+  }
+  const entry = runs.find((run) => durationOf(run) === seconds) || null;
+  if (!entry) {
+    const known = runs
+      .map(durationOf)
+      .filter((value) => value !== null)
+      .sort((a, b) => a - b)
+      .map((value) => `${value.toFixed(1)} s`)
+      .join(', ');
+    return {
+      fetch: false,
+      reason: 'no_golden_reference_for_duration',
+      message: `No golden clip exists for ${seconds.toFixed(1)} s`
+        + (known ? ` (the reference runs on disk are: ${known})` : '')
+        + '.',
+    };
+  }
+  if (entry.available === false) {
+    return {
+      fetch: false,
+      reason: 'golden_reference_missing',
+      message: `A golden run for ${seconds.toFixed(1)} s is configured, but its out/*.npz `
+        + 'is not on disk.',
+    };
+  }
+  return { fetch: true, reason: null, message: null };
+}
+// --- pure-prompt-guard: end --------------------------------------------------
+
+/**
+ * The DOM adapter around `resolveRequest`: the free-text box when it has content,
+ * else the selected cached embedding.
+ */
 function requestedPrompt() {
-  const typed = els.promptText.value.trim();
-  if (typed) return { prompt: typed, text: typed, typed: true };
-  const entry = selectedEmbedding();
-  if (!entry) return null;
-  return { prompt: entry.prompt_hash, text: entry.text, typed: false, entry };
+  return resolveRequest({ typed: els.promptText.value, entry: selectedEmbedding() });
 }
 
 function populateDuration(health) {
@@ -422,28 +534,55 @@ function populateDuration(health) {
 function updateGoldenHelp() {
   if (!state.health) return;
   const duration = Number(els.durationInput.value);
-  const entry = state.health.golden_references.find((r) => r.duration_s === duration);
-  if (!entry) {
+  const decision = referenceDecision({
+    goldenReferences: state.health.golden_references,
+    duration,
+  });
+  if (!decision.fetch) {
+    // The same decision `loadReference` makes, so the sentence on screen and the
+    // request that is (not) sent cannot disagree.
     els.goldenHelp.textContent =
-      `No golden clip exists for ${duration.toFixed(1)} s. The toggle will report that by name `
-      + `rather than showing a different clip.`;
+      `${decision.message} The toggle reports that by name instead of showing a different `
+      + `clip, and the page does not ask for it.`;
     els.goldenHelp.classList.add('warn');
-  } else {
-    els.goldenHelp.textContent =
-      `A golden clip exists for ${duration.toFixed(1)} s (${entry.npz_path}); `
-      + `it is the reference implementation's own output.`;
-    els.goldenHelp.classList.remove('warn');
+    return;
   }
+  const entry = state.health.golden_references.find((r) => r.duration_s === duration);
+  els.goldenHelp.textContent =
+    `A golden clip exists for ${duration.toFixed(1)} s (${entry.npz_path}); `
+    + `it is the reference implementation's own output.`;
+  els.goldenHelp.classList.remove('warn');
 }
 
-async function generateClip() {
-  if (state.busy) return;
-  const requested = requestedPrompt();
-  if (!requested) {
-    showError('no_prompt_given',
-      'Type a prompt, or pick a cached embedding from the list.');
-    setStatus('No prompt given.', true);
-    return;
+/**
+ * The single entry point for every trigger that would (re)plan a clip.
+ *
+ * `trigger` names the control in the status line, so "which control asked" is
+ * visible on the page rather than guessed from a console trace. When there is
+ * nothing to plan the page says one plain sentence and builds no request: this is
+ * a page-side "not yet", not a server failure, so it never appears as a red box.
+ */
+async function planIfReady(trigger) {
+  const resolved = requestedPrompt();
+  if (!shouldPlan(resolved)) {
+    clearError();
+    setStatus(`Nothing to generate yet (${trigger}). ${NO_PROMPT_HINT}`);
+    return null;
+  }
+  return generateClip(resolved);
+}
+
+async function generateClip(resolved = requestedPrompt()) {
+  if (state.busy) return null;
+  if (!shouldPlan(resolved)) {
+    // Defence in depth. Every control reaches this function through `planIfReady`,
+    // but the body builder is the last place that can still notice a prompt that
+    // never resolved -- and a body whose `prompt` is undefined is not a body with
+    // an empty prompt, it is one with no `prompt` key, which the server refuses as
+    // 400 `no_prompt_given`.
+    clearError();
+    setStatus(NO_PROMPT_HINT);
+    return null;
   }
   const duration = Number(els.durationInput.value);
   const seed = Number(els.seedInput.value);
@@ -456,14 +595,15 @@ async function generateClip() {
   // than making the whole request look slow.
   setStatus(
     `Generating ${duration.toFixed(1)} s with ${noise} noise`
-    + (requested.typed ? ` — encoding ${JSON.stringify(requested.text)} locally first…` : '…'));
+    + (resolved.source === 'text'
+      ? ` — encoding ${JSON.stringify(resolved.text)} locally first…` : '…'));
   const requestId = ++state.requestId;
   const startedAt = performance.now();
   try {
     const payload = await getJson('/api/plan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: requested.prompt, seed, duration, noise }),
+      body: JSON.stringify(planBody(resolved, { seed, duration, noise })),
     });
     if (requestId !== state.requestId) return;
     installClip(payload, 'mine');
@@ -500,9 +640,53 @@ function syncPromptSelect(promptHash) {
   }
 }
 
+/** Drop the loaded golden clip and its rig. Leaves the checkbox alone. */
+function dropGolden() {
+  state.golden = null;
+  state.goldenKey = null;
+  if (state.goldenRig) {
+    state.goldenRig.dispose();
+    state.goldenRig = null;
+  }
+}
+
+/** Hide the golden overlay and say the clip on screen is this machine's own. */
+function hideGoldenOverlay() {
+  if (state.goldenRig) state.goldenRig.setVisible(false);
+  els.hud.clip.textContent = state.clip ? `mine (${state.clip.duration.toFixed(1)} s)` : '—';
+}
+
+/**
+ * Every control that changes which duration/prompt the reference would be for.
+ *
+ * Picking from the list, changing the duration and stepping it all invalidate the
+ * loaded reference; they are one function because they were three copies of the
+ * same two lines, and the copy that forgets to re-check is the one that asks for a
+ * clip that does not exist.
+ */
+function refreshGoldenForControls() {
+  state.goldenKey = null;
+  if (els.goldenToggle.checked) loadReference(true);
+}
+
 async function loadReference(force = false) {
-  if (!state.health) return;
+  if (!state.health) return null;
   const duration = Number(els.durationInput.value);
+  // `/api/health` already said which durations have a golden run. Asking anyway is a
+  // 404 in the console for a fact this page was handed -- so the request is not made
+  // and the page says the same thing the server would have.
+  const decision = referenceDecision({
+    goldenReferences: state.health.golden_references,
+    duration,
+  });
+  if (!decision.fetch) {
+    els.goldenToggle.checked = false;
+    dropGolden();
+    hideGoldenOverlay();
+    updateGoldenHelp();
+    setStatus(decision.message);
+    return null;
+  }
   // The golden clip belongs to one prompt. Compare against the clip actually on
   // screen when there is one -- the text box may name a prompt the dropdown does not
   // list yet -- so the reference is never loaded for a different prompt than the
@@ -511,7 +695,7 @@ async function loadReference(force = false) {
   const shown = state.clip && state.clip.meta ? state.clip.meta.embedding : null;
   const promptHash = (shown && shown.prompt_hash) || (entry ? entry.prompt_hash : '');
   const key = `${duration}|${promptHash}`;
-  if (!force && state.goldenKey === key && state.golden) return;
+  if (!force && state.goldenKey === key && state.golden) return state.golden;
   try {
     const payload = await getJson(
       `/api/reference?duration=${encodeURIComponent(duration)}`
@@ -520,16 +704,13 @@ async function loadReference(force = false) {
     state.goldenKey = key;
     installClip(payload, 'golden');
     els.hud.clip.textContent = `mine + golden (${payload.duration_s.toFixed(1)} s)`;
+    return payload;
   } catch (error) {
     const name = error.errorName || 'request_failed';
-    state.golden = null;
-    state.goldenKey = null;
-    if (state.goldenRig) {
-      state.goldenRig.dispose();
-      state.goldenRig = null;
-    }
+    dropGolden();
     showError(name, error.message, error.payload && error.payload.detail);
     setStatus(`Golden reference unavailable: ${name}`, true);
+    return null;
   }
 }
 
@@ -709,27 +890,35 @@ function frame() {
 // ---------------------------------------------------------------------------
 // wiring
 // ---------------------------------------------------------------------------
-els.generate.addEventListener('click', generateClip);
+// Every control that can plan a clip goes through `planIfReady`, so the guard is
+// one function that all of them share rather than a check each of them repeats.
+els.generate.addEventListener('click', () => planIfReady('generate'));
 // Enter is the whole interaction for the text box: type a prompt, press Enter.
 els.promptText.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
   event.preventDefault();
-  generateClip();
+  planIfReady('enter');
 });
-els.promptTextGo.addEventListener('click', generateClip);
+els.promptTextGo.addEventListener('click', () => planIfReady('go'));
 els.promptText.addEventListener('input', () => {
   // Typing is a statement of intent: clear the failure from the previous attempt so
   // the panel does not still be shouting about a prompt that is no longer on screen.
   if (!els.errorBox.hidden) clearError();
 });
-els.reload.addEventListener('click', () => { loadHealth().catch(() => {}); generateClip(); });
+els.reload.addEventListener('click', async () => {
+  // `/api/health` is what fills the dropdown, and this handler used to fire the
+  // request without waiting for it: the guard then read a control that had not been
+  // populated yet. The round trip finishes first, so what the guard reads is what
+  // the user can see.
+  await loadHealth().catch(() => {});
+  await planIfReady('reload');
+});
 els.promptSelect.addEventListener('change', () => {
   updatePromptHelp();
   // Picking from the list is a different request from what is typed, so clear the box
   // rather than leave two answers to "which prompt am I generating?" on screen.
   els.promptText.value = '';
-  state.goldenKey = null;
-  if (els.goldenToggle.checked) loadReference(true);
+  refreshGoldenForControls();
 });
 els.seedInput.addEventListener('change', () => {
   if (els.noiseSelect.value === 'random') return;
@@ -741,15 +930,13 @@ els.noiseSelect.addEventListener('change', () => {
 });
 els.durationInput.addEventListener('change', () => {
   updateDurationConstraints();
-  state.goldenKey = null;
-  if (els.goldenToggle.checked) loadReference(true);
+  refreshGoldenForControls();
 });
 els.durationStep.addEventListener('click', () => {
   const step = state.health ? state.health.duration_step_s : 2;
   els.durationInput.value = String(Number(els.durationInput.value) + step);
   updateDurationConstraints();
-  state.goldenKey = null;
-  if (els.goldenToggle.checked) loadReference(true);
+  refreshGoldenForControls();
 });
 els.seedNext.addEventListener('click', () => {
   els.seedInput.value = String(Number(els.seedInput.value) + 1);
@@ -778,12 +965,14 @@ els.trailToggle.addEventListener('change', () => {
 });
 els.goldenToggle.addEventListener('change', async () => {
   if (!els.goldenToggle.checked) {
-    if (state.goldenRig) state.goldenRig.setVisible(false);
-    els.hud.clip.textContent = state.clip ? `mine (${state.clip.duration.toFixed(1)} s)` : '—';
+    hideGoldenOverlay();
     setStatus('Reference hidden. The clip on screen is this machine\'s own output.');
     return;
   }
   setStatus('Loading the golden reference…');
+  // `loadReference` owns the decision for both cases: it either loads the clip, or
+  // unchecks this box and says, in the same words the server would have used, that
+  // this duration has no golden run -- without a request and without a 404.
   await loadReference(false);
 });
 
@@ -824,7 +1013,7 @@ async function boot() {
         ? `Local text encoder ready (${encoder.quantization}).`
         : 'No local text encoder: only cached prompts.'));
     updateDurationConstraints();
-    await generateClip();
+    await planIfReady('boot');
   } catch (error) {
     setStatus('Could not reach the viewer server.', true);
     showError(error.errorName || 'boot_failed', error.message);

@@ -253,13 +253,13 @@ comparing two different prompts would not be a comparison.
 | `local_encoder_failed` | 502 | the local encoder ran and refused: a non-zero exit, an over-`max_length` prompt, an unreadable or wrongly-shaped vector. The encoder's own `stderr` is in `detail`. |
 | `no_cached_embedding_for_prompt` | 400 | the prompt has no cached vector and this viewer has no local encoder configured (`--no-local-encoder`, or `ViewerApp(local_encoder=None)`). Never substituted. |
 | `encoder_variant_not_cached` | 400 | the prompt *is* cached, but not from the encoder that was asked for — the two are different artifacts and are not interchangeable |
-| `no_prompt_given` | 400 | no `prompt` at all |
+| `no_prompt_given` | 400 | no `prompt` at all. The page's own guard (`§8.2`) makes this unreachable from the UI: a request without a prompt would be a page bug, not a user error |
 | `duration_not_horizon_multiple` | 400 | `duration` is not a whole number of horizons |
 | `invalid_duration` | 400 | missing, zero, negative, NaN or infinite |
 | `unknown_noise_mode` | 400 | `noise` is neither `golden` nor `random` |
 | `no_golden_noise_for_duration` | 400 | no recorded reference `x_T` for that duration |
 | `invalid_parameter`, `invalid_json`, `invalid_cfg_weight` | 400 | malformed request |
-| `no_golden_reference_for_duration` | 404 | no golden clip for that exact duration |
+| `no_golden_reference_for_duration` | 404 | no golden clip for that exact duration. The page does not ask when `/api/health` already said so (`§8.2`) |
 | `golden_reference_prompt_mismatch` | 404 | the golden clip belongs to another prompt |
 | `golden_reference_missing` | 404 | the run directory exists but has no npz |
 | `not_found` | 404 | unknown path (static files are an exact whitelist) |
@@ -428,14 +428,23 @@ The right-hand panel is the whole control surface; the canvas is the clip.
   with the skeleton from the server.
 * **Reference (golden)** — loads `/api/reference` for the current duration and draws
   it as a translucent amber skeleton beside the mint-green generated one; both play
-  on the same playhead. If no golden clip exists for that duration the toggle reports
-  `no_golden_reference_for_duration` and shows **nothing** rather than a nearby clip.
-* **Reference (golden)** — still only available for the two durations that have a
-  reference run on disk (2.0 s and 4.0 s). For any other duration the toggle reports
-  `no_golden_reference_for_duration` and draws **nothing** rather than a nearby clip.
-  When the clip on screen was conditioned on a *local* vector, the overlay is still
-  loaded — it is the reference implementation's clip for that duration and prompt —
-  but the two are **not** aligned, and the HUD's `vector` field is what says so.
+  on the same playhead. It is still only available for the two durations that have a
+  reference run on disk (2.0 s and 4.0 s), and the page **decides from
+  `/api/health.golden_references` before it requests anything**: for any other
+  duration no request is made at all (so no 404 in the console), the toggle goes back
+  to unchecked, and the panel says the duration has no golden run — the same words the
+  server would have used, without asking it. When the clip on screen was conditioned
+  on a *local* vector, the overlay is still loaded — it is the reference
+  implementation's clip for that duration and prompt — but the two are **not**
+  aligned, and the HUD's `vector` field is what says so. The one 404 left on this
+  endpoint is `golden_reference_prompt_mismatch`, a real refusal, still reported by
+  name.
+* **Prompt guard** — `Generate`, `Enter`, `Go`, `Reload` and the boot request all
+  reach `/api/plan` through one guard (`planIfReady`), so a prompt that has not
+  resolved (an empty box *and* a dropdown that is not populated yet) sends **nothing**:
+  the page clears any error, says one plain sentence in the status line, and leaves the
+  last clip on screen. `Reload` waits for `/api/health` — the round trip that fills the
+  dropdown — before it decides. See §8.2 for the 400 this came from.
 * **HUD** (over the canvas) — clip, model, frames, generate time, playback fps, which
   `x_T` was injected, the **vector source** (`reference bf16 (golden)` in amber, or
   `local MLX 4-bit` in mint), the **encode time** (or `cached`), and the embedding
@@ -549,8 +558,10 @@ Two small read-plus-additive changes were made to shared code, both recorded her
    it starts a fresh subprocess each time, and the subprocess number is the honest
    one.)
 4. **Only 2.0 s and 4.0 s have a golden reference.** They are the repository's only
-   two authorised reference runs. For any other duration the reference toggle shows
-   nothing and says why.
+   two authorised reference runs. For any other duration the reference toggle is
+   unchecked, says why, and **no `/api/reference` request is made at all**: the page
+   already knows from `/api/health.golden_references`, so it does not turn a fact it
+   was told into a 404 (§8.2).
 5. **A `golden`-noise clip is not a byte-for-byte reference reproduction.** It is the
    reference's own `x_T` through this port: measured `posed_joints` residues of
    `5.178e-06` (2.0 s) and `4.813e-06` (4.0 s) against the golden npz. The `random`
@@ -583,6 +594,15 @@ Two small read-plus-additive changes were made to shared code, both recorded her
     playback interpolate the *positions* frame-to-frame; the animation is only as
     smooth as the 20 fps clip. Bones are drawn between joint positions, so a limb's
     roll about its own axis is not visible.
+13. **The front end is not tested in a browser.** There is no browser harness, and no
+    test synthesises clicks, keys or input events. What is verified is the *decision
+    logic* and its *wiring*: the pure guard functions are run under node out of the
+    shipped `viewer/app.js` (§8), and `node --check` proves the page parses. Nothing
+    in this repository proves that a click reaches that logic, that the DOM elements
+    exist, or that anything renders. **That still needs a human at the page**: a hard
+    refresh, one click per trigger, and a look at the console. The tests can be green
+    while the page is broken in a way no test claims to cover — this is a boundary,
+    not a gap to be quietly closed later.
 
 ---
 
@@ -714,3 +734,101 @@ fails against an exception that looks perfect. Every by-path loader therefore
 consults `sys.modules` first and registers the module before executing it, and
 `tests/test_viewer_api.py::test_reference_payload_shape` is the check that catches a
 regression (it compares a digest reported by the patched function).
+
+### 8.1 The page's own logic, run under node
+
+The page has no browser test harness, so the part of it that decides **whether to
+send a request** would otherwise be untestable. It lives instead in a
+marker-delimited region of pure functions inside `viewer/app.js`
+(`// --- pure-prompt-guard: start … end`), and that region is loaded out of the
+**shipped file** — not copied — and executed in a bare `node:vm` context by
+`tests/viewer_js_guard.test.mjs`:
+
+```sh
+node --check viewer/app.js                      # the page parses (ESM, no bundler)
+node tests/viewer_js_guard.test.mjs             # 12 cases; also: node --test <file>
+./.venv/bin/python -m pytest -q                 # the same run, via
+                                                # test_viewer_http.py::test_the_pages_prompt_guard_runs_under_node
+```
+
+The 12 cases cover: empty text box **and** empty dropdown → nothing resolves;
+whitespace is not a prompt (it falls through to the dropdown); text wins over the
+selection and is used trimmed; a selected entry is planned by its `prompt_hash`; the
+guard region is pure (it is re-evaluated with `document`, `window`, `fetch`,
+`state`, `els` and `THREE` replaced by traps that throw); the reference decisions for
+a duration with a golden run, one without, one whose npz is missing, and malformed
+input; and two **wiring** checks on the real source — `generateClip` keeps its
+`shouldPlan` check and builds its body through `planBody`, every trigger calls
+`planIfReady`, `Reload` awaits `/api/health`, and `loadReference` decides before it
+requests.
+
+Two of those cases are **negative controls**, because a check that cannot fail is not
+a check: one asserts that a body built from an unresolved prompt is literally
+`{"seed":0,"duration":2,"noise":"golden"}` (no `prompt` key — the 400 above), and the
+other re-runs the wiring checks against a deliberately mutated copy of the page and
+requires them to fail. `node` is a build-time tool, not a Python dependency: the
+pytest bridge skips with a reason when it is not on `PATH`.
+
+### 8.2 A 400 `no_prompt_given` that came from the page
+
+A browser session showed this in the console:
+
+```
+app.js:275  POST http://127.0.0.1:8850/api/plan 400 (Bad Request)
+  getJson @ app.js:275
+  generateClip @ app.js:463
+```
+
+The server named it `no_prompt_given`, and the engine and the encoder were both
+fine — with a prompt (and `noise=random`, because the reference `x_T` is only
+recorded for 2.0 s and 4.0 s) the same `duration=8` request answers 200: 160 frames,
+4 windows, 753 ms. The fault was in the page, and the mechanism is worth writing
+down, because the request that fails does not *look* empty: **it looks small**.
+
+* `POST /api/plan` reads `params.get("prompt")`, and `_embedding_for_request` refuses
+  `None`/`""` by name (`scripts/ardy_viewer.py`; the `plan` route and
+  `no_prompt_given`);
+* `JSON.stringify` **drops `undefined` values**. A body built from a prompt that never
+  resolved is therefore not "a request with an empty prompt" — it is a body with **no
+  `prompt` key at all**: `{"seed":0,"duration":2,"noise":"golden"}`;
+* the controls that could replan did **not** share a guard: the only check lived
+  inside `generateClip`, and each trigger read the controls itself. The `Reload`
+  handler at `app.js:725` called `generateClip()` *without* awaiting `loadHealth()` —
+  the round trip that **fills the cached-embedding dropdown** — so on the first
+  interaction with nothing to plan, the page read a control that had not been
+  populated yet, and then reported the *server's* error name in a red box
+  (`no_prompt_given`) for what was a page-side "not yet".
+
+What can and cannot be concluded from this tree: the exact body that produces the
+server's 400 is the one in the second bullet, and that body is what an unresolved
+prompt becomes once it is `JSON.stringify`d — the test asserts it literally. In the
+committed `bc00b26` source the empty case already returned `null` before the body was
+built, so the plain empty case showed the red box rather than sending; a request that
+really lost the field needs a path that built the body from a prompt it never
+resolved. That is the class of bug this change removes, and it is no longer reachable:
+the body builder now refuses an unresolved prompt, **and** every trigger is checked
+before it gets there.
+
+What the page does now (the same rules are stated in §4):
+
+* `resolveRequest()`, `shouldPlan()`, `planBody()` and `referenceDecision()` are pure
+  functions in `viewer/app.js`; the DOM call sites only adapt control values into
+  their arguments;
+* every trigger — `Generate`, `Enter`, `Go`, `Reload`, and the boot request — goes
+  through `planIfReady()`. When nothing resolves it builds **no request**, clears any
+  error box, and says one plain sentence in the status line (`Nothing to generate yet
+  (<trigger>). Type a prompt, or pick a cached embedding from the list.`) instead of
+  raising a red box for something that is not a server failure;
+* `Reload` awaits `/api/health` first, so what the guard reads is what the user can
+  see;
+* `generateClip()` keeps its own `shouldPlan()` check as the last place that can
+  notice an unresolved prompt;
+* `/api/reference` is decided from `/api/health.golden_references` *before* it is
+  requested, so a duration without a golden run no longer produces a 404: the toggle
+  is unchecked and the panel names the durations that do exist. The remaining 404 on
+  that endpoint is `golden_reference_prompt_mismatch`, which is a real refusal and is
+  still reported by name.
+
+**Neither of those two verifications is a browser** (§6 boundary 13). They prove the
+decision logic and the wiring. A click, a hard refresh and a look at the console are
+still what prove the bundled page behaves.

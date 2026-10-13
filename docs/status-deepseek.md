@@ -631,3 +631,109 @@ test_negative_a_mislabelled_file_in_an_encoders_directory_is_refused}`。
   `tests/test_viewer_local_encoder.py`（27 条，其中 2 条要真编码器、缺席时**带原因 skip**）。
 - `llm2vec-mlx` **一个字未改**（`git status --short` 为空，HEAD 仍 `7708d08`）。
 - 未 push；权重/向量不入库（§11 的审计仍零命中，见本轮汇报）。
+
+---
+
+## 15. 第 7 轮（2026-10-13）· 前端的 400：一个没解析出 prompt 的请求
+
+**本轮只动前端与文档**（`viewer/app.js`、`tests/viewer_js_guard.test.mjs`、
+`tests/test_viewer_http.py` 新增一条、`docs/VIEWER.md`、本文件）。`src/**`、
+`scripts/ardy_viewer.py` 与既有测试断言**一个字未改**；`~/dev/llm2vec-mlx` 未触碰。
+
+### 15.1 现象与成因
+
+浏览器控制台：
+
+```
+app.js:275  POST http://127.0.0.1:8850/api/plan 400 (Bad Request)
+  getJson @ app.js:275
+  generateClip @ app.js:463
+  （匿名） @ app.js:725
+```
+
+服务端具名 `no_prompt_given`。引擎与编码器都正常：带 prompt、`duration=8`、
+`noise=random` → **200**（160 帧 / 4 窗口 / 752.7 ms）。**错在前端**：
+
+- 服务端 `plan` 路由读 `params.get("prompt")`，`_embedding_for_request` 对 `None`/`""`
+  具名拒绝（`scripts/ardy_viewer.py`）；
+- **`JSON.stringify` 会丢掉 `undefined`**：prompt 没解析出来时，body 不是"空 prompt"，而是
+  **根本没有 `prompt` 键** —— `{"seed":0,"duration":2,"noise":"golden"}`。失败的请求**看起来
+  不小，只是少了一个键**；
+- 触发点**没有共用一道守卫**：唯一的检查在 `generateClip` 内部，各触发点各自读控件；第 725 行
+  `Reload` 的处理函数**没有 await `loadHealth()`**（那正是填下拉框的往返）就先调
+  `generateClip()`，于是在下拉框还没就绪时读了控件，接着把**服务端的错误名**当红框弹出来 ——
+  页面侧的"还没准备好"被写成了 `no_prompt_given`。
+
+**能下与不能下的结论**：`bc00b26` 的源码在空 prompt 时 `requestedPrompt()` 已返回 `null`，
+所以"空文本框 ＋ 空下拉"那条路是**弹红框、不发请求**；真正会丢字段的，是从**未解析**的 prompt
+直接拼 body 的路径 —— 这次消掉的就是这一类（body 生成器拒绝未解析 prompt，**且**每个触发点都先
+过守卫）。仓库历史里没有留下那一瞬的中间态提交，**无法**从本树复现当时的网络 400，如实记为残留
+未知（§15.4）。
+
+### 15.2 改了什么
+
+- `viewer/app.js`
+  - 新增**纯函数区**（`// --- pure-prompt-guard: start … end`）：`resolveRequest()` /
+    `shouldPlan()` / `planBody()` / `referenceDecision()` —— 不碰 DOM、不 fetch、不读 `state`；
+  - `requestedPrompt()` 退化为"把控件值塞进 `resolveRequest`"的适配器；
+  - **所有**触发点（`Generate` / `Enter` / `Go` / `Reload` / boot）统一走 `planIfReady()`：
+    解析不出 prompt 就**不发请求**、`clearError()`、状态栏说一句人话
+    （`Nothing to generate yet (<trigger>). Type a prompt, or pick a cached embedding from the list.`），
+    **不弹红框**；
+  - `generateClip(resolved)` 保留 `shouldPlan()` 兜底，body 一律由 `planBody()` 生成；
+  - `Reload` 先 `await loadHealth()` 再判定，消掉竞态；
+  - `/api/reference` 先按 `/api/health.golden_references` 判定：该时长没有金标准就**不请求**、
+    toggle 自动取消勾选、面板写明（消掉 404 噪音）。`golden_reference_prompt_mismatch` 是**真
+    拒绝**，仍按名上报；
+  - 选中项 / 时长 / 步进三处原本各写一遍的"作废已载入参考"合并为 `refreshGoldenForControls()`。
+- `tests/viewer_js_guard.test.mjs`（新，Node，12 条；纯函数区从**出货文件**里现读现跑）。
+- `tests/test_viewer_http.py` 新增 1 条（`subprocess` 调 node；无 node 时带原因 skip）。
+- `docs/VIEWER.md`：§4 控件说明、§6 边界 4 ＋**新增边界 13**（前端不做浏览器测试）、错误表两行、
+  §8.1（node 单测）与 §8.2（本次 400 成因）。
+
+### 15.3 验证（原始输出）
+
+```
+$ node --check viewer/app.js
+（无输出，exit 0）
+
+$ node tests/viewer_js_guard.test.mjs
+✔ empty text box + empty dropdown: nothing resolves, so nothing is planned
+✔ a dropdown that is not ready yet is not a prompt either
+✔ whitespace is not a prompt: it falls through to the dropdown
+✔ text in the box is used verbatim (trimmed), and wins over the selection
+✔ a selected cached embedding is planned by its prompt_hash
+✔ negative control: bypassing the guard produces a body with no prompt key
+✔ the reference is only requested for a duration /api/health says has a golden run
+✔ a configured golden run whose npz is missing is also known in advance
+✔ reference decisions with no runs, no duration, or malformed runs never fetch
+✔ the guard region is pure: it runs with no document, no fetch, no state
+✔ wiring: every trigger reaches the guard, and the body is built by planBody()
+✔ negative control: the wiring checks fail on a guard-free copy of the page
+ℹ tests 12   ℹ pass 12   ℹ fail 0
+
+$ ./.venv/bin/python -m pytest -q
+333 passed, 1 xfailed in 35.23s        （原 332 + 1 xfailed，只增不减）
+
+$ curl -s -X POST http://127.0.0.1:8850/api/plan -H 'Content-Type: application/json' \
+      -d '{"seed":0,"duration":2,"noise":"golden"}'
+HTTP 400  {"error": "no_prompt_given", ...}
+
+$ curl -s -X POST ... -d '{"prompt":"A person walks forward and waves.","seed":0,"duration":8,"noise":"random"}'
+HTTP 200  frames 160 | windows 4 | duration_s 8.0 | generate_ms 752.7 | source local-mlx
+```
+
+**负对照是跑过的**：在 `/tmp` 的一份**拷贝**上（仓库文件未动，sha256 前后一致）分别注入四种绕过 ——
+① 去掉 `generateClip` 的 `shouldPlan`；② `Reload` 不 await `loadHealth`；③ `shouldPlan` 恒真；
+④ `loadReference` 先请求后判定 —— `node tests/viewer_js_guard.test.mjs` 分别以
+`fail 2 / fail 2 / fail 4 / fail 2` 退出 1。守卫被绕过时测试**确实会失败**。
+
+### 15.4 残留未知
+
+- **浏览器运行时仍需人眼确认**（新增边界 13）：静态检查 ＋ Node 逻辑单测证明不了"点击确实走到
+  这段逻辑"，也证明不了渲染。全绿而页面坏掉，是这套测试**不声称**覆盖的情形。
+- 那次网络 400 的确切中间态提交无法从本树复现（§15.1 末）。
+- `golden_reference_prompt_mismatch`（404）仍在：页面只知道**哪些时长**有金标准，不知道金标准的
+  prompt 文本，所以用**本地**向量去比对 2.0 s 金标准时仍会被具名拒绝 —— 这是真拒绝，不消。
+- 选中下拉项**不会**自动重新生成（只是作废并重载参考）。若期望"选完即生成"，那是行为变更，
+  需另行确认。

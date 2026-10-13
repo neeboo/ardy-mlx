@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -498,3 +500,50 @@ def test_cpu_device_needs_an_explicit_opt_in(embeddings_dir):
     app.start()
     assert app.runner is None
     assert "--allow-cpu" in (app.error or "")
+
+
+# --------------------------------------------------------------------------- #
+# the page's own guard logic (node, no browser)
+# --------------------------------------------------------------------------- #
+def test_the_pages_prompt_guard_runs_under_node():
+    """The one part of the page that is testable without a browser, actually run.
+
+    The viewer's front end has no browser test harness and the project does not
+    synthesise input, so the decision *whether to send a request at all* lives in a
+    marker-delimited region of pure functions inside ``viewer/app.js``. That region
+    is loaded out of the **shipped file** by ``tests/viewer_js_guard.test.mjs`` and
+    executed under node, so a page that loses the guard -- or a region that stops
+    being pure -- fails here as well as in the browser.
+
+    ``node`` is a build-time tool, not a Python dependency: this test skips (with a
+    reason) rather than failing on a host that does not have it.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not on PATH; the page's guard logic cannot be run here")
+
+    script = ROOT / "tests" / "viewer_js_guard.test.mjs"
+    assert script.is_file(), f"missing {script}"
+    completed = subprocess.run(
+        [node, str(script)],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, (
+        f"node {script.name} failed with {completed.returncode}\n"
+        f"--- stdout ---\n{completed.stdout}\n--- stderr ---\n{completed.stderr}"
+    )
+    # A green node run that discovered nothing would be a green that means nothing:
+    # read the runner's own summary instead of trusting the exit status alone.
+    summary = {}
+    for line in completed.stdout.splitlines():
+        parts = line.strip().removeprefix("\u2139 ").split()
+        if len(parts) == 2 and parts[0] in ("pass", "fail") and parts[1].isdigit():
+            summary[parts[0]] = int(parts[1])
+    assert summary.get("fail") == 0, completed.stdout
+    # Twelve cases: the three control states, the not-ready states, whitespace, the
+    # body/guard negative controls, the reference decisions, purity, and two wiring
+    # checks -- one of which proves the other can fail.
+    assert summary.get("pass", 0) >= 12, completed.stdout
