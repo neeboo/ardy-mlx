@@ -40,7 +40,7 @@
 // a decimal representation.
 
 import * as THREE from './vendor/three.module.min.js';
-import { Rig, clipBounds } from './rig.js';
+import { Rig } from './rig.js';
 
 const viewport = document.querySelector('#viewport');
 const html = document.documentElement;
@@ -64,6 +64,8 @@ const els = {
   playPause: document.querySelector('#play-pause'),
   frameLabel: document.querySelector('#frame-label'),
   frameSlider: document.querySelector('#frame-slider'),
+  loopToggle: document.querySelector('#loop-toggle'),
+  loopHelp: document.querySelector('#loop-help'),
   resetCamera: document.querySelector('#reset-camera'),
   fitCamera: document.querySelector('#fit-camera'),
   goldenToggle: document.querySelector('#golden-toggle'),
@@ -85,6 +87,8 @@ const els = {
     embedding: document.querySelector('#hud-embedding'),
     source: document.querySelector('#hud-source'),
     encode: document.querySelector('#hud-encode'),
+    stream: document.querySelector('#hud-stream'),
+    intent: document.querySelector('#hud-intent'),
   },
   stats: {
     model: document.querySelector('#stat-model'),
@@ -105,6 +109,9 @@ const els = {
     total: document.querySelector('#stat-total'),
     encoder: document.querySelector('#stat-encoder'),
     endpoint: document.querySelector('#stat-endpoint'),
+    buffered: document.querySelector('#stat-buffered'),
+    segments: document.querySelector('#stat-segments'),
+    trail: document.querySelector('#stat-trail'),
   },
 };
 
@@ -158,9 +165,12 @@ function resetCameraView() {
 }
 
 function fitCameraToClip() {
-  const clip = state.clip;
-  if (!clip || !clip.jointCount || !clip.frameCount) return;
-  const box = clipBounds(clip.joints, clip.frameCount, clip.jointCount);
+  const timeline = state.timeline;
+  if (!timeline || !timeline.jointCount || !timeline.frameCount || !timeline.bounds) return;
+  const box = new THREE.Box3(
+    new THREE.Vector3().fromArray(timeline.bounds.min),
+    new THREE.Vector3().fromArray(timeline.bounds.max),
+  );
   if (box.isEmpty()) return;
   box.getCenter(cameraView.focus);
   cameraView.focus.y = Math.max(0.45, cameraView.focus.y);
@@ -218,12 +228,27 @@ const state = {
   goldenKey: null,   // `${duration}|${prompt}` the loaded golden answers
   rig: null,
   goldenRig: null,
-  playhead: 0,
+  // -- the playback queue (see `pure-timeline`) -----------------------------
+  //
+  // `segments` is *append-only* during a run: a new clip is pushed onto the end,
+  // never swapped in, so the trajectory and the global frame counter both only
+  // grow. `timeline` is the concatenation of those segments with the seam frame
+  // de-duplicated, and `playhead` is a position in *that*, not in the last clip.
+  segments: [],
+  timeline: null,        // {poses, roots, contacts, jointCount, frameCount, bounds}
+  playhead: 0,           // global frame position; never decreases (docs/decisions/0009 §二)
+  held: false,           // parked on the last frame with nothing buffered behind it
+  trailDirty: false,     // the growing trail owes the render loop an extension
+  trailFrom: 0,          // segments already drawn into the trail; only ever grows
+  intentVersion: 0,      // bumped whenever the *conditions* change
+  nextIntent: null,      // the conditions a segment not yet fetched will use
+  committedIntent: null, // the conditions the last segment queued was fetched with
   playing: true,
   lastTime: performance.now(),
   fpsWindow: [],
   fps: 0,
   busy: false,
+  fetching: false,   // a `/api/plan` for the queue tail is in flight
   requestId: 0,
 };
 
@@ -856,10 +881,437 @@ function referenceDecision(input) {
 }
 // --- pure-prompt-guard: end --------------------------------------------------
 
+// --- pure-timeline: start (no DOM, no fetch, no three.js) --------------------
+//
+// The playback model, as plain data, because it is the part of this page that was
+// wrong and the part a browser cannot be trusted to check (docs/decisions/0009 §二).
+// Three rules, and each one has a negative control in `tests/viewer_js_guard.test.mjs`:
+//
+//   1. **the clip is a queue, not a loop.** A generated clip is *appended* to the
+//      segments already played, and the position is a frame in the concatenation of
+//      all of them. It never wraps back to a previous clip: the playhead only ever
+//      moves forward, and when there is nothing buffered behind it the page holds
+//      the last frame and says the buffer ran out (`advancePlayhead`).
+//   2. **runahead.** The next segment is asked for while the current one still has
+//      `RUNAHEAD_FRAMES` of runway, so generation runs beside playback instead of
+//      stopping it. A runahead miss is a hold, never a rewind.
+//   3. **a new intent never changes a segment mid-flight.** Conditions are stamped
+//      on a segment when it is queued (`nextSegmentIntent`); a sentence typed later
+//      lands on the *next* segment, and `playbackIntentNote` says so on the page.
+//
+// Nothing here touches the DOM, the network, `state` or three.js: the region is
+// evaluated in a bare `node:vm` context by the test file. The DOM adapter that
+// *does* touch those things is `appendSegment` / `pullSegment` above the render
+// loop, and it is a thin shell around these functions.
+//
+// Geometry of the concatenation, because every off-by-one in this file has been a
+// seam: `/api/plan` answers with `reset` unset by carrying the previous clip's last
+// frame over *verbatim* as frame 0 of the new clip, so frame 0 of segment N is
+// already the last frame of segment N-1. The concatenation therefore drops the
+// duplicate, and `timeline.poses` is continuous with no repeated frame and no hole.
+
+/** How much runway is kept ahead of the playhead before the next clip is asked for. */
+const RUNAHEAD_FRAMES = 40;
+
+/** The buffered-frames readout is pinned here when nothing is buffered behind the playhead. */
+const BUFFER_EMPTY_HINT = '缓冲耗尽：生成跟不上播放，已停在这一帧（不循环）。';
+
 /**
- * The DOM adapter around `resolveRequest`: the free-text box when it has content,
- * else the selected cached embedding.
+ * Why a request is refused, in the same named style the server uses. Used when the
+ * page would otherwise have to invent a reason for not fetching a next segment.
  */
+const STREAM_HOLD = {
+  NO_INTENT: 'no_stream_intent',
+  GENERATING: 'stream_segment_in_flight',
+  BUFFERED: 'stream_buffer_has_runway',
+};
+
+/** `segment: {frames, joints, roots, contacts, ...}` -> the fields the timeline reads. */
+function segmentShape(segment) {
+  const given = segment || {};
+  return {
+    frames: Number(given.frames) || 0,
+    jointCount: Number(given.jointCount) || 0,
+    intentVersion: Number(given.intentVersion) || 0,
+  };
+}
+
+/**
+ * Flatten the queue into one continuous motion. **Pure.**
+ *
+ * Segment N>0 contributes frames `1..frames-1`: its frame 0 is the previous
+ * segment's last frame, carried over verbatim by the server, so including it would
+ * be a duplicated frame at every seam. The result is a single `poses`/`roots`/
+ * `contacts` triple indexed by **global** frame number, which is what makes the
+ * trajectory and the position readout continuous across a segment boundary.
+ */
+function timelineOf(segments, jointCount) {
+  const list = Array.isArray(segments) ? segments : [];
+  const totalFrames = list.reduce((sum, segment) => sum + segmentShape(segment).frames, 0);
+  const parts = { poses: [], roots: [], contacts: [] };
+  for (const segment of list) {
+    const shape = segmentShape(segment);
+    if (shape.frames <= 0) continue;
+    if (parts.poses.length === 0) {
+      // The first segment contributes every frame it has: there is no seam in front
+      // of it, so frame 0 is a real frame of the run.
+      parts.poses.push(segment.joints);
+      parts.roots.push(segment.roots);
+      parts.contacts.push(segment.contacts);
+      continue;
+    }
+    // Every later segment contributes `1..frames-1`: its frame 0 is this segment's
+    // predecessor's last frame, carried over verbatim by the server.
+    parts.poses.push(segment.joints.subarray(shape.jointCount * 3));
+    parts.roots.push(segment.roots.subarray(3));
+    parts.contacts.push(segment.contacts ? segment.contacts.subarray(4) : null);
+  }
+  const frameCount = list.reduce(
+    (sum, segment, index) => sum + Math.max(0, segmentShape(segment).frames - (index === 0 ? 0 : 1)),
+    0,
+  );
+  const poses = concatFloat32(parts.poses, frameCount * jointCount * 3);
+  const roots = concatFloat32(parts.roots, frameCount * 3);
+  const contacts = concatUint8(parts.contacts, frameCount * 4);
+  return {
+    jointCount,
+    frameCount,
+    maxFrame: Math.max(0, frameCount - 1),
+    poses,
+    roots,
+    contacts,
+    // Kept so the page can say what it dropped; never used for drawing.
+    droppedSeamFrames: Math.max(0, list.length - 1),
+    sourceFrames: totalFrames,
+    bounds: poseBounds(poses, frameCount, jointCount),
+  };
+}
+
+/**
+ * The **global** frame that is segment `index`'s first frame. **Pure.**
+ *
+ * Each segment after the first contributes `frames - 1` global frames: its frame 0
+ * is the previous segment's last frame, so it is *not* a new global frame. This has
+ * to agree with `timelineOf` exactly -- the one place the two could drift is the
+ * seam, and the seam is where a wrong offset teleports the character.
+ */
+function segmentBase(segments, index) {
+  const list = Array.isArray(segments) ? segments : [];
+  let base = 0;
+  for (let i = 0; i < index && i < list.length; i += 1) {
+    const frames = segmentShape(list[i]).frames;
+    base += Math.max(0, frames - 1);
+  }
+  return base;
+}
+
+/**
+ * Which segment a global frame falls in, and where inside it. **Pure.**
+ *
+ * `index` is `-1` and `local` is `null` for an empty queue, so "no segment" cannot be
+ * confused with "segment 0, frame 0". That distinction is what the camera refit rule
+ * keys on (`shouldFitCamera`).
+ */
+function segmentAtFrame(segments, globalFrame) {
+  const list = Array.isArray(segments) ? segments : [];
+  if (list.length === 0) return { index: -1, local: null, base: 0 };
+  const frame = Math.max(0, Math.floor(Number(globalFrame) || 0));
+  let base = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    const frames = segmentShape(list[i]).frames;
+    const contribution = Math.max(0, frames - (i === 0 ? 0 : 1));
+    if (frame < base + contribution || i === list.length - 1) {
+      return { index: i, local: Math.max(0, frame - base), base };
+    }
+    base += contribution;
+  }
+  return { index: list.length - 1, local: 0, base };
+}
+
+/**
+ * One frame of playback, as a decision. **Pure.**
+ *
+ * This is the function that was a `playhead -= frameCount - 1` loop. It returns the
+ * next global position and never wraps: past the last buffered frame it reports
+ * `held`, and the caller keeps drawing the frame it was already on. `wantMore` is
+ * true once the playhead is inside the runahead window (or has run out), which is
+ * the *only* thing that asks for another segment -- so generation is started beside
+ * playback rather than in front of it.
+ *
+ * `loopSingleSegment` is the explicit, default-off research option: it restarts the
+ * *current* segment and rewinds the global counter on purpose. It exists so the
+ * monotonicity test has a negative control that is a real code path, not a mock.
+ */
+function advancePlayhead(input) {
+  const given = input || {};
+  const list = Array.isArray(given.segments) ? given.segments : [];
+  const timeline = given.timeline || null;
+  const fps = Number(given.fps) || 0;
+  const deltaSeconds = Math.max(0, Number(given.deltaSeconds) || 0);
+  const runahead = Number.isFinite(Number(given.runaheadFrames))
+    ? Number(given.runaheadFrames)
+    : RUNAHEAD_FRAMES;
+  if (!timeline || timeline.frameCount <= 0 || fps <= 0) {
+    return {
+      playhead: 0, displayFrame: 0, index: -1, localFrame: null,
+      held: false, wantMore: false, wrapped: false, looped: false,
+    };
+  }
+  const at = segmentAtFrame(list, given.playhead);
+  const atEnd = Number(given.playhead) >= timeline.maxFrame;
+  if (atEnd && given.loopSingleSegment && at.index >= 0) {
+    // Explicit loop, for studying one clip. It rewinds *this* segment and says so in
+    // the return value, so the page can label it: this is not the default path.
+    return {
+      playhead: at.base,
+      displayFrame: at.base,
+      index: at.index,
+      localFrame: 0,
+      held: false,
+      wantMore: false,
+      wrapped: true,
+      looped: true,
+    };
+  }
+  if (atEnd) {
+    // Nothing buffered behind the playhead: hold the last frame. Never rewind.
+    return {
+      playhead: timeline.maxFrame,
+      displayFrame: timeline.maxFrame,
+      index: at.index,
+      localFrame: at.local,
+      held: true,
+      wantMore: true,
+      wrapped: false,
+      looped: false,
+    };
+  }
+  const moved = Number(given.playhead) + deltaSeconds * fps;
+  const next = Math.max(Number(given.playhead), Math.min(timeline.maxFrame, moved));
+  const here = segmentAtFrame(list, next);
+  return {
+    playhead: next,
+    displayFrame: Math.max(0, Math.min(timeline.maxFrame, Math.round(next))),
+    index: here.index,
+    localFrame: here.local,
+    held: false,
+    wantMore: next >= timeline.maxFrame - runahead,
+    wrapped: false,
+    looped: false,
+  };
+}
+
+/** How many frames are buffered behind the playhead. Negative = the buffer is dry. Pure. */
+function bufferDepth(timeline, playhead) {
+  if (!timeline || timeline.frameCount <= 0) return 0;
+  return Math.max(0, timeline.maxFrame - Math.floor(Number(playhead) || 0));
+}
+
+/**
+ * The conditions a segment **not yet fetched** will use. **Pure.**
+ *
+ * This is `0007` ③ in code: a new sentence is stored when it arrives, but it is only
+ * *committed* here, when the next segment is about to be asked for -- so a prompt
+ * that lands while a clip is playing or being generated cannot change that clip. The
+ * returned `commit` object is the caller's to store; this function reads no state.
+ */
+function nextSegmentIntent(input) {
+  const given = input || {};
+  const pending = given.nextIntent || null;
+  const committed = given.committedIntent || null;
+  const haveSegments = Array.isArray(given.segments) && given.segments.length > 0;
+  // Identical conditions: nothing to decide, keep what the last segment used.
+  if (pending && committed && pending.version === committed.version) {
+    return { intent: null, commit: null, changed: false, reason: null };
+  }
+  // A new sentence arrived while we were generating. It waits for the next segment:
+  // committing it now would apply it to the clip already being generated.
+  if (given.fetching && haveSegments) {
+    return { intent: null, commit: null, changed: false, reason: STREAM_HOLD.GENERATING };
+  }
+  if (!pending) {
+    return { intent: null, commit: null, changed: false, reason: STREAM_HOLD.NO_INTENT };
+  }
+  return { intent: pending, commit: pending, changed: !!committed, reason: null };
+}
+
+/** Whether to ask for another segment now. **Pure.** */
+function shouldPrefetch(input) {
+  const given = input || {};
+  if (given.fetching) return { fetch: false, reason: STREAM_HOLD.GENERATING };
+  if (!given.nextIntent && !given.committedIntent) {
+    return { fetch: false, reason: STREAM_HOLD.NO_INTENT };
+  }
+  const timeline = given.timeline || null;
+  if (timeline && given.lastDecision && !given.lastDecision.wantMore) {
+    return { fetch: false, reason: STREAM_HOLD.BUFFERED };
+  }
+  return { fetch: true, reason: null };
+}
+
+/**
+ * Whether the camera may be refitted. **Pure.**
+ *
+ * `0009` §二: only on the first segment, or because the reader pressed Fit. A refit
+ * per segment is the "the character was reset" impression, because the camera jumps
+ * even when the pose does not.
+ */
+function shouldFitCamera(input) {
+  const given = input || {};
+  if (given.userRequested) return true;
+  return !given.haveSegments;
+}
+
+/**
+ * What the page says about the conditions the *next* segment will use. **Pure.**
+ *
+ * The distinction is the whole point of `0007` ③: a sentence that arrived while a
+ * clip is playing is visibly "for the next segment", not silently applied to the one
+ * on screen, and not silently dropped either.
+ */
+function playbackIntentNote(input) {
+  const given = input || {};
+  const pending = given.nextIntent || null;
+  const committed = given.committedIntent || null;
+  if (!pending) {
+    return { state: 'none', text: '还没有段的条件。', applies: 'none' };
+  }
+  if (!committed || pending.version === committed.version) {
+    return {
+      state: 'current',
+      text: '当前条件就是正在生成的这一段。',
+      applies: 'current',
+      version: pending.version,
+      prompt: pending.text,
+    };
+  }
+  return {
+    state: 'pending',
+    text: '新条件已记下，从下一段开始生效（不在片段中途换条件）。',
+    applies: 'next',
+    version: pending.version,
+    pendingText: pending.text,
+    playingText: committed.text,
+  };
+}
+
+/**
+ * What the page says about buffering, and whether it is honest about running dry.
+ * **Pure.** `0007` ⑤: a hold must be *said*, never hidden behind a loop.
+ */
+function bufferNote(input) {
+  const given = input || {};
+  const depth = bufferDepth(given.timeline, given.playhead);
+  const fps = Number(given.fps) || 20;
+  if (given.loopSingleSegment) {
+    return { state: 'loop', depth, text: '循环开（单个片段反复播）——这不是连续流。', honest: true };
+  }
+  if (given.held) {
+    return { state: 'dry', depth, text: BUFFER_EMPTY_HINT, honest: true };
+  }
+  if (depth <= 0) {
+    return { state: 'dry', depth, text: BUFFER_EMPTY_HINT, honest: true };
+  }
+  if (depth <= (Number(given.runaheadFrames) || RUNAHEAD_FRAMES)) {
+    return {
+      state: 'low',
+      depth,
+      text: `缓冲较浅：还够 ${(depth / fps).toFixed(1)} s，正在预取下一段。`,
+      honest: true,
+    };
+  }
+  return {
+    state: 'ok',
+    depth,
+    text: `连续流：缓冲 ${depth} 帧（${(depth / fps).toFixed(1)} s）。`,
+    honest: true,
+  };
+}
+
+/** The pose bounding box over a frame range. **Pure.** Mirrors `rig.js`'s `clipBounds`. */
+function poseBounds(poses, frameCount, jointCount) {
+  if (!poses || !frameCount || !jointCount) return null;
+  const box = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const base = frame * jointCount * 3;
+    for (let j = 0; j < jointCount; j += 1) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        const value = poses[base + j * 3 + axis];
+        if (value < box.min[axis]) box.min[axis] = value;
+        if (value > box.max[axis]) box.max[axis] = value;
+      }
+    }
+  }
+  return box;
+}
+
+/** Concatenate float32 views into one array. **Pure.** */
+function concatFloat32(parts, length) {
+  const out = new Float32Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    if (!part) continue;
+    const room = Math.max(0, Math.min(part.length, length - offset));
+    if (room <= 0) break;
+    out.set(part.subarray(0, room), offset);
+    offset += room;
+  }
+  return out;
+}
+
+/** Concatenate uint8 views into one array. **Pure.** */
+function concatUint8(parts, length) {
+  const out = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    if (!part) continue;
+    const room = Math.max(0, Math.min(part.length, length - offset));
+    if (room <= 0) break;
+    out.set(part.subarray(0, room), offset);
+    offset += room;
+  }
+  return out;
+}
+
+/**
+ * The trajectory points for a queue, in order, **once per frame**. **Pure.**
+ *
+ * This is the discipline the trail test is about: the path is the concatenation of
+ * every segment's roots with the carried-over seam frame dropped, so the point count
+ * follows the global frame count 1:1 and only ever grows. Naively concatenating the
+ * segments' roots would double-count one point per seam (`trailUnderNaiveAppend`
+ * below is that negative control, kept as a real function so a test can run it).
+ */
+function trailPoints(segments) {
+  const list = Array.isArray(segments) ? segments : [];
+  const points = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const roots = list[i].roots;
+    if (!roots) continue;
+    const frames = segmentShape(list[i]).frames;
+    const from = i === 0 ? 0 : 1;
+    for (let frame = from; frame < frames; frame += 1) {
+      points.push([roots[frame * 3], roots[frame * 3 + 2]]);
+    }
+  }
+  return points;
+}
+
+/** Negative control: the same path, appended the naive way (one duplicated point per seam). */
+function trailUnderNaiveAppend(segments) {
+  const list = Array.isArray(segments) ? segments : [];
+  const points = [];
+  for (const segment of list) {
+    const roots = segment.roots;
+    if (!roots) continue;
+    const frames = segmentShape(segment).frames;
+    for (let frame = 0; frame < frames; frame += 1) {
+      points.push([roots[frame * 3], roots[frame * 3 + 2]]);
+    }
+  }
+  return points;
+}
+// --- pure-timeline: end ------------------------------------------------------
 function requestedPrompt() {
   return resolveRequest({ typed: els.promptText.value, entry: selectedEmbedding() });
 }
@@ -981,79 +1433,49 @@ async function planIfReady(trigger) {
   // that the sentence was taken the instant they asked -- not after a round trip
   // that includes a semantic judgment and an encoder subprocess.
   showBubble(bubblePending(resolved, state.health && state.health.router && state.health.router.state));
-  return generateClip(resolved);
+  return generateClip(resolved, { reset: trigger === 'reload' });
 }
 
-async function generateClip(resolved = requestedPrompt()) {
-  if (state.busy) return null;
+/**
+ * Record what the reader asked for, for the **next** segment.
+ *
+ * Reached only through `planIfReady`, so the guard has already run. It writes no
+ * queue entry and installs no clip: it moves the streaming conditions forward, and
+ * the playback loop is what asks for the segment. That split *is* `0007` ③ -- a
+ * sentence typed while a clip is playing cannot land mid-clip, because the only
+ * thing it touches is the conditions the next fetch will read.
+ *
+ * `options.reset` is the one reset the page has (`0009` §二: only a user-driven
+ * Reload may clear the run); every other trigger appends.
+ */
+async function generateClip(resolved = requestedPrompt(), options = {}) {
   if (!shouldPlan(resolved)) {
     // Defence in depth. Every control reaches this function through `planIfReady`,
     // but the body builder is the last place that can still notice a prompt that
-    // never resolved -- and a body whose `prompt` is undefined is not a body with
-    // an empty prompt, it is one with no `prompt` key, which the server refuses as
+    // never resolved -- and a body whose `prompt` is undefined is not a body with an
+    // empty prompt, it is one with no `prompt` key, which the server refuses as
     // 400 `no_prompt_given`.
     clearError();
     setStatus(NO_PROMPT_HINT);
     return null;
   }
-  const duration = Number(els.durationInput.value);
-  const seed = Number(els.seedInput.value);
-  // The noise this request will really carry. Computed here rather than read off
-  // the control, because a `golden` selection for a duration with no recorded x_T
-  // is a request the page already knows the answer to.
-  const noise = applyNoiseDecision().mode;
-  state.busy = true;
-  els.generate.disabled = true;
-  clearError();
-  // The encoding step is invisible to the user otherwise: a cache miss costs about
-  // half a second before sampling even starts, and the status line says so rather
-  // than making the whole request look slow.
-  setStatus(
-    `生成中：${duration.toFixed(1)} s，${noise} 噪声`
-    + (resolved.source === 'text'
-      ? `，先把「${clip(resolved.text)}」编码成本地向量…` : '…'));
-  const requestId = ++state.requestId;
-  const startedAt = performance.now();
-  try {
-    const payload = await getJson('/api/plan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // No `reset`: a new prompt continues the clip on screen (docs/VIEWER.md).
-      body: JSON.stringify(planBody(resolved, { seed, duration, noise })),
+  if (options.reset) resetStream();
+  const wasEmpty = state.segments.length === 0;
+  const intent = setStreamIntent(resolved, { force: wasEmpty });
+  if (!wasEmpty) {
+    // A new sentence is *stored*, and the page says where it will land. The clip on
+    // screen is untouched: 0007 ③ forbids changing the conditions inside a segment.
+    const note = playbackIntentNote({
+      nextIntent: state.nextIntent,
+      committedIntent: state.committedIntent,
     });
-    if (requestId !== state.requestId) return;
-    showBubble(bubbleFromPlan(payload));
-    announceContinuation(payload);
-    if (payload.kind === 'hold') {
-      // No new action was started and no clip was drawn: `non_motion`, or a sentence
-      // the model did not read as a motion request. The clip on screen is left exactly
-      // as it was, and the status line says which reading held the clip.
-      setStatus(`保持当前动作 — ${payload.decision.reason}。`);
-      return;
+    if (note.state === 'pending') {
+      setStatus(`新条件 v${intent.version} 已记下，从下一段开始生效。`);
     }
-    installClip(payload, 'mine');
-    const timing = payload.timing || {};
-    const encoded = timing.encode_ms;
-    setStatus(
-      `完成：${payload.frames} 帧 / ${fmtMs(timing.total_ms ?? payload.generate_ms)}`
-      + (encoded ? `（其中编码 ${fmtMs(encoded)}）` : '（向量已缓存）')
-      + (payload.continuation && payload.continuation.applied ? '，已接续上一段。' : '。'));
-    // A prompt that was just encoded is now in the cache, so refresh the list and
-    // select it -- otherwise the dropdown would still show the old set and the next
-    // Generate would look like it had ignored the text box.
-    await loadHealth().catch(() => {});
-    syncPromptSelect(payload.embedding && payload.embedding.prompt_hash);
-  } catch (error) {
-    if (requestId !== state.requestId) return;
-    const name = error.errorName || 'request_failed';
-    showError(name, error.message, error.payload && error.payload.detail);
-    showBubble({ state: 'error', text: '这次生成失败了。', meta: `error=${name}` });
-    setStatus(`失败：${name}`, true);
-    els.hud.generate.textContent = fmtMs(performance.now() - startedAt);
-  } finally {
-    state.busy = false;
-    els.generate.disabled = false;
+    return state.segments[state.segments.length - 1];
   }
+  // Nothing is queued yet, so there is no playback to protect: fetch segment 0 now.
+  return pullSegment({ quiet: false });
 }
 
 /** Point the dropdown at a prompt hash when it is present; leave it alone otherwise. */
@@ -1156,37 +1578,256 @@ function decodeClip(payload) {
   };
 }
 
+/**
+ * Install the reference overlay. Only the `golden` role reaches here.
+ *
+ * The page's *own* clips no longer arrive through this function: they are appended
+ * to the playback queue by `appendSegment`, which is the whole point of `0009` §二.
+ * Keeping a second "replace the rig" path around is how the loop and the per-segment
+ * camera refit got in, so there is deliberately only one.
+ */
 function installClip(payload, role) {
   const clip = decodeClip(payload);
-  if (role === 'golden') {
-    if (state.goldenRig) state.goldenRig.dispose();
-    state.golden = clip;
-    state.goldenRig = new Rig(scene, state.skeleton, {
-      boneRadius: 0.010,
-      jointRadius: 0.011,
-      rootRadius: 0.018,
-      trailColor: 0xf4b860,
-      contactColor: 0xf4b860,
-      contactRadius: 0.038,
-    });
-    state.goldenRig.setTrail(clip.roots, clip.frameCount);
-    state.goldenRig.setOpacity(0.5);
-    state.goldenRig.setVisible(els.goldenToggle.checked);
-  } else {
-    if (state.rig) state.rig.dispose();
-    state.clip = clip;
-    state.rig = new Rig(scene, state.skeleton, {});
-    state.rig.setTrail(clip.roots, clip.frameCount);
-    state.rig.setVisible(true);
-    state.playhead = 0;
-    els.frameSlider.max = String(Math.max(0, clip.frameCount - 1));
-    els.frameSlider.value = '0';
-    // The camera is only refitted for a fresh clip, never per frame.
-    fitCameraToClip();
-    updateHudForClip(payload);
+  if (role !== 'golden') {
+    throw new Error('installClip is the golden overlay only; queue a generated clip with appendSegment()');
   }
+  if (state.goldenRig) state.goldenRig.dispose();
+  state.golden = clip;
+  state.goldenRig = new Rig(scene, state.skeleton, {
+    boneRadius: 0.010,
+    jointRadius: 0.011,
+    rootRadius: 0.018,
+    trailColor: 0xf4b860,
+    contactColor: 0xf4b860,
+    contactRadius: 0.038,
+  });
+  state.goldenRig.setTrail(clip.roots, clip.frameCount);
+  state.goldenRig.setOpacity(0.5);
+  state.goldenRig.setVisible(els.goldenToggle.checked);
   updateFrameLabel();
 }
+
+// ---------------------------------------------------------------------------
+// the playback queue: append a segment, prefetch the next one
+// ---------------------------------------------------------------------------
+/**
+ * Push one generated clip onto the end of the queue. **Never replaces the queue.**
+ *
+ * `0009` §二: a new clip is *appended*, the rig is extended rather than rebuilt, and
+ * the playhead keeps its value -- so the position readout, the trajectory and the
+ * pose all continue across the seam instead of restarting. The camera is refitted
+ * only when there was no previous segment (`shouldFitCamera`).
+ */
+function appendSegment(payload) {
+  const clip = decodeClip(payload);
+  const segment = {
+    frames: clip.frameCount,
+    jointCount: clip.jointCount,
+    fps: clip.fps,
+    joints: clip.joints,
+    roots: clip.roots,
+    contacts: clip.contacts,
+    meta: payload,
+    intentVersion: Number(payload.__intentVersion) || 0,
+  };
+  const first = state.segments.length === 0;
+  state.segments.push(segment);
+  state.timeline = timelineOf(state.segments, clip.jointCount);
+  state.clip = clip;
+  if (first) {
+    if (state.rig) state.rig.dispose();
+    state.rig = new Rig(scene, state.skeleton, {});
+    state.rig.setVisible(true);
+    // The trail starts at the first segment's first frame: nothing was carried over.
+    state.rig.setTrail(clip.roots, clip.frameCount);
+    state.trailFrom = 1;
+    state.trailDirty = false;
+    state.playhead = 0;
+  } else {
+    // The trail only ever gains points, and the new segment is *appended* rather
+    // than redrawn: `chain = 1` skips its frame 0, which is the frame the previous
+    // segment already drew (the server carries it over verbatim).
+    state.trailDirty = true;
+  }
+  els.frameSlider.max = String(state.timeline.maxFrame);
+  if (shouldFitCamera({ haveSegments: !first })) fitCameraToClip();
+  if (state.rig) state.rig.trail.visible = els.trailToggle.checked;
+  updateHudForClip(payload);
+  updateFrameLabel();
+  return segment;
+}
+
+/**
+ * Extend the rig's trail by whatever segments were appended since the last frame.
+ *
+ * It *appends*, so the point count is monotone by construction: one prefetched
+ * segment costs one geometry extension, and no path already drawn is ever dropped.
+ */
+function extendTrail() {
+  if (!state.rig) return;
+  for (let i = state.trailFrom || 0; i < state.segments.length; i += 1) {
+    const segment = state.segments[i];
+    state.rig.appendTrail(segment.roots, segment.frames, i === 0 ? 0 : 1);
+  }
+  state.trailFrom = state.segments.length;
+  state.trailDirty = false;
+}
+
+/**
+ * Ask `/api/plan` for the next segment and append it. Returns the payload or null.
+ *
+ * One request at a time (`state.fetching`), and the conditions are frozen before the
+ * request leaves: a sentence typed while this is in flight lands on the segment
+ * *after* this one (`nextSegmentIntent`).
+ */
+async function pullSegment(options) {
+  const given = options || {};
+  if (state.fetching) return null;
+  const plan = nextSegmentIntent({
+    segments: state.segments,
+    nextIntent: state.nextIntent,
+    committedIntent: state.committedIntent,
+    fetching: state.fetching,
+  });
+  if (!plan.intent) {
+    if (!given.quiet) setStatus(streamHoldText(plan.reason));
+    return null;
+  }
+  const intent = plan.intent;
+  const first = state.segments.length === 0;
+  if (plan.commit) state.committedIntent = plan.commit;
+  state.fetching = true;
+  const requestId = ++state.requestId;
+  if (first) {
+    state.busy = true;
+    els.generate.disabled = true;
+  }
+  // The request body was built by `planBody` when the conditions were recorded, and
+  // has been frozen with the intent since: nothing here reads a live control, so a
+  // sentence typed while this is in flight cannot change what this request carries.
+  const body = intent.body;
+  try {
+    if (!given.quiet) {
+      setStatus(
+        `生成中：${intent.duration.toFixed(1)} s，${intent.noise} 噪声`
+        + (intent.source === 'text' ? `，先把「${clip(intent.text)}」编码成本地向量…` : '…'));
+    }
+    const payload = await getJson('/api/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (requestId !== state.requestId) return null;
+    payload.__intentVersion = intent.version;
+    showBubble(bubbleFromPlan(payload));
+    announceContinuation(payload);
+    if (payload.kind === 'hold') {
+      // No action was started and no clip is drawn: the queue keeps what it has, the
+      // intent is *not* committed (so the same conditions are not re-sent forever),
+      // and the status line names the reading that held the clip.
+      state.committedIntent = null;
+      state.nextIntent = null;
+      setStatus(`保持当前动作 — ${payload.decision.reason}。`);
+      return null;
+    }
+    const segment = appendSegment(payload);
+    if (!given.quiet) {
+      const timing = payload.timing || {};
+      const encoded = timing.encode_ms;
+      setStatus(
+        `完成：${payload.frames} 帧 / ${fmtMs(timing.total_ms ?? payload.generate_ms)}`
+        + (encoded ? `（其中编码 ${fmtMs(encoded)}）` : '（向量已缓存）')
+        + (payload.continuation && payload.continuation.applied ? '，已接续上一段。' : '。'));
+    }
+    await loadHealth().catch(() => {});
+    syncPromptSelect(payload.embedding && payload.embedding.prompt_hash);
+    return segment;
+  } catch (error) {
+    if (requestId !== state.requestId) return null;
+    const name = error.errorName || 'request_failed';
+    showError(name, error.message, error.payload && error.payload.detail);
+    showBubble({ state: 'error', text: '这次生成失败了。', meta: `error=${name}` });
+    setStatus(`失败：${name}（播放保持最后一帧，不循环）`, true);
+    if (first) els.hud.generate.textContent = fmtMs(performance.now());
+    return null;
+  } finally {
+    state.fetching = false;
+    state.busy = false;
+    els.generate.disabled = false;
+  }
+}
+
+/** The sentence for a refused prefetch, by name. Never invents a reason. */
+function streamHoldText(reason) {
+  if (reason === STREAM_HOLD.GENERATING) return '正在生成下一段…';
+  if (reason === STREAM_HOLD.NO_INTENT) return '还没有条件，无法继续下一段。';
+  if (reason === STREAM_HOLD.BUFFERED) return '缓冲充足。';
+  return `没有预取下一段（${reason}）。`;
+}
+
+/**
+ * Drop the queue and start over. **The only reset the page has.**
+ *
+ * `0009` §二: "只有用户主动 `Reload` 才允许重置". Every automatic path appends; this
+ * is the one that clears.
+ */
+function resetStream() {
+  state.segments = [];
+  state.timeline = null;
+  state.clip = null;
+  state.playhead = 0;
+  state.held = false;
+  state.trailDirty = false;
+  state.trailFrom = 0;
+  state.nextIntent = null;
+  state.committedIntent = null;
+  state.intentVersion = 0;
+  // Invalidate any fetch still in flight: a segment asked for *before* the reset must
+  // not be appended after it, or Reload would resurrect the run it just cleared.
+  state.requestId += 1;
+  state.fetching = false;
+  if (state.rig) {
+    state.rig.dispose();
+    state.rig = null;
+  }
+  els.frameSlider.max = '0';
+  els.frameSlider.value = '0';
+  updateFrameLabel();
+}
+
+/** Record a new set of conditions. They apply to the next segment, never mid-clip. */
+function setStreamIntent(resolved, { force = false } = {}) {
+  const duration = Number(els.durationInput.value);
+  const seed = Number(els.seedInput.value);
+  // The noise this request will really carry. Computed here rather than read off the
+  // control, because a `golden` selection for a duration with no recorded x_T is a
+  // request the page already knows the answer to.
+  const noise = applyNoiseDecision().mode;
+  // The body is built here, from the pure builder, and frozen with the intent: the
+  // request that eventually leaves carries the conditions as they were when the
+  // reader asked for them, not as the controls read at fetch time (0007 ③).
+  const body = planBody({ prompt: resolved.prompt }, { seed, duration, noise });
+  const previous = state.nextIntent;
+  const unchanged = previous
+    && previous.prompt === resolved.prompt
+    && previous.duration === duration
+    && previous.seed === seed
+    && previous.noise === noise;
+  if (unchanged && !force) return previous;
+  state.intentVersion += 1;
+  state.nextIntent = {
+    version: state.intentVersion,
+    prompt: resolved.prompt,
+    text: resolved.text,
+    source: resolved.source,
+    duration,
+    seed,
+    noise,
+    body,
+  };
+  return state.nextIntent;
+}
+
 
 function updateHudForClip(payload) {
   els.hud.model.textContent = payload.model;
@@ -1232,28 +1873,113 @@ function updateHudForClip(payload) {
     : fmtMs(timing.encode_ms);
   els.stats.total.textContent = fmtMs(timing.total_ms);
   els.stats.endpoint.textContent = payload.served_by;
+  updateStreamHud(true);
+}
+
+/**
+ * The stream readouts: how much is buffered, how many segments are queued, and which
+ * intent the *next* segment will use.
+ *
+ * Called from the render loop, so it is gated twice: the cheap `bufferDepth` runs every
+ * frame, and the DOM is written only when something visible changed or a quarter of a
+ * second has passed (the numbers move 20 times a second; redrawing them 120 times is
+ * work with nothing to show for it).
+ */
+let streamHudCache = { key: null, at: -Infinity };
+
+function updateStreamHud(force = false) {
+  const timeline = state.timeline;
+  const fps = (state.clip && state.clip.fps) || (state.health && state.health.fps) || 20;
+  const depth = bufferDepth(timeline, state.playhead);
+  const key = [
+    depth, state.segments.length, state.held, els.loopToggle.checked,
+    state.nextIntent ? state.nextIntent.version : -1,
+    state.committedIntent ? state.committedIntent.version : -1,
+    state.rig ? state.rig.trailPointCount() : -1,
+  ].join('|');
+  const now = performance.now();
+  if (!force && key === streamHudCache.key && now - streamHudCache.at < 250) return null;
+  streamHudCache = { key, at: now };
+  const note = bufferNote({
+    timeline,
+    playhead: state.playhead,
+    fps,
+    held: state.held,
+    loopSingleSegment: els.loopToggle.checked,
+    runaheadFrames: RUNAHEAD_FRAMES,
+  });
+  if (els.hud.stream) {
+    els.hud.stream.textContent = note.state === 'dry'
+      ? `缓冲耗尽（持帧）`
+      : `${depth} 帧 / ${(depth / fps).toFixed(1)} s · ${state.segments.length} 段`;
+    els.hud.stream.className = `hud-value ${note.state === 'dry' ? 'is-warn' : ''}`.trim();
+    els.hud.stream.title = note.text;
+  }
+  const intent = playbackIntentNote({
+    nextIntent: state.nextIntent,
+    committedIntent: state.committedIntent,
+  });
+  if (els.hud.intent) {
+    els.hud.intent.textContent = intent.state === 'pending'
+      ? `v${state.committedIntent ? state.committedIntent.version : '—'} 播放中 · v${intent.version} 待下一段`
+      : intent.state === 'current'
+        ? `v${intent.version}（当前）`
+        : '—';
+    els.hud.intent.className = `hud-value ${intent.state === 'pending' ? 'is-warn' : ''}`.trim();
+    els.hud.intent.title = intent.text;
+  }
+  if (els.stats.buffered) els.stats.buffered.textContent = `${depth} frame(s) / ${(depth / fps).toFixed(2)} s`;
+  if (els.stats.segments) els.stats.segments.textContent = String(state.segments.length);
+  if (els.stats.trail) {
+    els.stats.trail.textContent = state.rig ? `${state.rig.trailPointCount()} point(s)` : '—';
+  }
+  if (els.loopHelp) {
+    els.loopHelp.textContent = els.loopToggle.checked
+      ? '循环开：当前位置会在片段结尾回到片段开头，位置显示会回退。这不是默认行为。'
+      : '循环关（默认）：段与段之间是连续流，播放永不回头；生成跟不上时停在最后一帧并如实显示缓冲耗尽。';
+  }
+  return note;
 }
 
 function updateFrameLabel() {
-  const clip = state.clip;
-  const frame = clip ? Math.min(clip.frameCount - 1, Math.max(0, Math.round(state.playhead))) : 0;
-  els.frameLabel.textContent = `frame ${frame} / ${clip ? clip.frameCount - 1 : 0}`;
+  const timeline = state.timeline;
+  const frame = timeline && timeline.frameCount
+    ? Math.max(0, Math.min(timeline.maxFrame, Math.round(state.playhead)))
+    : 0;
+  const total = timeline && timeline.frameCount ? timeline.maxFrame : 0;
+  // The position readout is the *global* frame in the whole run, not a frame inside
+  // the newest clip: a counter that restarts at every segment is the "reset" the
+  // reader was seeing (0009 §二).
+  els.frameLabel.textContent = `frame ${frame} / ${total} · 段 ${state.segments.length}`;
 }
 
 // ---------------------------------------------------------------------------
 // playback
 // ---------------------------------------------------------------------------
 function updatePlayhead(deltaSeconds) {
+  if (!state.timeline || !state.playing) return null;
   const clip = state.clip;
-  if (!clip || !state.playing) return;
-  state.playhead += deltaSeconds * clip.fps;
-  if (state.playhead > clip.frameCount - 1) {
-    state.playhead -= clip.frameCount - 1;   // loop
-    if (state.playhead < 0) state.playhead = 0;
+  const fps = (clip && clip.fps) || 20;
+  const decision = advancePlayhead({
+    segments: state.segments,
+    timeline: state.timeline,
+    playhead: state.playhead,
+    deltaSeconds,
+    fps,
+    runaheadFrames: RUNAHEAD_FRAMES,
+    loopSingleSegment: els.loopToggle.checked,
+  });
+  state.playhead = decision.playhead;
+  state.held = decision.held;
+  if (decision.wrapped) {
+    // Explicit loop only: say so in the status line rather than making a rewound
+    // counter look like a bug.
+    setStatus('循环开：这一段从头再播（位置显示会回退）。');
   }
-  els.frameSlider.value = String(Math.round(state.playhead));
-  updateFrameLabel();
+  els.frameSlider.value = String(Math.round(decision.displayFrame));
+  return decision;
 }
+
 
 function pushFpsSample(count) {
   state.fpsWindow.push(count);
@@ -1273,14 +1999,21 @@ function frame() {
   const delta = Math.min(0.1, (now - state.lastTime) / 1000);
   state.lastTime = now;
 
-  updatePlayhead(delta);
+  const decision = updatePlayhead(delta);
 
-  if (state.clip && state.rig) {
+  // Extend the trail before drawing, so a prefetched segment's path appears with the
+  // first frame of that segment rather than one frame later.
+  if (state.trailDirty) extendTrail();
+
+  if (state.timeline && state.rig) {
+    // The pose is read out of the *whole run* at the global playhead, which is what
+    // makes a segment boundary invisible: there is no "start of the new clip" to
+    // jump to, and no frame at which the position counter restarts.
     state.rig.setPose(
-      state.clip.joints,
+      state.timeline.poses,
       Math.round(state.playhead),
-      state.clip.frameCount,
-      els.contactsToggle.checked ? state.clip.contacts : null,
+      state.timeline.frameCount,
+      els.contactsToggle.checked ? state.timeline.contacts : null,
     );
   }
   if (state.golden && state.goldenRig) {
@@ -1290,6 +2023,30 @@ function frame() {
       state.golden.frameCount,
       els.contactsToggle.checked ? state.golden.contacts : null,
     );
+  }
+
+  // Runahead: ask for the next segment while this one still has runway. The request
+  // is deliberately *not* awaited -- playback continues while it is in flight, which
+  // is the whole point of 0007's runahead rule.
+  if (state.playing && decision && decision.wantMore) {
+    const plan = shouldPrefetch({
+      fetching: state.fetching,
+      nextIntent: state.nextIntent,
+      committedIntent: state.committedIntent,
+      timeline: state.timeline,
+      lastDecision: decision,
+    });
+    if (plan.fetch) {
+      const first = state.segments.length === 0;
+      pullSegment({ quiet: !first });
+    }
+  }
+  if (decision) {
+    // The readout is redrawn only when the frame it shows actually changes: this runs
+    // once per rendered frame, and a DOM write per frame for a number that moves 20
+    // times a second is work with nothing to show for it.
+    updateFrameLabel();
+    updateStreamHud();
   }
 
   // Camera: orbit around the focus point with a fixed convention (yaw 0 looks
@@ -1399,11 +2156,24 @@ els.playPause.addEventListener('click', () => {
   els.playPause.setAttribute('aria-pressed', String(state.playing));
 });
 els.frameSlider.addEventListener('input', () => {
-  state.playhead = Number(els.frameSlider.value);
+  // Scrubbing is a position in the *whole run*: the slider is the global frame, so
+  // dragging it never restarts a segment or clears what has already been played.
+  state.playhead = Math.max(0, Math.min(state.timeline ? state.timeline.maxFrame : 0,
+    Number(els.frameSlider.value)));
   state.playing = false;
+  state.held = false;
   els.playPause.textContent = 'Play';
   els.playPause.setAttribute('aria-pressed', 'false');
   updateFrameLabel();
+  updateStreamHud(true);
+});
+els.loopToggle.addEventListener('change', () => {
+  // Explicit, default-off, and it says what it is on the label and in the HUD: this
+  // is the only path on the page that may move the position backwards.
+  updateStreamHud(true);
+  setStatus(els.loopToggle.checked
+    ? '循环已开：单个片段反复播，位置显示会回退（这是显式选项，不是默认）。'
+    : '循环已关：回到连续流，播放永不回头。');
 });
 els.resetCamera.addEventListener('click', resetCameraView);
 els.fitCamera.addEventListener('click', fitCameraToClip);

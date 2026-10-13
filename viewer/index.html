@@ -94,6 +94,9 @@
           <input id="frame-slider" type="range" min="0" max="0" step="1" value="0"
                  aria-label="Scrub to frame">
         </div>
+        <label class="checkline"><input id="loop-toggle" type="checkbox">
+          Loop — <b>this repeats one clip</b> (not the default)</label>
+        <p class="help" id="loop-help">—</p>
         <div class="buttons">
           <button id="reset-camera" class="ghost" type="button">Reset camera</button>
           <button id="fit-camera" class="ghost" type="button">Fit clip</button>
@@ -122,6 +125,8 @@
           <span class="hud-key">vector</span><span class="hud-value" id="hud-source">—</span>
           <span class="hud-key">encode</span><span class="hud-value" id="hud-encode">—</span>
           <span class="hud-key">embedding</span><span class="hud-value" id="hud-embedding">—</span>
+          <span class="hud-key">stream</span><span class="hud-value" id="hud-stream">—</span>
+          <span class="hud-key">next条件</span><span class="hud-value" id="hud-intent">—</span>
         </div>
 
         <h2>This run</h2>
@@ -144,6 +149,9 @@
           <div><dt>Total (server)</dt><dd id="stat-total">—</dd></div>
           <div><dt>Local encoder</dt><dd id="stat-encoder">—</dd></div>
           <div><dt>Endpoint</dt><dd id="stat-endpoint">—</dd></div>
+          <div><dt>Buffered ahead</dt><dd id="stat-buffered">—</dd></div>
+          <div><dt>Segments queued</dt><dd id="stat-segments">0</dd></div>
+          <div><dt>Trail points</dt><dd id="stat-trail">—</dd></div>
         </dl>
 
         <p class="note" id="limits">
@@ -173,6 +181,21 @@
           continuation always uses the local random noise and says so. A forced reset is
           available over the API (<code>"reset": true</code>) and is the negative control the
           continuity numbers are measured against.
+        </p>
+
+        <p class="note" id="stream-note">
+          <b>No loop.</b> Playback is a <b>continuous stream</b>: while a clip plays, the next
+          one is generated ahead of it and <b>appended</b> to the run, so the character never
+          returns to the start of a clip. The trajectory, the camera and the frame counter
+          all continue across a segment seam — the counter is the <b>global</b> frame in the
+          whole run and only ever goes up. A sentence typed while a clip is playing is
+          <b>not</b> applied mid-clip: it is stored and takes effect at the <b>next segment
+          boundary</b> (the HUD's <code>next条件</code> row says which conditions that will
+          be). If generation cannot keep up, playback <b>holds the last frame</b> and the
+          stream row says the buffer ran out — it never loops to cover the gap. The
+          <b>Loop</b> checkbox above is the explicit, default-off exception, for studying a
+          single clip; when it is on, the position display goes backwards, which is why it is
+          labelled.
         </p>
       </details>
     </aside>

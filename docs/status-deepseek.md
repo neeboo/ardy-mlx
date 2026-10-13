@@ -1144,3 +1144,68 @@ $ ./.venv/bin/python -m pytest -q     # 423 passed, 1 xfailed        （上轮 4
 * `speed` / `amplitude` 是**形变**，不是模型重新学的动作：`speed` 会带来脚滑，极端幅度下姿态
   不完全自洽。
 * 浏览器渲染仍需人眼；本轮**没有**用 CGEvent/AX/osascript 合成输入。
+
+## 19. 第 11 轮（2026-10-13）· 播放是连续流，不是 loop（0009 §二）
+
+**这一轮修的是用户排在第 ① 位的那件事**：页面上"不停的 playback / loop"。判据先冻结在
+`docs/decisions/0009` §二与 `0007`，再动代码。
+
+### 19.1 病因（代码级）
+
+`viewer/app.js` 的 `updatePlayhead` 里有一行 `state.playhead -= clip.frameCount - 1; // loop`，
+`installClip` 每来一段就 `dispose()` 旧 rig、`setTrail(新片段)` 重画轨迹、`playhead = 0` 归零、
+`fitCameraToClip()` 重新取景。所以即使服务端证明姿态与世界坐标是连续的（换句后第 0 帧位移
+**0.000 mm**），观感依旧是"角色被 reset 了"。
+
+### 19.2 现在的结构
+
+* **队列只追加**：新增 `pure-timeline` 纯函数区（`timelineOf` / `segmentBase` / `segmentAtFrame` /
+  `advancePlayhead` / `bufferDepth` / `nextSegmentIntent` / `shouldPrefetch` / `shouldFitCamera` /
+  `playbackIntentNote` / `bufferNote` / `trailPoints`），可被 `node:vm` 直接跑。
+* **接缝只算一帧**：`/api/plan` 把上一段末帧逐位搬成新片段第 0 帧，所以拼接时丢掉这个重复帧；
+  播放头是**全局帧号**，跨段不归零。
+* **轨迹只增**：`Rig.appendTrail` 扩写几何（不再是 `setTrail` 重建），`chain = 1` 跳过接缝那一点。
+* **相机不动**：`shouldFitCamera` 只在"没有上一段"或用户点 *Fit clip* 时为真。
+* **runahead**：播放头进入末尾 40 帧（20 fps 下 1 s）就并行请求下一段；请求**不 await**。
+* **口令只在段边界生效**：`setStreamIntent` 记录条件（并用 shipped `planBody` 当场冻结请求体），
+  `nextSegmentIntent` 只在**下一次取段**时提交；飞行中的请求保持它出发时的条件。HUD `next条件`
+  行会写 `v1 播放中 · v2 待下一段`。
+* **缺帧诚实**：跟得上就播，跟不上就**停最后一帧**并在 HUD 写 `缓冲耗尽（持帧）`，绝不偷偷循环。
+* **Reset 只有一处**：`Reload`。它会同时作废在飞的请求（`state.requestId += 1`），否则 reset 前
+  发出的响应会在 reset 后被追加回去。
+* **loop 变成显式选项、默认关闭**：复选框原文 `Loop — this repeats one clip (not the default)`，
+  开启时位置显示**会回退**，并在状态栏说明"这是显式选项，不是默认"。
+* **服务端流状态**：`/api/health` 新增 `stream` 块（`owner` / `segments_generated` /
+  `frames_generated` / `last_generate_ms` / `last_windows` / `continuation_active` /
+  `continuation_frames` / `continue_ready` / `history_frames` / `note`）。它**故意不报 queue depth**：
+  队列在页面里，报了就是编数。
+
+### 19.3 四条判据的实测（`node tests/viewer_js_guard.test.mjs`，52 条全过）
+
+原样输出见本轮汇报；要点：
+
+| 判据 | 实测 | 负对照 |
+|---|---|---|
+| 1 播放位置单调不回退（连播 5 段） | playhead deltas min **0.0000**，`any regression? false`；全局帧 0→25，队列 5 段铺成 26 帧 | 打开 loop → `5.00 -> 0.00 <-- WRAP`，`monotone false`，判据**按预期红**；另一条负对照把旧式 `playhead -= maxFrame` 原样跑一遍，同样红 |
+| 2 轨迹只增 | trail point deltas min **0**，`any fall? false` | 朴素拼接（不丢接缝）得 30 点 vs shipped 26 点；`setTrail(新片段)` 式替换让点数回落 |
+| 3 相机不动 | `shouldFitCamera`：第 1 段 `true`，第 2–5 段 `false`，按 Fit `true`；append 路径不写 `cameraView` | 每段 refit → 焦点会移动 **12.000 m**（Z），已量出 |
+| 4 缺帧诚实 | 单段 41 帧无后续：`first hold at step 2`，终点 `playhead 40`，`wrapped? no`；`bufferNote` = `{"state":"dry",...,"不循环"}` | 打开 loop → `held 0` 次，dry 警告永不出现（正是 0007 ⑤ 禁止的掩盖） |
+| 5 接续未退化 | 服务端既有 `carried_frame_joint_mm == 0.0`、`carried_frame_root_mm == 0.0` 原样通过；新增客户端侧交叉验证：每次追加只增 `frames - 1` 帧，且已画过的帧内容逐位不变 | 不丢接缝的 `timelineOf` 得 12 帧（应为 11），该断言会红 |
+
+### 19.4 本轮数字
+
+* `pytest -q`：**469 passed + 1 xfailed**（上一轮 466 + 1；新增 3 条，未减）。
+* `node tests/viewer_js_guard.test.mjs`：**52 passed**（上一轮 36；新增 16 条，未减）。
+* `node --check viewer/app.js`、`node --check viewer/rig.js`：通过。
+* 权重/向量未入库；`git status --ignored` 下 `artifacts/embeddings/*.npy` 仍是 ignored，未跟踪。
+* 改动文件：`viewer/app.js`、`viewer/rig.js`、`viewer/index.html`、`scripts/ardy_viewer.py`、
+  `tests/viewer_js_guard.test.mjs`、`tests/test_viewer_api.py`、`docs/VIEWER.md`、本文件。
+
+### 19.5 本轮的诚实边界
+
+* **相机不跟随角色**（这是裁定要求的：只有 *Fit* 才能重新取景）。走得远了角色会出画，
+  按 **Fit clip**。已写进 `docs/VIEWER.md` §11.4。
+* **金标准叠加层仍绑在单个片段上**，不随段重新拉取 —— 它是"研究单段"的工具，不是流特性。
+* **队列不裁剪**：长跑时内存随段数增长。裁剪会让全局帧号回退，而那正是判据 1 要禁止的；
+  所以这里选择"诚实增长"，并写进 §11.4，而不是偷偷重编号。
+* 浏览器观感仍需人眼；本轮**没有**用 CGEvent/AX/osascript 合成输入。

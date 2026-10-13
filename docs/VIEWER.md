@@ -158,6 +158,16 @@ Three routes plus static files. Every failure carries a stable machine-readable
     "history_frames": 160,              // the checkpoint's own crop budget
     "frames": 40, "prompt_hash": "e9cf8141cac79f35", "prompt_text": "A person walks forward.",
     "note": "a prompt change continues the clip that is on screen: …"},
+  "stream": {                           // §11. What the server owns about playback -- and
+    "owner": "page",                    //     what it declines to guess at.
+    "segments_generated": 7,            // clips this server has served this run
+    "frames_generated": 280,            // their total frames (seam frames included)
+    "last_generate_ms": 168.4, "last_windows": 1,
+    "continuation_active": true,        // a clip is on screen to continue from
+    "continuation_frames": 40,          // its trailing history, in frames
+    "continue_ready": true,             // the next plan without reset would continue
+    "history_frames": 160,              // the checkpoint's own crop budget
+    "note": "the page owns playback and the runahead queue; this server owns the …"},
   "router": {                           // §9. The same six names a plan carries.
     "enabled": true, "available": true,
     "state": "ok",                      // "router_disabled" | "router_unavailable" | "ok"
@@ -1473,3 +1483,72 @@ is that `make_step_fn`'s `reuse_latent` cache is per-run: the seed's explicit fr
 are re-encoded to the hybrid representation instead of reusing the denoiser's own
 requantised latent. It is a small, bounded re-encode of clean history, and it is
 recorded here rather than hidden.
+
+## 11. Playback is a stream, not a loop
+
+`docs/decisions/0009` §二 ruled on what the reader was actually seeing: the page looped
+the last clip (`playhead -= frameCount - 1`), rebuilt the rig, redrew the trail,
+zeroed the position readout and refitted the camera on every new clip. Server-side the
+pose and world coordinates were continuous (a new prompt opens on the frame already on
+screen, seam `0.000 mm`); the page threw that away. This section is the client half.
+
+### 11.1 The model
+
+The queue is **append-only**. `/api/plan` answers with a clip whose frame 0 *is* the
+previous clip's last frame (`§10.2`), so appending it means:
+
+* the queue grows by `frames - 1` **global** frames — the carried-over frame is not a
+  second frame, it is the one the page already drew;
+* `timeline.poses`/`roots`/`contacts` are the concatenation of every segment with that
+  frame dropped, indexed by a **global** frame number;
+* the playhead is a position in *that*, so it never resets at a seam, and the frame
+  readout counts the whole run rather than restarting at every clip;
+* the trail is **extended** (`Rig.appendTrail`), not replaced, so no path already drawn
+  is lost and the point count is monotone by construction;
+* the camera is refitted **only** when there is no previous segment, or when the reader
+  presses *Fit clip*. A per-segment refit is the "the character was reset" impression
+  even when the pose did not move.
+
+Runahead asks for the next segment once the playhead is inside `RUNAHEAD_FRAMES = 40`
+of the end (a second of runway at 20 fps), in parallel with playback — the request is
+deliberately not awaited. When it cannot keep up the page **holds the last frame** and
+the HUD's `stream` row says `缓冲耗尽（持帧）`. It does not loop to cover the gap
+(`0007` ⑤).
+
+### 11.2 A new sentence lands on the next segment, never inside one
+
+`0007` ③ forbids changing conditions mid-clip. The page keeps the conditions in one
+object and **commits** them only when a fetch starts:
+
+* typing does **not** re-request and does not touch the clip on screen. It bumps an
+  intent version and the HUD's `next条件` row says `v1 播放中 · v2 待下一段`;
+* the request body is built by the shipped `planBody()` at the moment the conditions are
+  recorded and frozen with them, so it cannot be re-derived from the live controls while
+  the request is in flight;
+* a fetch in flight keeps the conditions it started with, even if a newer sentence
+  arrived while it was running. It lands on the segment *after* that one.
+
+`Reload` is the **only** reset on the page: it clears the queue, the trail and the
+intent version, and invalidates any fetch still in flight so a pre-reset response cannot
+be appended after it.
+
+### 11.3 Loop is an explicit option, off by default
+
+The `Loop — this repeats one clip (not the default)` checkbox restarts the *current*
+segment and rewinds the global counter on purpose. It exists to study a single clip, it
+says what it is in the label and in the HUD, and it is the negative control the
+monotonicity criterion is falsified by — with it on, the position readout goes
+backwards, which is why it is labelled rather than hidden.
+
+### 11.4 What this costs
+
+* **The camera does not follow the character.** With no refit and no user input the
+  camera stays where it was, so a walk that crosses the viewport leaves it. That is the
+  ruled behaviour (only *Fit* may reframe); press **Fit clip**.
+* The **golden overlay is still bound to one clip** and is not re-fetched per segment.
+  It is a study aid for a single clip, not a stream feature.
+* Runahead keeps **two** clips: the one playing and the one being generated. A third is
+  not requested until the buffer drops inside the 40-frame window, so a long run's
+  memory is bounded by what is on screen plus one segment — the queue itself is never
+  trimmed, because trimming it would move the global frame numbers that the "only goes
+  up" criterion is about.

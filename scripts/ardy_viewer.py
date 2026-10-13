@@ -1057,6 +1057,16 @@ class ViewerApp:
         #: :class:`ContinuationState`). ``None`` until one has been planned, and
         #: replaced -- never silently reused across a ``reset``.
         self.continuation: Optional[ContinuationState] = None
+        #: Server-side streaming state, for the page's honest buffering readout
+        #: (``0007`` ⑤, ``0009`` §二). The server does not run a queue of its own --
+        #: the page owns playback -- so what it can truthfully report is *what it
+        #: would continue from*, how deep that history is, and how the last segment
+        #: went. There is deliberately no ``queue_depth`` here: a number the server
+        #: does not own would be a number it could only invent.
+        self.stream_segments: int = 0
+        self.stream_frames: int = 0
+        self.stream_last_ms: Optional[float] = None
+        self.stream_last_windows: Optional[int] = None
         self.lock = threading.Lock()
         self.runner = None
         self.error: Optional[str] = None
@@ -1449,6 +1459,33 @@ class ViewerApp:
                 "prompt_text": (self.continuation.prompt_text if self.continuation else None),
                 "note": CONTINUATION_NOTE,
             },
+            # What the server can honestly say about the *stream* the page is
+            # playing. This is the state a reader needs to tell "generation is
+            # keeping up" from "the page is holding a frame because the buffer ran
+            # dry" (0007 ⑤) -- and, crucially, it reports no queue depth, because
+            # the queue lives in the page and the server will not invent a number
+            # about something it does not own.
+            "stream": {
+                "owner": "page",
+                "segments_generated": int(self.stream_segments),
+                "frames_generated": int(self.stream_frames),
+                "last_generate_ms": self.stream_last_ms,
+                "last_windows": self.stream_last_windows,
+                "continuation_active": self.continuation is not None,
+                "continuation_frames": (
+                    int(self.continuation.frames.shape[1]) if self.continuation else 0
+                ),
+                "continue_ready": (
+                    self.continuation is not None and self.continuation_supported()
+                ),
+                "history_frames": continuation_history_frames(self.layout),
+                "note": (
+                    "the page owns playback and the runahead queue; this server owns the "
+                    "continuation state, so it reports what the next plan would continue "
+                    "from and how the last segment was generated. It does not report a "
+                    "queue depth: that number belongs to the page."
+                ),
+            },
             "limits": {
                 "text_encoder": (
                     "a local MLX text encoder is available (the sibling llm2vec-mlx checkout, "
@@ -1835,6 +1872,15 @@ class ViewerApp:
                 prompt_text=entry["text"],
                 model=self.model,
             )
+
+        # Stream bookkeeping for ``/api/health``'s ``stream`` block: how many
+        # segments this server has produced for the page, and how long the last one
+        # took. Counted on the clip actually served, so "what the page is playing"
+        # and "what the server counted" cannot drift.
+        self.stream_segments += 1
+        self.stream_frames += int(joints.shape[0])
+        self.stream_last_ms = float(generate_ms)
+        self.stream_last_windows = int(windows)
 
         payload = {
             "kind": "plan",

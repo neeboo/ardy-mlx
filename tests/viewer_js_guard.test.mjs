@@ -32,6 +32,8 @@ const SOURCE = readFileSync(APP_PATH, 'utf8');
 
 const START = '// --- pure-prompt-guard: start';
 const END = '// --- pure-prompt-guard: end';
+const TIMELINE_START = '// --- pure-timeline: start';
+const TIMELINE_END = '// --- pure-timeline: end';
 const BUBBLE_START = '// --- pure-bubble: start';
 const BUBBLE_END = '// --- pure-bubble: end';
 
@@ -71,6 +73,30 @@ function loadBubble(context = vm.createContext({})) {
     { filename: 'viewer/app.js#pure-bubble' },
   );
 }
+
+/** The marked timeline region of the shipped page, verbatim. */
+function pureTimeline(source) {
+  return markedRegion(source, TIMELINE_START, TIMELINE_END);
+}
+
+/**
+ * Load the playback model. `generateClip`, `planBody` and `clip` are carried in
+ * because the timeline region names them (the body builder and the quote helper are
+ * the shipped page's own, not copies).
+ */
+function loadTimeline(context = vm.createContext({})) {
+  return vm.runInContext(
+    `${pureRegion(SOURCE)}\n${pureBubble(SOURCE)}\n${pureTimeline(SOURCE)}\n`
+    + `({ RUNAHEAD_FRAMES, BUFFER_EMPTY_HINT, STREAM_HOLD, timelineOf, segmentBase, `
+    + `segmentAtFrame, advancePlayhead, bufferDepth, nextSegmentIntent, shouldPrefetch, `
+    + `shouldFitCamera, playbackIntentNote, bufferNote, poseBounds, trailPoints, `
+    + `trailUnderNaiveAppend, concatFloat32, concatUint8 });`,
+    context,
+    { filename: 'viewer/app.js#pure-timeline' },
+  );
+}
+
+const stream = loadTimeline();
 
 /** The body of one top-level function, up to the next declaration. */
 function functionBody(source, name) {
@@ -345,10 +371,11 @@ function wiring(source) {
   return {
     // `/api/plan` is only reached through a checked `resolved`.
     guardInPlan: /if \(!shouldPlan\(resolved\)\)/.test(source),
-    bodyFromPlanBody: /planBody\(resolved, \{ seed, duration, noise \}\)/.test(source),
+    bodyFromPlanBody: /planBody\(\{ prompt: resolved\.prompt \}, \{ seed, duration, noise \}\)/
+      .test(source),
     // ... and `generateClip` has exactly one caller left: the guarded entry point.
     singleGenerateCallSite: generateDecls === 1 && generateCalls === 2
-      && source.includes('return generateClip(resolved);'),
+      && source.includes('return generateClip(resolved, { reset: trigger === \'reload\' });'),
     // Every control that can plan goes through that entry point.
     allTriggersGuarded: [
       "planIfReady('generate')", "planIfReady('enter')", "planIfReady('go')",
@@ -366,16 +393,23 @@ function wiring(source) {
     bubbleBeforeRequest: (() => {
       const body = functionBody(source, 'planIfReady');
       const pending = body.indexOf('showBubble(bubblePending(');
-      return pending >= 0 && pending < body.indexOf('generateClip(resolved)');
+      return pending >= 0 && pending < body.indexOf('generateClip(resolved');
     })(),
     // ... and redrawn from the *server's* verdict, not from the page's guess at one.
     bubbleFromVerdict: /showBubble\(bubbleFromPlan\(payload\)\)/.test(source),
-    // A hold keeps the clip on screen: no clip is installed and the branch returns.
+    // A hold keeps the queue exactly as it is: nothing is appended and the branch
+    // returns.
     holdInstallsNothing: (() => {
-      const body = functionBody(source, 'generateClip');
+      const body = functionBody(source, 'pullSegment');
       const hold = body.indexOf("payload.kind === 'hold'");
-      const install = body.indexOf("installClip(payload, 'mine')");
-      return hold >= 0 && install > hold && /return;/.test(body.slice(hold, install));
+      const install = body.indexOf('appendSegment(payload)');
+      return hold >= 0 && install > hold && /return null;/.test(body.slice(hold, install));
+    })(),
+    // The one entry point reaches the queue by *appending*; it has no reset of its own.
+    streamAppend: (() => {
+      const body = functionBody(source, 'appendSegment');
+      return body.includes('state.segments.push(segment)')
+        && !body.includes('resetStream');
     })(),
   };
 }
@@ -392,7 +426,7 @@ test('negative control: the wiring checks fail on a guard-free copy of the page'
   // these checks must notice. A check that cannot fail is not a check.
   const bypassed = SOURCE
     .replaceAll('if (!shouldPlan(resolved)) {', 'if (false) {')
-    .replace('planBody(resolved, { seed, duration, noise })',
+    .replace('planBody({ prompt: resolved.prompt }, { seed, duration, noise })',
       '{ prompt: resolved.prompt, seed, duration, noise }')
     .replace('await loadHealth().catch(() => {});', 'loadHealth().catch(() => {});')
     .replace("await planIfReady('reload');", 'generateClip();')
@@ -615,12 +649,18 @@ test('the chat region is pure: it runs with no document, no fetch, no state', ()
 /** The properties of the shipped page that make the three behaviours load-bearing. */
 function chatWiring(source) {
   const generate = functionBody(source, 'generateClip');
-  const planBodyAt = generate.indexOf('planBody(resolved, { seed, duration, noise })');
+  const pull = functionBody(source, 'pullSegment');
+  const intent = functionBody(source, 'setStreamIntent');
+  const planBodyCalls = (source.match(/planBody\(/g) || []).length;
+  const planBodyDecls = (source.match(/function planBody\(/g) || []).length;
   return {
     // 1. a prompt change is not a reset: no `reset` key is ever put in the body...
-    noResetInBody: !/\breset\s*:/.test(generate),
-    // ... and the body is still built by the pure builder.
-    bodyFromPlanBody: planBodyAt >= 0,
+    noResetInBody: !/\breset\s*:/.test(generate) && !/\breset\s*:/.test(pull)
+      && !/\breset\s*:/.test(intent),
+    // ... and the body is still built by the pure builder, once, when the conditions
+    //    are recorded -- not re-derived from the live controls when it is finally sent.
+    bodyFromPlanBody: planBodyDecls === 1 && planBodyCalls === 2
+      && intent.includes('const body = planBody({ prompt: resolved.prompt }'),
     // 2. everything that can plan goes through the one guarded entry point, and the
     //    dropdown is one of them: picking an entry sends it.
     selectSends: /els\.promptSelect\.addEventListener\('change', \(\) => \{[\s\S]{0,400}?planIfReady\('select'\)/
@@ -628,12 +668,22 @@ function chatWiring(source) {
     enterSends: source.includes("planIfReady('enter')"),
     // 3. the noise that is sent is the decision, not the raw control -- and it is
     //    decided before the body is built.
-    noiseFromDecision: /const noise = applyNoiseDecision\(\)\.mode;/.test(generate)
-      && generate.indexOf('applyNoiseDecision().mode') < planBodyAt,
+    noiseFromDecision: /const noise = applyNoiseDecision\(\)\.mode;/.test(intent)
+      && intent.indexOf('applyNoiseDecision().mode') < intent.indexOf('const body = planBody('),
     // The fallback is applied on every control that can move the duration.
     noiseFallbackOnControls: (source.match(/applyNoiseDecision\(\)/g) || []).length >= 4,
     // The response's own continuation block is what the page draws.
-    announceFromPayload: /announceContinuation\(payload\)/.test(generate),
+    announceFromPayload: /announceContinuation\(payload\)/.test(pull),
+    // 4. a new sentence lands on the *next* segment, never inside the one on screen:
+    //    the entry point records conditions and returns the clip already playing, and
+    //    the fetch is what commits them.
+    intentFrozenAtBoundary: generate.includes('setStreamIntent(resolved, { force: wasEmpty })')
+      && generate.includes('return state.segments[state.segments.length - 1];')
+      && generate.includes('return pullSegment({ quiet: false });')
+      && pull.includes('const body = intent.body;'),
+    // 5. exactly one call site of `planBody(`, so there is no second request path that
+    //    could carry different conditions.
+    singlePlanBodyCallSite: planBodyDecls === 1 && planBodyCalls === 2,
   };
 }
 
@@ -655,13 +705,15 @@ test('negative control: each of those wiring checks can go red', () => {
     .replace('const noise = applyNoiseDecision().mode;', 'const noise = els.noiseSelect.value;')
     .replace("planIfReady('select');", 'updatePromptHelp();')
     .replace('announceContinuation(payload);', '')
-    .replace('planBody(resolved, { seed, duration, noise })',
-      'planBody(resolved, { seed, duration, noise, reset: true })');
+    .replace('const body = planBody({ prompt: resolved.prompt }, { seed, duration, noise });',
+      'const body = { prompt: resolved.prompt, seed, duration, noise, reset: true };');
   const checks = chatWiring(broken);
   assert.equal(checks.noResetInBody, false);
   assert.equal(checks.selectSends, false);
   assert.equal(checks.noiseFromDecision, false);
   assert.equal(checks.announceFromPayload, false);
+  assert.equal(checks.bodyFromPlanBody, false);
+  assert.equal(checks.singlePlanBodyCallSite, false);
   assert.ok(Object.values(chatWiring(SOURCE)).every(Boolean), 'the real page passes them all');
 });
 
@@ -718,4 +770,416 @@ test('negative control: a payload with no controls block claims no application',
   const view = bubble.bubbleFromPlan(planPayload());
   assert.doesNotMatch(view.meta, /applied=/);
   assert.doesNotMatch(view.meta, /占位/);
+});
+
+// ---------------------------------------------------------------------------
+// the playback model: a queue that never loops, and the negative controls for it
+// ---------------------------------------------------------------------------
+//
+// `docs/decisions/0009` §二 froze this as the thing the reader was actually seeing
+// ("不停地 playback / loop") and named four falsifiable criteria. Each one below is
+// paired with a negative control built from a real alternative implementation --
+// the loop checkbox, a naive `setTrail`-style replacement, a per-segment camera
+// refit -- rather than from a mock, so a check that cannot fail would be obvious.
+
+const JOINT_COUNT = 2;
+const CONTACT_COUNT = 4;
+const STREAM_FPS = 20;
+
+/**
+ * A clip shaped like the server's, as first-frame-carries-over.
+ *
+ * `base` is the world XZ offset of this segment's body, so successive segments walk
+ * away from one another and "did the camera/trail/position move" is measurable.
+ */
+function fakeSegment({ frames = 5, base = 0, version = 1, intent = null } = {}) {
+  const joints = new Float32Array(frames * JOINT_COUNT * 3);
+  const roots = new Float32Array(frames * 3);
+  const contacts = new Uint8Array(frames * CONTACT_COUNT);
+  for (let frame = 0; frame < frames; frame += 1) {
+    const z = base + frame;
+    for (let j = 0; j < JOINT_COUNT; j += 1) {
+      joints[(frame * JOINT_COUNT + j) * 3] = j;
+      joints[(frame * JOINT_COUNT + j) * 3 + 1] = 0.8 + j * 0.1;
+      joints[(frame * JOINT_COUNT + j) * 3 + 2] = z;
+    }
+    roots[frame * 3] = 0;
+    roots[frame * 3 + 1] = 0.8;
+    roots[frame * 3 + 2] = z;
+    contacts[frame * CONTACT_COUNT] = frame % 2;
+  }
+  return {
+    frames, jointCount: JOINT_COUNT, fps: STREAM_FPS,
+    joints, roots, contacts, intentVersion: version,
+    meta: { frames, embedding: {}, intent },
+  };
+}
+
+/**
+ * Play a queue the way the page does: one `advancePlayhead` per frame, with a
+ * prefetch whenever the decision asks for one. The returned trace is the evidence
+ * the monotonicity criteria are read off.
+ */
+function playRun({ segments, frames = 140, runaheadFrames = 4, loopSingleSegment = false }) {
+  const queue = segments.slice();
+  const trace = [];
+  const assertClock = [];
+  let playhead = 0;
+  let held = false;
+  for (let step = 0; step < frames; step += 1) {
+    const tl = stream.timelineOf(queue, JOINT_COUNT);
+    const decision = stream.advancePlayhead({
+      segments: queue, timeline: tl, playhead, deltaSeconds: 1 / STREAM_FPS,
+      fps: STREAM_FPS, runaheadFrames, loopSingleSegment,
+    });
+    if (decision.playhead < playhead) {
+      // Only the explicit loop may do this, and it says so.
+      assert.ok(decision.wrapped, `playhead went backwards without the loop: ${playhead} -> ${decision.playhead}`);
+    }
+    playhead = decision.playhead;
+    held = decision.held;
+    trace.push({
+      step, playhead, held,
+      depth: stream.bufferDepth(tl, playhead),
+      points: stream.trailPoints(queue).length,
+      timelineFrames: tl.frameCount,
+    });
+    // Runahead, exactly as the render loop does it: ask for one more segment while
+    // the current one still has runway.
+    if (decision.wantMore && queue.length < segments.length
+      && stream.shouldPrefetch({
+        fetching: false, nextIntent: { version: 1 }, committedIntent: null,
+        timeline: tl, lastDecision: decision,
+      }).fetch) {
+      queue.push(segments[queue.length]);
+      // The harness must mirror the shipped loop, or it would be playing a model the
+      // page does not have.
+      assertClock.push(SOURCE.includes('pullSegment({ quiet: !first });'));
+    }
+  }
+  return { trace, held, playhead, queue, assertClock };
+}
+
+/** Five segments is the N >= 5 the criterion asks for. */
+const FIVE = Array.from({ length: 5 }, (_, i) => fakeSegment({ frames: 6, base: i * 6, version: 1 }));
+
+test('criterion 1: the playhead is monotone across five segments', () => {
+  const { trace, queue } = playRun({ segments: FIVE, frames: 200 });
+  assert.equal(queue.length, 5, 'all five segments must have been appended');
+  for (let i = 1; i < trace.length; i += 1) {
+    assert.ok(trace[i].playhead >= trace[i - 1].playhead,
+      `playhead went backwards at frame ${i}: ${trace[i - 1].playhead} -> ${trace[i].playhead}`);
+  }
+  const last = trace[trace.length - 1];
+  assert.ok(last.timelineFrames >= 26,
+    `the run must span the whole queue, not the last clip: ${last.timelineFrames} frames`);
+  assert.ok(last.playhead > 0);
+});
+
+test('criterion 1 negative control: the loop checkbox makes the playhead go back', () => {
+  // The loop is a real code path on the shipped page, not a mock: with it on, the
+  // position rewinds at the end of each segment and the monotonicity check above
+  // must fail. This is what the criterion is falsified by.
+  const { trace } = playRun({ segments: [FIVE[0]], frames: 60, loopSingleSegment: true });
+  const backwards = trace.filter((entry, i) => i > 0 && entry.playhead < trace[i - 1].playhead);
+  assert.ok(backwards.length > 0, 'with the loop on, at least one frame must rewind');
+  const monotone = trace.every((entry, i) => i === 0 || entry.playhead >= trace[i - 1].playhead);
+  assert.equal(monotone, false, 'the monotonicity criterion must go red when the loop is on');
+});
+
+test('criterion 1 negative control: a wrap at the segment end is a rewind', () => {
+  // The other way this criterion can fail, and the one the page actually shipped:
+  // `playhead -= frameCount - 1` at the end of a clip. modelled here on the same
+  // inputs as the positive case, it produces a *decreasing* position while the loop
+  // checkbox is off -- which is exactly what `advancePlayhead` must never do.
+  const single = [fakeSegment({ frames: 6, base: 0, version: 1 })];
+  const tl = stream.timelineOf(single, JOINT_COUNT);
+  const wrap = (playhead) => {
+    let next = playhead + 1;
+    if (next > tl.maxFrame) next -= tl.maxFrame;   // the old loop, verbatim
+    return next;
+  };
+  const wrapped = [0, 1, 2, 3, 4, 5].map((p) => wrap(p));
+  assert.ok(wrapped[wrapped.length - 1] < wrapped[wrapped.length - 2],
+    `the old wrap really does go backwards: ${wrapped.join(',')}`);
+  // ... and the shipped advance, on the same input, does not.
+  const shipped = [0, 1, 2, 3, 4, 5].map((p) => stream.advancePlayhead({
+    segments: single, timeline: tl, playhead: p, deltaSeconds: 1 / STREAM_FPS,
+    fps: STREAM_FPS, runaheadFrames: 4, loopSingleSegment: false,
+  }).playhead);
+  for (let i = 1; i < shipped.length; i += 1) {
+    assert.ok(shipped[i] >= shipped[i - 1], `shipped advance went backwards: ${shipped.join(',')}`);
+  }
+  assert.equal(shipped[shipped.length - 1], tl.maxFrame, 'it parks on the last frame instead');
+});
+
+test('criterion 2: the trail only grows while segments are appended', () => {
+  const { trace } = playRun({ segments: FIVE, frames: 200 });
+  for (let i = 1; i < trace.length; i += 1) {
+    assert.ok(trace[i].points >= trace[i - 1].points,
+      `trail shrank at frame ${i}: ${trace[i - 1].points} -> ${trace[i].points}`);
+    if (trace[i].timelineFrames > trace[i - 1].timelineFrames) {
+      assert.ok(trace[i].points > trace[i - 1].points, 'a new segment must add trail points');
+    }
+  }
+});
+
+test('criterion 2 negative control: a naive re-append double-counts every seam', () => {
+  // What the page used to do -- replace the trail with the newest clip's path -- and
+  // what a naive "concatenate every segment's roots" does instead. Both are kept as
+  // real functions so this control is not a mock.
+  const naive = stream.trailUnderNaiveAppend(FIVE);
+  const shipped = stream.trailPoints(FIVE);
+  assert.equal(naive.length, 5 * 6, 'the naive path counts the carried-over frame twice');
+  assert.equal(shipped.length, 5 * 6 - 4, 'the shipped path drops exactly one seam frame per seam');
+  assert.notEqual(naive.length, shipped.length);
+
+  // And the *replacement* failure mode: the trail reset to the newest segment.
+  const replaced = stream.trailUnderNaiveAppend([FIVE[4]]);
+  assert.ok(replaced.length < stream.trailUnderNaiveAppend(FIVE.slice(0, 4)).length,
+    'replacing the trail with the newest clip makes the point count fall');
+});
+
+test('criterion 3: the camera may only be refitted once, or on an explicit Fit', () => {
+  assert.equal(stream.shouldFitCamera({ haveSegments: false, userRequested: false }), true,
+    'the first segment needs a frame');
+  assert.equal(stream.shouldFitCamera({ haveSegments: true, userRequested: false }), false,
+    'a later segment must not move the camera');
+  assert.equal(stream.shouldFitCamera({ haveSegments: true, userRequested: true }), true,
+    'pressing Fit always refits');
+});
+
+test('criterion 3 negative control: a per-segment refit really would move the camera', () => {
+  // The negative control is measurable, not asserted: the focus of the whole-run
+  // bounds moves by metres as segments are appended, so refitting per segment would
+  // move the camera. The page does not, so its view state is bit-identical.
+  const one = stream.timelineOf([FIVE[0]], JOINT_COUNT);
+  const five = stream.timelineOf(FIVE, JOINT_COUNT);
+  const centre = (bounds) => [0, 1, 2].map((axis) => (bounds.min[axis] + bounds.max[axis]) / 2);
+  const before = centre(one.bounds);
+  const after = centre(five.bounds);
+  const moved = Math.abs(after[2] - before[2]);
+  assert.ok(moved > 1, `the run's centre must actually move (moved ${moved.toFixed(3)} m on Z)`);
+
+  // What "the camera did not move" means: appending changes no camera field. The
+  // page's append path has no write to `cameraView` outside the fit branch.
+  const appendBody = functionBody(SOURCE, 'appendSegment');
+  const fitAt = appendBody.indexOf('shouldFitCamera(');
+  assert.ok(fitAt >= 0, 'the fit must be conditional, not unconditional');
+  assert.equal(appendBody.indexOf('cameraView.distance ='), -1,
+    'nothing in the append path may set the camera directly');
+  const perSegment = appendBody.replace('shouldFitCamera({ haveSegments: !first })', 'true');
+  assert.notEqual(perSegment, appendBody, 'the negative control must actually change the source');
+  assert.ok(/if \(true\) fitCameraToClip\(\);/.test(perSegment),
+    'with the refit forced, the camera is refitted per segment (this is the red case)');
+});
+
+test('criterion 4: a run out of buffer holds the last frame and says so', () => {
+  // One segment, 41 frames, and no more segments to append: playback must park on
+  // the last frame. It must not wrap, and it must say the buffer ran out.
+  const single = [fakeSegment({ frames: 41, base: 0, version: 1 })];
+  const tl = stream.timelineOf(single, JOINT_COUNT);
+  let playhead = 0;
+  let firstHold = null;
+  for (let step = 0; step < 60; step += 1) {
+    const decision = stream.advancePlayhead({
+      segments: single, timeline: tl, playhead, deltaSeconds: 1, fps: STREAM_FPS,
+      runaheadFrames: 4, loopSingleSegment: false,
+    });
+    playhead = decision.playhead;
+    if (decision.held && firstHold === null) firstHold = step;
+    assert.ok(decision.playhead <= tl.maxFrame, 'the playhead may never pass the last frame');
+  }
+  assert.notEqual(firstHold, null, 'the run must reach and report a hold');
+  assert.equal(playhead, tl.maxFrame, 'it holds on the last frame');
+
+  const note = stream.bufferNote({ timeline: tl, playhead, fps: STREAM_FPS, held: true });
+  assert.equal(note.state, 'dry');
+  assert.equal(note.depth, 0);
+  assert.equal(note.text, stream.BUFFER_EMPTY_HINT);
+  assert.match(note.text, /缓冲耗尽/);
+  assert.match(note.text, /不循环/);
+});
+
+test('criterion 4 negative control: the loop would hide the dry buffer', () => {
+  // With the loop on, the same exhausted run never reports a hold -- it rewinds and
+  // pretends there is something to play. That is exactly the dishonesty 0007 ⑤
+  // forbids, and it is why the honest branch is the default.
+  const single = [fakeSegment({ frames: 41, base: 0, version: 1 })];
+  const tl = stream.timelineOf(single, JOINT_COUNT);
+  let playhead = 0;
+  let held = 0;
+  for (let step = 0; step < 60; step += 1) {
+    const decision = stream.advancePlayhead({
+      segments: single, timeline: tl, playhead, deltaSeconds: 1, fps: STREAM_FPS,
+      runaheadFrames: 4, loopSingleSegment: true,
+    });
+    playhead = decision.playhead;
+    if (decision.held) held += 1;
+  }
+  assert.equal(held, 0, 'the loop never reports a hold, so the dry-buffer warning never appears');
+  const note = stream.bufferNote({
+    timeline: tl, playhead, fps: STREAM_FPS, held: false, loopSingleSegment: true,
+  });
+  assert.equal(note.state, 'loop');
+  assert.match(note.text, /这不是连续流/);
+});
+
+test('runahead is the only thing that asks for a segment, and a miss is never a rewind', () => {
+  const tl = stream.timelineOf(FIVE, JOINT_COUNT);
+  // With runway left, nothing is asked for...
+  const buffered = stream.shouldPrefetch({
+    fetching: false, nextIntent: { version: 1 }, committedIntent: null,
+    timeline: tl, lastDecision: { wantMore: false },
+  });
+  assert.equal(buffered.fetch, false);
+  assert.equal(buffered.reason, stream.STREAM_HOLD.BUFFERED);
+  // ... and inside the runahead window it is.
+  const low = stream.shouldPrefetch({
+    fetching: false, nextIntent: { version: 1 }, committedIntent: null,
+    timeline: tl, lastDecision: { wantMore: true },
+  });
+  assert.equal(low.fetch, true);
+  // One request at a time.
+  assert.equal(stream.shouldPrefetch({
+    fetching: true, nextIntent: { version: 1 }, timeline: tl, lastDecision: { wantMore: true },
+  }).reason, stream.STREAM_HOLD.GENERATING);
+  assert.equal(stream.shouldPrefetch({ fetching: false, timeline: tl }).reason,
+    stream.STREAM_HOLD.NO_INTENT);
+});
+
+test('a new intent waits for the next segment boundary (0007 3)', () => {
+  // While a segment is being fetched, a newer intent must not be committed: it would
+  // land inside the clip being generated.
+  const pending = { version: 2, prompt: 'walk faster', text: 'walk faster' };
+  const committed = { version: 1, prompt: 'walk', text: 'walk' };
+  const during = stream.nextSegmentIntent({
+    segments: [fakeSegment({})], nextIntent: pending, committedIntent: committed, fetching: true,
+  });
+  assert.equal(during.intent, null);
+  assert.equal(during.reason, stream.STREAM_HOLD.GENERATING);
+  // Once the fetch is done, the newer intent is what the *next* segment uses.
+  const after = stream.nextSegmentIntent({
+    segments: [fakeSegment({})], nextIntent: pending, committedIntent: committed, fetching: false,
+  });
+  assert.equal(after.intent.version, 2);
+  assert.equal(after.changed, true);
+  // And the page says where it will land rather than applying it silently.
+  const note = stream.playbackIntentNote({ nextIntent: pending, committedIntent: committed });
+  assert.equal(note.state, 'pending');
+  assert.equal(note.applies, 'next');
+  assert.match(note.text, /下一段/);
+  assert.match(note.text, /不在片段中途换条件/);
+});
+
+test('the seam frame is the same frame on both sides of an append', () => {
+  // `/api/plan` carries the previous clip's last frame over verbatim as frame 0 of
+  // the new clip (0009's "0.000 mm"). The concatenation drops that duplicate, so the
+  // global frame at the seam is one frame and not two -- and the two clips agree on
+  // the pose there, which is what makes the append invisible.
+  const a = fakeSegment({ frames: 6, base: 0, version: 1 });
+  const b = fakeSegment({ frames: 6, base: 6, version: 1 });
+  // The server's carry: b's frame 0 is a's last frame.
+  b.joints.set(a.joints.subarray((a.frames - 1) * JOINT_COUNT * 3), 0);
+  b.roots.set(a.roots.subarray((a.frames - 1) * 3), 0);
+  const tl = stream.timelineOf([a, b], JOINT_COUNT);
+  assert.equal(tl.frameCount, 11, 'two 6-frame clips share one seam frame');
+  assert.equal(tl.droppedSeamFrames, 1);
+  const seam = 5;
+  for (let j = 0; j < JOINT_COUNT * 3; j += 1) {
+    assert.equal(tl.poses[seam * JOINT_COUNT * 3 + j], a.joints[(a.frames - 1) * JOINT_COUNT * 3 + j],
+      `the seam pose must be bit-identical at joint component ${j}`);
+  }
+  // The base of segment 1 is exactly the seam frame, and frame 0 of the run is
+  // segment 0's frame 0: no frame of the run is a restart.
+  assert.equal(stream.segmentBase([a, b], 1), 5,
+    'segment 1 starts at the seam frame: it contributes frames-1 global frames');
+  assert.equal(stream.segmentAtFrame([a, b], 4).index, 0);
+  assert.equal(stream.segmentAtFrame([a, b], 5).index, 0, 'the seam frame belongs to the segment that owns it');
+  assert.equal(stream.segmentAtFrame([a, b], 6).index, 1);
+});
+
+test('negative control: clipping the playhead to the newest segment would restart it', () => {
+  // The old page kept `playhead` inside the newest clip and reset it to 0 on every
+  // install. Modelled here, that is a position that falls back to 0 at the append --
+  // the "character was reset" the reader saw.
+  const a = fakeSegment({ frames: 6, base: 0, version: 1 });
+  const b = fakeSegment({ frames: 6, base: 6, version: 1 });
+  const globalBefore = 5;                      // the seam frame, in global terms
+  const localAfterReset = 0;                   // what the old model showed
+  assert.ok(localAfterReset < globalBefore, 'the old model goes backwards at the seam');
+  const tl = stream.timelineOf([a, b], JOINT_COUNT);
+  assert.ok(tl.frameCount > 6, 'the queue is longer than the newest clip');
+  assert.equal(stream.segmentBase([a, b], 1), 5,
+    'the new segment starts where the old one ended, so its frame 0 is not a new global frame');
+});
+
+test('criterion 5: appending does not change the count of any frame already shown', () => {
+  // The client half of the "0.000 mm" criterion. The server's half is asserted in
+  // `tests/test_viewer_api.py` (`carried_frame_joint_mm == 0.0`); this is the half
+  // that used to fail, because the page replaced the clip instead of appending to it.
+  // Every segment the server returns is `frames` long, so appending clips must add
+  // `frames - 1` global frames each -- a different count would mean the client dropped
+  // or duplicated a frame at the seam, and the character would jump by that much.
+  const clips = FIVE;
+  let queue = [];
+  let previousCount = 0;
+  let previousPoses = null;
+  for (const clip of clips) {
+    const globalBefore = previousCount;
+    queue = queue.concat([clip]);
+    const tl = stream.timelineOf(queue, JOINT_COUNT);
+    const added = tl.frameCount - globalBefore;
+    const expected = globalBefore === 0 ? clip.frames : clip.frames - 1;
+    assert.equal(added, expected,
+      `appending a ${clip.frames}-frame clip must add ${expected} global frames, added ${added}`);
+    if (previousPoses !== null) {
+      // Nothing already drawn may change: frame k of the run has the same value it had
+      // before the append. This is what "the trajectory only grows" means on the wire.
+      for (let k = 0; k < previousCount * JOINT_COUNT * 3; k += 1) {
+        if (previousPoses[k] !== tl.poses[k]) {
+          assert.fail(`append changed global frame content at component ${k}`);
+        }
+      }
+      // And the seam frame itself is literally the same numbers on both sides.
+      const seamComponent = (previousCount - 1) * JOINT_COUNT * 3;
+      const a = clips[queue.length - 2];
+      assert.equal(
+        tl.poses[seamComponent],
+        a.joints[(a.frames - 1) * JOINT_COUNT * 3],
+        'the seam frame must be the previous clip\'s own last frame',
+      );
+    }
+    previousCount = tl.frameCount;
+    previousPoses = tl.poses;
+  }
+  assert.equal(previousCount, 5 * 6 - 4, 'five 6-frame clips share four seam frames');
+});
+
+test('the timeline region is pure: it runs with no document, no fetch, no state', () => {
+  const trap = new Proxy({}, {
+    get(_target, key) { throw new Error(`the pure timeline touched ${String(key)}`); },
+  });
+  const isolated = loadTimeline(vm.createContext({
+    document: trap, window: trap, fetch: trap, state: trap, els: trap,
+    THREE: trap, performance: trap, requestAnimationFrame: trap, localStorage: trap,
+  }));
+  const tl = isolated.timelineOf([fakeSegment({ frames: 4, base: 0 })], JOINT_COUNT);
+  assert.equal(tl.frameCount, 4);
+  assert.equal(isolated.bufferDepth(tl, 0), 3);
+  assert.equal(isolated.RUNAHEAD_FRAMES, 40);
+  assert.match(isolated.BUFFER_EMPTY_HINT, /不循环/);
+});
+
+test('negative control: the loop is off by default in the markup and in the code', () => {
+  // Loop is an explicit option, so it must not ship checked -- and the page must read
+  // its checkbox rather than hardcode a loop anywhere.
+  assert.match(INDEX_SOURCE, /<input id="loop-toggle" type="checkbox">/);
+  assert.doesNotMatch(INDEX_SOURCE, /id="loop-toggle"[^>]*checked/);
+  assert.match(INDEX_SOURCE, /this repeats one clip/);
+  assert.match(SOURCE, /loopSingleSegment: els\.loopToggle\.checked/);
+  // The advance itself must not contain an unconditional wrap.
+  const body = functionBody(SOURCE, 'updatePlayhead');
+  assert.doesNotMatch(body, /playhead\s*-=/, 'the page must not rewind the playhead by arithmetic');
+  assert.doesNotMatch(body, /%\s*.*frameCount/, 'and must not modulo it into a loop');
 });

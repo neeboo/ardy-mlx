@@ -117,6 +117,11 @@ export class Rig {
     this.trail = new THREE.Line(new THREE.BufferGeometry(), this.trailMaterial);
     this.trail.name = 'root-trail';
     scene.add(this.trail);
+    // The trail's own storage, kept here rather than in the geometry so a segment
+    // can be *appended* (see `appendTrail`) instead of rebuilt.
+    this.trailPoints = new Float32Array(3);
+    this.trailCount = 0;
+    this._flushTrail();
 
     // Foot-contact markers. The four `foot_contacts` channels are
     // (left_heel, left_toe, right_heel, right_toe) -- contract S1.4 -- and they
@@ -156,18 +161,65 @@ export class Rig {
     for (const marker of this.contacts) marker.mesh.material.opacity = 0.95 * opacity;
   }
 
-  /** Replace the ground trail with the root's XZ path for this clip. */
-  setTrail(rootPositions, frameCount) {
-    const points = [];
-    for (let frame = 0; frame < frameCount; frame++) {
-      points.push(new THREE.Vector3(
-        rootPositions[frame * 3],
-        0.012,
-        rootPositions[frame * 3 + 2],
-      ));
+  /**
+   * Start the ground trail from a clip's roots. Replaces whatever was there.
+   *
+   * `chain` is the number of leading points to keep; callers pass 1 to drop the
+   * carried-over seam frame when a segment is appended (see `appendTrail`).
+   */
+  setTrail(rootPositions, frameCount, chain = 0) {
+    const count = Math.max(0, frameCount - chain);
+    this.trailPoints = new Float32Array(Math.max(count, 1) * 3);
+    this.trailCount = 0;
+    if (count > 0) this.appendTrail(rootPositions, frameCount, chain);
+    else this._flushTrail();
+  }
+
+  /**
+   * Extend the ground trail with a clip's root path, **without replacing it**.
+   *
+   * This is what makes the trajectory monotone across a stream of clips: the path
+   * on screen is only ever added to, so the point count cannot fall. `chain` skips
+   * the leading frames that were already drawn -- the continuation carries the
+   * previous clip's last frame over verbatim, so counting it would duplicate one
+   * point per seam.
+   */
+  appendTrail(rootPositions, frameCount, chain = 0) {
+    const from = Math.max(0, chain);
+    const add = Math.max(0, frameCount - from);
+    if (add <= 0) return this.trailCount;
+    const need = (this.trailCount + add) * 3;
+    if (!this.trailPoints || this.trailPoints.length < need) {
+      const grown = new Float32Array(Math.max(need, (this.trailPoints ? this.trailPoints.length : 0) * 2, 64 * 3));
+      if (this.trailPoints && this.trailCount > 0) grown.set(this.trailPoints.subarray(0, this.trailCount * 3));
+      this.trailPoints = grown;
     }
+    for (let frame = from; frame < frameCount; frame++) {
+      const at = this.trailCount * 3;
+      this.trailPoints[at] = rootPositions[frame * 3];
+      this.trailPoints[at + 1] = 0.012;
+      this.trailPoints[at + 2] = rootPositions[frame * 3 + 2];
+      this.trailCount += 1;
+    }
+    this._flushTrail();
+    return this.trailCount;
+  }
+
+  /** How many points the trail is currently drawing. */
+  trailPointCount() {
+    return this.trailCount;
+  }
+
+  /** Push the accumulated points into the line geometry's draw range. */
+  _flushTrail() {
     this.trail.geometry.dispose();
-    this.trail.geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(this.trailPoints.slice(0, Math.max(this.trailCount, 1) * 3), 3),
+    );
+    geometry.setDrawRange(0, this.trailCount);
+    this.trail.geometry = geometry;
   }
 
   /**

@@ -925,3 +925,73 @@ def test_the_history_window_is_capped_at_the_checkpoint_s_budget(continuation_ap
     )
     assert run_info["history_frames"] == 160
     assert np.asarray(served_norm).shape == (1, 40, 330)
+
+
+# ---------------------------------------------------------------------------
+# the stream block: what the server can honestly say about playback
+# ---------------------------------------------------------------------------
+#
+# `docs/decisions/0009` §二 asks for the stream state to be observable, and the one
+# thing that matters about it is what it *declines* to report: the runahead queue
+# lives in the page, so a `queue_depth` here would be a number the server invented.
+
+
+def test_health_says_it_does_not_own_the_playback_queue(app):
+    stream = app.health()["stream"]
+    assert stream["owner"] == "page"
+    # Nothing in the block may claim to know how deep the page's buffer is.
+    assert "queue_depth" not in stream
+    assert "buffer_depth" not in stream
+    assert "buffered_frames" not in stream
+    # What it does report is what it owns: the continuation state it would serve from.
+    assert stream["continuation_active"] is False
+    assert stream["segments_generated"] == 0
+    assert stream["frames_generated"] == 0
+    assert stream["last_generate_ms"] is None
+    assert stream["history_frames"] == ardy_viewer.continuation_history_frames(CORE)
+
+
+def test_the_stream_block_counts_what_was_served(app, embeddings_dir):
+    """The counters must follow the clip actually served, not the request."""
+    app.plan(prompt=PROMPT, duration=2.0, noise="random")
+    first = app.health()["stream"]
+    assert first["segments_generated"] == 1
+    assert first["frames_generated"] == 40
+    assert isinstance(first["last_generate_ms"], float)
+    assert first["last_windows"] == 1
+
+    app.plan(prompt=PROMPT, duration=4.0, noise="random")
+    second = app.health()["stream"]
+    assert second["segments_generated"] == 2
+    assert second["frames_generated"] == 40 + 80
+    assert second["last_windows"] == 2
+    # And the continuation state it would serve from now exists, which is the fact
+    # `continue_ready` is about.
+    assert second["continuation_active"] is (app.continuation is not None)
+    assert second["continue_ready"] == (
+        app.continuation is not None and app.continuation_supported()
+    )
+
+
+def test_negative_control_reset_does_not_erase_what_was_generated(continuation_app, monkeypatch):
+    """A reset starts a new *continuation*, not a new server.
+
+    `segments_generated` is a count of what this server produced, so a reset must not
+    zero it -- otherwise the page could not tell "the server has never generated"
+    from "the reader just pressed Reload".
+    """
+    _stub_continuation(monkeypatch)
+    continuation_app.plan(prompt=PROMPT, duration=2.0, noise="random")
+    after_first = continuation_app.health()["stream"]
+    assert after_first["segments_generated"] == 1
+
+    continuation_app.plan(prompt=PROMPT, duration=2.0, noise="random", reset=True)
+    block = continuation_app.health()["stream"]
+    assert block["segments_generated"] == 2, "a reset is not a server restart"
+    # A reset does not *erase* the state; it replaces it with the clip it just made
+    # from noise, which is what the next plan will continue from. The distinction the
+    # block has to preserve is "reset was asked for" (a plan-level fact, asserted in
+    # the continuation tests) versus "this server has produced nothing yet" (a
+    # server-level fact, which is what these counters are).
+    assert block["continuation_active"] is True
+    assert block["continue_ready"] == continuation_app.continuation_supported()
