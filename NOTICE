@@ -7,7 +7,7 @@ An independent MLX (Apple Silicon) implementation of the motion model from:
   Human Motion Generation", NVIDIA (nv-tlabs/ardy, SIGGRAPH 2026).
   Source code: Apache License 2.0.  Checkpoints: per-model terms (see below).
 
-Policy (same as the sibling project motionbrick-mlx):
+Policy (same as the sibling project motionbricks-mlx):
 * We take the SOURCE-CODE route only. Reference source is Apache-2.0.
 * Checkpoints carry their OWN terms per model. Those terms have now been read
   and recorded in docs/decisions/0002-checkpoint-terms.md (NVIDIA Open Model
