@@ -7,7 +7,7 @@ record is [`manifest.json`](manifest.json).
 
 **Nine clips are generated; six are in the preview grid.** The six grid cells are
 the original set; the scope then narrowed to **the jump only**, which added
-`jump_air` and `jump_forward` (see [§8](#8-the-jump--跳-this-rounds-narrowed-scope))
+`jump_air` and `jump_forward` (see [§8](#8-the-jump--跳--this-rounds-narrowed-scope))
 and their own 3×1 GIF, [`preview_jump.gif`](preview_jump.gif). The seventh,
 `stand_idle_zh`, is a Chinese-vocabulary baseline that is deliberately not in any
 grid.
