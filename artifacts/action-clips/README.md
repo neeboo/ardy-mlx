@@ -187,7 +187,7 @@ Reported as measured, not as hoped. Posture numbers are in
 | `crouch_idle` | ✅ good | hip y held at 0.589–0.599 m for the whole clip (**−40 %** vs standing); hands at or below knee height in 100 % of frames, i.e. resting forward, not hanging |
 | `crouch_forward` | ⚠️ good motion, odd posture | travels 2.148 m with hip y averaging 0.554 m and the hands reaching 0.420 m — a **deep forward-leaning squat**, plausible for a slow crouch-walk but worth eyeballing before use |
 | `crawl_forward` | ⚠️ **the honest caveat: it reads as a kneel-crawl** | hip y 0.441 m, hands reach the floor (min y **0.015 m**, ≈1.5 cm), and a **knee is at or below 5 cm in 100 % of frames** (knee y min 0.009 m) — the knees, not the feet, are the load-bearing contact. Of the four `foot_contacts` channels only the two **toes** ever fire (60 % / 65 % of frames); the two heels fire **never**. It is a low hands-and-knees shuffle, not a limb-alternating crawl. It is the least convincing of the six |
-| `jump` | ✅ good | hip y 0.790 → 1.245 m (**+0.455 m**), feet leave the ground (contact marker drops to `c0/4`), lands, and stays in place (root displacement 0.032 m) |
+| `jump` | ✅ good | leaves the ground for 9 frames (contact marker drops to `c0/4`), apex **+0.282 m** above its **start** height (hip 0.963 → 1.245 m), lands, and stays in place (root displacement 0.032 m). Hip y dips to 0.790 m at the crouch bottom — that is the *minimum*, not the start, and the +0.455 m figure is the apex above *it*; the full start → min → peak profile is in §8 |
 | `walk` | ✅ good | 4.354 m forward in 4 s (1.09 m/s); mean per-frame joint motion 59 mm/frame, the largest of the six |
 
 Two further honest notes:
