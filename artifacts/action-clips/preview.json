@@ -1,0 +1,58 @@
+{
+  "path": "artifacts/action-clips/preview.gif",
+  "bytes": 970976,
+  "sha256": "0529ea49e52d6d6fc42cb06639235969d678fc875ade65c1d9ac6ace102e46ae",
+  "width": 900,
+  "height": 640,
+  "frames": 40,
+  "fps": 10,
+  "layout": "3x2",
+  "cells": [
+    {
+      "name": "stand_idle",
+      "prompt": "A person stands still.",
+      "status": "generated",
+      "prompt_hash": "03b9d219e4c7b1df"
+    },
+    {
+      "name": "crouch_idle",
+      "prompt": "A person crouches down and stays crouched.",
+      "status": "generated",
+      "prompt_hash": "fb0572825914374f"
+    },
+    {
+      "name": "crouch_forward",
+      "prompt": "A person crouches and walks forward slowly.",
+      "status": "generated",
+      "prompt_hash": "c8a0180793a995c0"
+    },
+    {
+      "name": "crawl_forward",
+      "prompt": "A person crawls forward on hands and knees.",
+      "status": "generated",
+      "prompt_hash": "e7a1d8e6bc02d0e7"
+    },
+    {
+      "name": "jump",
+      "prompt": "A person jumps up in place and lands.",
+      "status": "generated",
+      "prompt_hash": "b0215aea5678220f"
+    },
+    {
+      "name": "walk",
+      "prompt": "A person walks forward.",
+      "status": "generated",
+      "prompt_hash": "e9cf8141cac79f35"
+    }
+  ],
+  "renderer": "scripts/ardy_preview.py #3a889e3",
+  "composer": "scripts/ardy_actions.py #31e92da",
+  "ffprobe": {
+    "width": 900,
+    "height": 640,
+    "frames": 40,
+    "fps": 10.0,
+    "duration_s": 4.0,
+    "bytes": 970976
+  }
+}

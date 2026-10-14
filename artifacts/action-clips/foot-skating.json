@@ -1,0 +1,394 @@
+{
+  "stand_idle": {
+    "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+    "per_channel": {
+      "L-heel": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.2521,
+        "max_mm_per_frame": 0.5498,
+        "total_mm": 9.8313
+      },
+      "L-toe": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.257,
+        "max_mm_per_frame": 0.5478,
+        "total_mm": 10.0226
+      },
+      "R-heel": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.2536,
+        "max_mm_per_frame": 0.5048,
+        "total_mm": 9.8917
+      },
+      "R-toe": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.2396,
+        "max_mm_per_frame": 0.4861,
+        "total_mm": 9.3439
+      }
+    },
+    "considered_transitions": 156,
+    "possible_transitions": 156,
+    "posture": {
+      "hip_y_min_m": 0.9723,
+      "hip_y_max_m": 0.9729,
+      "hip_y_mean_m": 0.9725,
+      "head_y_mean_m": 1.6912,
+      "hand_y_min_m": 0.9492,
+      "hands_at_or_below_knee_frac": 0.0,
+      "hand_minus_knee_y_mean_m": 0.4217
+    },
+    "mean_mm_per_frame": 0.2506,
+    "max_mm_per_frame": 0.5498,
+    "total_mm": 39.0895,
+    "contact_frames_per_channel": {
+      "L-heel": 40,
+      "L-toe": 40,
+      "R-heel": 40,
+      "R-toe": 40
+    },
+    "frames_with_no_contact": 0,
+    "root_displacement_m": 0.008323,
+    "root_path_m": 0.012056
+  },
+  "crouch_idle": {
+    "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+    "per_channel": {
+      "L-heel": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.4193,
+        "max_mm_per_frame": 0.9753,
+        "total_mm": 16.3546
+      },
+      "L-toe": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.4192,
+        "max_mm_per_frame": 1.0154,
+        "total_mm": 16.3476
+      },
+      "R-heel": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.5969,
+        "max_mm_per_frame": 1.4362,
+        "total_mm": 23.279
+      },
+      "R-toe": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.6714,
+        "max_mm_per_frame": 1.9309,
+        "total_mm": 26.1834
+      }
+    },
+    "considered_transitions": 156,
+    "possible_transitions": 156,
+    "posture": {
+      "hip_y_min_m": 0.5895,
+      "hip_y_max_m": 0.5993,
+      "hip_y_mean_m": 0.5936,
+      "head_y_mean_m": 0.9193,
+      "hand_y_min_m": 0.4716,
+      "hands_at_or_below_knee_frac": 1.0,
+      "hand_minus_knee_y_mean_m": -0.0228
+    },
+    "mean_mm_per_frame": 0.5267,
+    "max_mm_per_frame": 1.9309,
+    "total_mm": 82.1645,
+    "contact_frames_per_channel": {
+      "L-heel": 40,
+      "L-toe": 40,
+      "R-heel": 40,
+      "R-toe": 40
+    },
+    "frames_with_no_contact": 0,
+    "root_displacement_m": 0.014343,
+    "root_path_m": 0.030538
+  },
+  "crouch_forward": {
+    "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+    "per_channel": {
+      "L-heel": {
+        "planted_transitions": 11,
+        "contact_frames": 14,
+        "mean_mm_per_frame": 3.5029,
+        "max_mm_per_frame": 12.8589,
+        "total_mm": 38.532
+      },
+      "L-toe": {
+        "planted_transitions": 50,
+        "contact_frames": 54,
+        "mean_mm_per_frame": 2.4242,
+        "max_mm_per_frame": 4.75,
+        "total_mm": 121.2116
+      },
+      "R-heel": {
+        "planted_transitions": 19,
+        "contact_frames": 23,
+        "mean_mm_per_frame": 3.1052,
+        "max_mm_per_frame": 6.4365,
+        "total_mm": 58.9981
+      },
+      "R-toe": {
+        "planted_transitions": 55,
+        "contact_frames": 59,
+        "mean_mm_per_frame": 2.5401,
+        "max_mm_per_frame": 5.1261,
+        "total_mm": 139.703
+      }
+    },
+    "considered_transitions": 135,
+    "possible_transitions": 316,
+    "posture": {
+      "hip_y_min_m": 0.4881,
+      "hip_y_max_m": 0.6093,
+      "hip_y_mean_m": 0.5541,
+      "head_y_mean_m": 0.9876,
+      "hand_y_min_m": 0.4201,
+      "hands_at_or_below_knee_frac": 0.225,
+      "hand_minus_knee_y_mean_m": 0.0562
+    },
+    "mean_mm_per_frame": 2.6551,
+    "max_mm_per_frame": 12.8589,
+    "total_mm": 358.4446,
+    "contact_frames_per_channel": {
+      "L-heel": 14,
+      "L-toe": 54,
+      "R-heel": 23,
+      "R-toe": 59
+    },
+    "frames_with_no_contact": 0,
+    "root_displacement_m": 2.148294,
+    "root_path_m": 2.287923
+  },
+  "crawl_forward": {
+    "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+    "per_channel": {
+      "L-heel": {
+        "planted_transitions": 0,
+        "contact_frames": 0,
+        "mean_mm_per_frame": 0.0,
+        "max_mm_per_frame": 0.0,
+        "total_mm": 0.0
+      },
+      "L-toe": {
+        "planted_transitions": 45,
+        "contact_frames": 48,
+        "mean_mm_per_frame": 3.0304,
+        "max_mm_per_frame": 7.8681,
+        "total_mm": 136.3663
+      },
+      "R-heel": {
+        "planted_transitions": 0,
+        "contact_frames": 0,
+        "mean_mm_per_frame": 0.0,
+        "max_mm_per_frame": 0.0,
+        "total_mm": 0.0
+      },
+      "R-toe": {
+        "planted_transitions": 49,
+        "contact_frames": 52,
+        "mean_mm_per_frame": 2.4787,
+        "max_mm_per_frame": 9.9714,
+        "total_mm": 121.455
+      }
+    },
+    "considered_transitions": 94,
+    "possible_transitions": 316,
+    "posture": {
+      "hip_y_min_m": 0.4196,
+      "hip_y_max_m": 0.4539,
+      "hip_y_mean_m": 0.4409,
+      "head_y_mean_m": 0.5929,
+      "hand_y_min_m": 0.0154,
+      "hands_at_or_below_knee_frac": 0.4625,
+      "hand_minus_knee_y_mean_m": 0.0106
+    },
+    "mean_mm_per_frame": 2.7428,
+    "max_mm_per_frame": 9.9714,
+    "total_mm": 257.8213,
+    "contact_frames_per_channel": {
+      "L-heel": 0,
+      "L-toe": 48,
+      "R-heel": 0,
+      "R-toe": 52
+    },
+    "frames_with_no_contact": 0,
+    "root_displacement_m": 1.257442,
+    "root_path_m": 1.301818
+  },
+  "jump": {
+    "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+    "per_channel": {
+      "L-heel": {
+        "planted_transitions": 27,
+        "contact_frames": 29,
+        "mean_mm_per_frame": 0.8039,
+        "max_mm_per_frame": 2.373,
+        "total_mm": 21.7042
+      },
+      "L-toe": {
+        "planted_transitions": 29,
+        "contact_frames": 31,
+        "mean_mm_per_frame": 0.8359,
+        "max_mm_per_frame": 2.8491,
+        "total_mm": 24.2413
+      },
+      "R-heel": {
+        "planted_transitions": 24,
+        "contact_frames": 26,
+        "mean_mm_per_frame": 0.6251,
+        "max_mm_per_frame": 1.8305,
+        "total_mm": 15.0018
+      },
+      "R-toe": {
+        "planted_transitions": 29,
+        "contact_frames": 31,
+        "mean_mm_per_frame": 0.7911,
+        "max_mm_per_frame": 3.625,
+        "total_mm": 22.9408
+      }
+    },
+    "considered_transitions": 109,
+    "possible_transitions": 156,
+    "posture": {
+      "hip_y_min_m": 0.7896,
+      "hip_y_max_m": 1.2447,
+      "hip_y_mean_m": 0.9664,
+      "head_y_mean_m": 1.6848,
+      "hand_y_min_m": 0.7633,
+      "hands_at_or_below_knee_frac": 0.0,
+      "hand_minus_knee_y_mean_m": 0.4699
+    },
+    "mean_mm_per_frame": 0.7696,
+    "max_mm_per_frame": 3.625,
+    "total_mm": 83.8881,
+    "contact_frames_per_channel": {
+      "L-heel": 29,
+      "L-toe": 31,
+      "R-heel": 26,
+      "R-toe": 31
+    },
+    "frames_with_no_contact": 9,
+    "root_displacement_m": 0.032261,
+    "root_path_m": 0.205656
+  },
+  "walk": {
+    "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+    "per_channel": {
+      "L-heel": {
+        "planted_transitions": 43,
+        "contact_frames": 46,
+        "mean_mm_per_frame": 0.7286,
+        "max_mm_per_frame": 2.4562,
+        "total_mm": 31.3304
+      },
+      "L-toe": {
+        "planted_transitions": 49,
+        "contact_frames": 52,
+        "mean_mm_per_frame": 0.9538,
+        "max_mm_per_frame": 3.084,
+        "total_mm": 46.7373
+      },
+      "R-heel": {
+        "planted_transitions": 42,
+        "contact_frames": 46,
+        "mean_mm_per_frame": 0.8031,
+        "max_mm_per_frame": 3.45,
+        "total_mm": 33.7321
+      },
+      "R-toe": {
+        "planted_transitions": 47,
+        "contact_frames": 51,
+        "mean_mm_per_frame": 0.8556,
+        "max_mm_per_frame": 3.2448,
+        "total_mm": 40.2119
+      }
+    },
+    "considered_transitions": 181,
+    "possible_transitions": 316,
+    "posture": {
+      "hip_y_min_m": 0.8461,
+      "hip_y_max_m": 0.9657,
+      "hip_y_mean_m": 0.9312,
+      "head_y_mean_m": 1.6347,
+      "hand_y_min_m": 0.8994,
+      "hands_at_or_below_knee_frac": 0.0,
+      "hand_minus_knee_y_mean_m": 0.4812
+    },
+    "mean_mm_per_frame": 0.8398,
+    "max_mm_per_frame": 3.45,
+    "total_mm": 152.0117,
+    "contact_frames_per_channel": {
+      "L-heel": 46,
+      "L-toe": 52,
+      "R-heel": 46,
+      "R-toe": 51
+    },
+    "frames_with_no_contact": 8,
+    "root_displacement_m": 4.353967,
+    "root_path_m": 4.407139
+  },
+  "stand_idle_zh": {
+    "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+    "per_channel": {
+      "L-heel": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.2987,
+        "max_mm_per_frame": 0.7385,
+        "total_mm": 11.6506
+      },
+      "L-toe": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.3028,
+        "max_mm_per_frame": 0.7364,
+        "total_mm": 11.8091
+      },
+      "R-heel": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.3393,
+        "max_mm_per_frame": 0.6891,
+        "total_mm": 13.2331
+      },
+      "R-toe": {
+        "planted_transitions": 39,
+        "contact_frames": 40,
+        "mean_mm_per_frame": 0.3574,
+        "max_mm_per_frame": 0.7004,
+        "total_mm": 13.9388
+      }
+    },
+    "considered_transitions": 156,
+    "possible_transitions": 156,
+    "posture": {
+      "hip_y_min_m": 0.9699,
+      "hip_y_max_m": 0.9703,
+      "hip_y_mean_m": 0.97,
+      "head_y_mean_m": 1.6922,
+      "hand_y_min_m": 0.9321,
+      "hands_at_or_below_knee_frac": 0.0,
+      "hand_minus_knee_y_mean_m": 0.4097
+    },
+    "mean_mm_per_frame": 0.3246,
+    "max_mm_per_frame": 0.7385,
+    "total_mm": 50.6317,
+    "contact_frames_per_channel": {
+      "L-heel": 40,
+      "L-toe": 40,
+      "R-heel": 40,
+      "R-toe": 40
+    },
+    "frames_with_no_contact": 0,
+    "root_displacement_m": 0.009959,
+    "root_path_m": 0.013176
+  }
+}

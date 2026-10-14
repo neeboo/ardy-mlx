@@ -1,0 +1,1138 @@
+{
+  "schema": "ardy-action-clips/1",
+  "generated_by": {
+    "script": "scripts/ardy_actions.py",
+    "script_sha256": "10dfb6934628e8a41f0097a3fb148f49b73cb8f7d0109d811b2c9e610281de17",
+    "git_sha": "19c0ed3",
+    "generated_utc": "2026-10-14T13:41:54Z"
+  },
+  "model": "ARDY-Core-RP-20FPS-Horizon40",
+  "checkpoint_dir": "checkpoints/ARDY-Core-RP-20FPS-Horizon40",
+  "fps": 20,
+  "horizon": 40,
+  "motion_rep_dim": 330,
+  "nbjoints": 27,
+  "seed": 0,
+  "history_frames": 160,
+  "diffusion_steps": 10,
+  "cfg_weight": [
+    2.0,
+    2.0
+  ],
+  "contact_channel_order": [
+    "L-heel",
+    "L-toe",
+    "R-heel",
+    "R-toe"
+  ],
+  "contact_joint_order": [
+    "LeftFoot",
+    "LeftToeBase",
+    "RightFoot",
+    "RightToeBase"
+  ],
+  "raw_dir": "artifacts/action-clips/raw",
+  "raw_dir_tracked": false,
+  "actions": [
+    {
+      "name": "stand_idle",
+      "prompt": "A person stands still.",
+      "prompt_hash": "03b9d219e4c7b1df",
+      "seed": 0,
+      "fps": 20,
+      "frames": 40,
+      "duration_s": 2.0,
+      "postprocess": false,
+      "note": "baseline; nothing moves, so any skating here is noise floor",
+      "status": "generated",
+      "model": "ARDY-Core-RP-20FPS-Horizon40",
+      "backend": "mlx",
+      "history_frames": 160,
+      "diffusion_steps": 10,
+      "cfg_weight": [
+        2.0,
+        2.0
+      ],
+      "embedding": {
+        "path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/03b9d219e4c7b1df.npy",
+        "sha256": "da7eedb3893106f1d6158d022f96507ccb348bb86ceb6bb0abe522ea12069111",
+        "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit"
+      },
+      "clip": {
+        "path": "artifacts/action-clips/raw/stand_idle/ARDY-Core-RP-20FPS-Horizon40/03b9d219e4c7b1df-0.npz",
+        "sha256": "2b4b794f93ec138b595ef865e1b54d585b8bcf599552a7b8fa104c2b147fc1b4",
+        "bytes": 68272
+      },
+      "sidecar": {
+        "path": "artifacts/action-clips/raw/stand_idle/ARDY-Core-RP-20FPS-Horizon40/03b9d219e4c7b1df-0.json",
+        "sha256": "2085798873a03085fee1a3dd7b262f28355209048a70bc995e76fe772184990c",
+        "bytes": 1258
+      },
+      "derived_tensors": {
+        "foot_contacts": {
+          "shape": [
+            1,
+            40,
+            4
+          ],
+          "dtype": "bool"
+        },
+        "fps": {
+          "shape": [],
+          "dtype": "int32"
+        },
+        "frames": {
+          "shape": [
+            1,
+            40,
+            330
+          ],
+          "dtype": "float32"
+        },
+        "offsets": {
+          "shape": [
+            2
+          ],
+          "dtype": "int64"
+        },
+        "posed_joints": {
+          "shape": [
+            1,
+            40,
+            27,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "root_positions": {
+          "shape": [
+            1,
+            40,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "text": {
+          "shape": [],
+          "dtype": "<U22"
+        }
+      },
+      "generated_by": {
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/03b9d219e4c7b1df.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person stands still. --out artifacts/action-clips/raw/stand_idle --no-postprocess",
+        "exit_code": 0,
+        "elapsed_s": 2.092
+      },
+      "postprocess_attempt": {
+        "postprocess": true,
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/03b9d219e4c7b1df.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person stands still. --out artifacts/action-clips/raw/stand_idle",
+        "exit_code": 2,
+        "elapsed_s": 0.482,
+        "stdout": "",
+        "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
+        "produced": [
+          "03b9d219e4c7b1df-0.json",
+          "03b9d219e4c7b1df-0.npz"
+        ]
+      },
+      "skating": {
+        "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+        "per_channel": {
+          "L-heel": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.2521,
+            "max_mm_per_frame": 0.5498,
+            "total_mm": 9.8313
+          },
+          "L-toe": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.257,
+            "max_mm_per_frame": 0.5478,
+            "total_mm": 10.0226
+          },
+          "R-heel": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.2536,
+            "max_mm_per_frame": 0.5048,
+            "total_mm": 9.8917
+          },
+          "R-toe": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.2396,
+            "max_mm_per_frame": 0.4861,
+            "total_mm": 9.3439
+          }
+        },
+        "considered_transitions": 156,
+        "possible_transitions": 156,
+        "posture": {
+          "hip_y_min_m": 0.9723,
+          "hip_y_max_m": 0.9729,
+          "hip_y_mean_m": 0.9725,
+          "head_y_mean_m": 1.6912,
+          "hand_y_min_m": 0.9492,
+          "hands_at_or_below_knee_frac": 0.0,
+          "hand_minus_knee_y_mean_m": 0.4217
+        },
+        "mean_mm_per_frame": 0.2506,
+        "max_mm_per_frame": 0.5498,
+        "total_mm": 39.0895,
+        "contact_frames_per_channel": {
+          "L-heel": 40,
+          "L-toe": 40,
+          "R-heel": 40,
+          "R-toe": 40
+        },
+        "frames_with_no_contact": 0,
+        "root_displacement_m": 0.008323,
+        "root_path_m": 0.012056
+      }
+    },
+    {
+      "name": "crouch_idle",
+      "prompt": "A person crouches down and stays crouched.",
+      "prompt_hash": "fb0572825914374f",
+      "seed": 0,
+      "fps": 20,
+      "frames": 40,
+      "duration_s": 2.0,
+      "postprocess": false,
+      "note": "the held pose; here for 'crouched, and then what'",
+      "status": "generated",
+      "model": "ARDY-Core-RP-20FPS-Horizon40",
+      "backend": "mlx",
+      "history_frames": 160,
+      "diffusion_steps": 10,
+      "cfg_weight": [
+        2.0,
+        2.0
+      ],
+      "embedding": {
+        "path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/fb0572825914374f.npy",
+        "sha256": "c9e28a4ddc6962b0a29fc969fcdd0bb56b0dc35f9ee4ffa7c0d779a6ffb099ef",
+        "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit"
+      },
+      "clip": {
+        "path": "artifacts/action-clips/raw/crouch_idle/ARDY-Core-RP-20FPS-Horizon40/fb0572825914374f-0.npz",
+        "sha256": "c3ebe4980c3fbb68aabc92682aedaaf205656e9c8a96e4f517647bdb1d692ef8",
+        "bytes": 68352
+      },
+      "sidecar": {
+        "path": "artifacts/action-clips/raw/crouch_idle/ARDY-Core-RP-20FPS-Horizon40/fb0572825914374f-0.json",
+        "sha256": "1dfda516d62d1931f355e22a55a05a200914e79a9e9f25b30195c961397b08fc",
+        "bytes": 1258
+      },
+      "derived_tensors": {
+        "foot_contacts": {
+          "shape": [
+            1,
+            40,
+            4
+          ],
+          "dtype": "bool"
+        },
+        "fps": {
+          "shape": [],
+          "dtype": "int32"
+        },
+        "frames": {
+          "shape": [
+            1,
+            40,
+            330
+          ],
+          "dtype": "float32"
+        },
+        "offsets": {
+          "shape": [
+            2
+          ],
+          "dtype": "int64"
+        },
+        "posed_joints": {
+          "shape": [
+            1,
+            40,
+            27,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "root_positions": {
+          "shape": [
+            1,
+            40,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "text": {
+          "shape": [],
+          "dtype": "<U42"
+        }
+      },
+      "generated_by": {
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/fb0572825914374f.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crouches down and stays crouched. --out artifacts/action-clips/raw/crouch_idle --no-postprocess",
+        "exit_code": 0,
+        "elapsed_s": 3.864
+      },
+      "postprocess_attempt": {
+        "postprocess": true,
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/fb0572825914374f.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crouches down and stays crouched. --out artifacts/action-clips/raw/crouch_idle",
+        "exit_code": 2,
+        "elapsed_s": 0.666,
+        "stdout": "",
+        "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
+        "produced": [
+          "fb0572825914374f-0.json",
+          "fb0572825914374f-0.npz"
+        ]
+      },
+      "skating": {
+        "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+        "per_channel": {
+          "L-heel": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.4193,
+            "max_mm_per_frame": 0.9753,
+            "total_mm": 16.3546
+          },
+          "L-toe": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.4192,
+            "max_mm_per_frame": 1.0154,
+            "total_mm": 16.3476
+          },
+          "R-heel": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.5969,
+            "max_mm_per_frame": 1.4362,
+            "total_mm": 23.279
+          },
+          "R-toe": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.6714,
+            "max_mm_per_frame": 1.9309,
+            "total_mm": 26.1834
+          }
+        },
+        "considered_transitions": 156,
+        "possible_transitions": 156,
+        "posture": {
+          "hip_y_min_m": 0.5895,
+          "hip_y_max_m": 0.5993,
+          "hip_y_mean_m": 0.5936,
+          "head_y_mean_m": 0.9193,
+          "hand_y_min_m": 0.4716,
+          "hands_at_or_below_knee_frac": 1.0,
+          "hand_minus_knee_y_mean_m": -0.0228
+        },
+        "mean_mm_per_frame": 0.5267,
+        "max_mm_per_frame": 1.9309,
+        "total_mm": 82.1645,
+        "contact_frames_per_channel": {
+          "L-heel": 40,
+          "L-toe": 40,
+          "R-heel": 40,
+          "R-toe": 40
+        },
+        "frames_with_no_contact": 0,
+        "root_displacement_m": 0.014343,
+        "root_path_m": 0.030538
+      }
+    },
+    {
+      "name": "crouch_forward",
+      "prompt": "A person crouches and walks forward slowly.",
+      "prompt_hash": "c8a0180793a995c0",
+      "seed": 0,
+      "fps": 20,
+      "frames": 80,
+      "duration_s": 4.0,
+      "postprocess": false,
+      "note": "the moving-while-crouched case the ask calls out explicitly",
+      "status": "generated",
+      "model": "ARDY-Core-RP-20FPS-Horizon40",
+      "backend": "mlx",
+      "history_frames": 160,
+      "diffusion_steps": 10,
+      "cfg_weight": [
+        2.0,
+        2.0
+      ],
+      "embedding": {
+        "path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/c8a0180793a995c0.npy",
+        "sha256": "bdb7857224bdcfc6b4af8022e51b7ffc09b94d710ded113b61e23fb2b6379e01",
+        "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit"
+      },
+      "clip": {
+        "path": "artifacts/action-clips/raw/crouch_forward/ARDY-Core-RP-20FPS-Horizon40/c8a0180793a995c0-0.npz",
+        "sha256": "62b3f1cb8cd276690d6401510ba5d58e2fc5f3b9650b07b2ebd327ba2fa7ca7f",
+        "bytes": 134764
+      },
+      "sidecar": {
+        "path": "artifacts/action-clips/raw/crouch_forward/ARDY-Core-RP-20FPS-Horizon40/c8a0180793a995c0-0.json",
+        "sha256": "aeb5605fd5f96e53b3ca68b9644519b8892ca642939f83d394c07c542b62b86f",
+        "bytes": 1258
+      },
+      "derived_tensors": {
+        "foot_contacts": {
+          "shape": [
+            1,
+            80,
+            4
+          ],
+          "dtype": "bool"
+        },
+        "fps": {
+          "shape": [],
+          "dtype": "int32"
+        },
+        "frames": {
+          "shape": [
+            1,
+            80,
+            330
+          ],
+          "dtype": "float32"
+        },
+        "offsets": {
+          "shape": [
+            3
+          ],
+          "dtype": "int64"
+        },
+        "posed_joints": {
+          "shape": [
+            1,
+            80,
+            27,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "root_positions": {
+          "shape": [
+            1,
+            80,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "text": {
+          "shape": [],
+          "dtype": "<U43"
+        }
+      },
+      "generated_by": {
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/c8a0180793a995c0.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crouches and walks forward slowly. --out artifacts/action-clips/raw/crouch_forward --no-postprocess",
+        "exit_code": 0,
+        "elapsed_s": 3.086
+      },
+      "postprocess_attempt": {
+        "postprocess": true,
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/c8a0180793a995c0.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crouches and walks forward slowly. --out artifacts/action-clips/raw/crouch_forward",
+        "exit_code": 2,
+        "elapsed_s": 0.521,
+        "stdout": "",
+        "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
+        "produced": [
+          "c8a0180793a995c0-0.json",
+          "c8a0180793a995c0-0.npz"
+        ]
+      },
+      "skating": {
+        "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+        "per_channel": {
+          "L-heel": {
+            "planted_transitions": 11,
+            "contact_frames": 14,
+            "mean_mm_per_frame": 3.5029,
+            "max_mm_per_frame": 12.8589,
+            "total_mm": 38.532
+          },
+          "L-toe": {
+            "planted_transitions": 50,
+            "contact_frames": 54,
+            "mean_mm_per_frame": 2.4242,
+            "max_mm_per_frame": 4.75,
+            "total_mm": 121.2116
+          },
+          "R-heel": {
+            "planted_transitions": 19,
+            "contact_frames": 23,
+            "mean_mm_per_frame": 3.1052,
+            "max_mm_per_frame": 6.4365,
+            "total_mm": 58.9981
+          },
+          "R-toe": {
+            "planted_transitions": 55,
+            "contact_frames": 59,
+            "mean_mm_per_frame": 2.5401,
+            "max_mm_per_frame": 5.1261,
+            "total_mm": 139.703
+          }
+        },
+        "considered_transitions": 135,
+        "possible_transitions": 316,
+        "posture": {
+          "hip_y_min_m": 0.4881,
+          "hip_y_max_m": 0.6093,
+          "hip_y_mean_m": 0.5541,
+          "head_y_mean_m": 0.9876,
+          "hand_y_min_m": 0.4201,
+          "hands_at_or_below_knee_frac": 0.225,
+          "hand_minus_knee_y_mean_m": 0.0562
+        },
+        "mean_mm_per_frame": 2.6551,
+        "max_mm_per_frame": 12.8589,
+        "total_mm": 358.4446,
+        "contact_frames_per_channel": {
+          "L-heel": 14,
+          "L-toe": 54,
+          "R-heel": 23,
+          "R-toe": 59
+        },
+        "frames_with_no_contact": 0,
+        "root_displacement_m": 2.148294,
+        "root_path_m": 2.287923
+      }
+    },
+    {
+      "name": "crawl_forward",
+      "prompt": "A person crawls forward on hands and knees.",
+      "prompt_hash": "e7a1d8e6bc02d0e7",
+      "seed": 0,
+      "fps": 20,
+      "frames": 80,
+      "duration_s": 4.0,
+      "postprocess": false,
+      "note": "the hardest one; see the README's honesty section",
+      "status": "generated",
+      "model": "ARDY-Core-RP-20FPS-Horizon40",
+      "backend": "mlx",
+      "history_frames": 160,
+      "diffusion_steps": 10,
+      "cfg_weight": [
+        2.0,
+        2.0
+      ],
+      "embedding": {
+        "path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e7a1d8e6bc02d0e7.npy",
+        "sha256": "650cc2097772d0e7897674f6f31fa980543fa6e74c03ef135721361ead119319",
+        "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit"
+      },
+      "clip": {
+        "path": "artifacts/action-clips/raw/crawl_forward/ARDY-Core-RP-20FPS-Horizon40/e7a1d8e6bc02d0e7-0.npz",
+        "sha256": "edf8b39aeddb49216678c5d1b306747ea6258eea2fb8c452460f4b4f022530a1",
+        "bytes": 134764
+      },
+      "sidecar": {
+        "path": "artifacts/action-clips/raw/crawl_forward/ARDY-Core-RP-20FPS-Horizon40/e7a1d8e6bc02d0e7-0.json",
+        "sha256": "4287e62d085ad01aafe4fe1b6759804eb72e05c3a1de8ca2826be468c19ab109",
+        "bytes": 1258
+      },
+      "derived_tensors": {
+        "foot_contacts": {
+          "shape": [
+            1,
+            80,
+            4
+          ],
+          "dtype": "bool"
+        },
+        "fps": {
+          "shape": [],
+          "dtype": "int32"
+        },
+        "frames": {
+          "shape": [
+            1,
+            80,
+            330
+          ],
+          "dtype": "float32"
+        },
+        "offsets": {
+          "shape": [
+            3
+          ],
+          "dtype": "int64"
+        },
+        "posed_joints": {
+          "shape": [
+            1,
+            80,
+            27,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "root_positions": {
+          "shape": [
+            1,
+            80,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "text": {
+          "shape": [],
+          "dtype": "<U43"
+        }
+      },
+      "generated_by": {
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e7a1d8e6bc02d0e7.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crawls forward on hands and knees. --out artifacts/action-clips/raw/crawl_forward --no-postprocess",
+        "exit_code": 0,
+        "elapsed_s": 3.317
+      },
+      "postprocess_attempt": {
+        "postprocess": true,
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e7a1d8e6bc02d0e7.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crawls forward on hands and knees. --out artifacts/action-clips/raw/crawl_forward",
+        "exit_code": 2,
+        "elapsed_s": 0.895,
+        "stdout": "",
+        "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
+        "produced": [
+          "e7a1d8e6bc02d0e7-0.json",
+          "e7a1d8e6bc02d0e7-0.npz"
+        ]
+      },
+      "skating": {
+        "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+        "per_channel": {
+          "L-heel": {
+            "planted_transitions": 0,
+            "contact_frames": 0,
+            "mean_mm_per_frame": 0.0,
+            "max_mm_per_frame": 0.0,
+            "total_mm": 0.0
+          },
+          "L-toe": {
+            "planted_transitions": 45,
+            "contact_frames": 48,
+            "mean_mm_per_frame": 3.0304,
+            "max_mm_per_frame": 7.8681,
+            "total_mm": 136.3663
+          },
+          "R-heel": {
+            "planted_transitions": 0,
+            "contact_frames": 0,
+            "mean_mm_per_frame": 0.0,
+            "max_mm_per_frame": 0.0,
+            "total_mm": 0.0
+          },
+          "R-toe": {
+            "planted_transitions": 49,
+            "contact_frames": 52,
+            "mean_mm_per_frame": 2.4787,
+            "max_mm_per_frame": 9.9714,
+            "total_mm": 121.455
+          }
+        },
+        "considered_transitions": 94,
+        "possible_transitions": 316,
+        "posture": {
+          "hip_y_min_m": 0.4196,
+          "hip_y_max_m": 0.4539,
+          "hip_y_mean_m": 0.4409,
+          "head_y_mean_m": 0.5929,
+          "hand_y_min_m": 0.0154,
+          "hands_at_or_below_knee_frac": 0.4625,
+          "hand_minus_knee_y_mean_m": 0.0106
+        },
+        "mean_mm_per_frame": 2.7428,
+        "max_mm_per_frame": 9.9714,
+        "total_mm": 257.8213,
+        "contact_frames_per_channel": {
+          "L-heel": 0,
+          "L-toe": 48,
+          "R-heel": 0,
+          "R-toe": 52
+        },
+        "frames_with_no_contact": 0,
+        "root_displacement_m": 1.257442,
+        "root_path_m": 1.301818
+      }
+    },
+    {
+      "name": "jump",
+      "prompt": "A person jumps up in place and lands.",
+      "prompt_hash": "b0215aea5678220f",
+      "seed": 0,
+      "fps": 20,
+      "frames": 40,
+      "duration_s": 2.0,
+      "postprocess": false,
+      "note": "in place: displacement should stay near zero",
+      "status": "generated",
+      "model": "ARDY-Core-RP-20FPS-Horizon40",
+      "backend": "mlx",
+      "history_frames": 160,
+      "diffusion_steps": 10,
+      "cfg_weight": [
+        2.0,
+        2.0
+      ],
+      "embedding": {
+        "path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/b0215aea5678220f.npy",
+        "sha256": "f42e39d2ed86f1bfe49eb0c919752a42b8eb0c4f6f99bcfcf8723be94f5f9ead",
+        "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit"
+      },
+      "clip": {
+        "path": "artifacts/action-clips/raw/jump/ARDY-Core-RP-20FPS-Horizon40/b0215aea5678220f-0.npz",
+        "sha256": "2092cdd768e74603f11361cd083c07516a99cf4dc91c57efd58576615957e20b",
+        "bytes": 68332
+      },
+      "sidecar": {
+        "path": "artifacts/action-clips/raw/jump/ARDY-Core-RP-20FPS-Horizon40/b0215aea5678220f-0.json",
+        "sha256": "21b0047efadac9d2d05fc4f1488da24203a70a82bbb72337f4b65fbd8fa7cfed",
+        "bytes": 1258
+      },
+      "derived_tensors": {
+        "foot_contacts": {
+          "shape": [
+            1,
+            40,
+            4
+          ],
+          "dtype": "bool"
+        },
+        "fps": {
+          "shape": [],
+          "dtype": "int32"
+        },
+        "frames": {
+          "shape": [
+            1,
+            40,
+            330
+          ],
+          "dtype": "float32"
+        },
+        "offsets": {
+          "shape": [
+            2
+          ],
+          "dtype": "int64"
+        },
+        "posed_joints": {
+          "shape": [
+            1,
+            40,
+            27,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "root_positions": {
+          "shape": [
+            1,
+            40,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "text": {
+          "shape": [],
+          "dtype": "<U37"
+        }
+      },
+      "generated_by": {
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/b0215aea5678220f.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person jumps up in place and lands. --out artifacts/action-clips/raw/jump --no-postprocess",
+        "exit_code": 0,
+        "elapsed_s": 2.319
+      },
+      "postprocess_attempt": {
+        "postprocess": true,
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/b0215aea5678220f.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person jumps up in place and lands. --out artifacts/action-clips/raw/jump",
+        "exit_code": 2,
+        "elapsed_s": 0.836,
+        "stdout": "",
+        "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
+        "produced": [
+          "b0215aea5678220f-0.json",
+          "b0215aea5678220f-0.npz"
+        ]
+      },
+      "skating": {
+        "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+        "per_channel": {
+          "L-heel": {
+            "planted_transitions": 27,
+            "contact_frames": 29,
+            "mean_mm_per_frame": 0.8039,
+            "max_mm_per_frame": 2.373,
+            "total_mm": 21.7042
+          },
+          "L-toe": {
+            "planted_transitions": 29,
+            "contact_frames": 31,
+            "mean_mm_per_frame": 0.8359,
+            "max_mm_per_frame": 2.8491,
+            "total_mm": 24.2413
+          },
+          "R-heel": {
+            "planted_transitions": 24,
+            "contact_frames": 26,
+            "mean_mm_per_frame": 0.6251,
+            "max_mm_per_frame": 1.8305,
+            "total_mm": 15.0018
+          },
+          "R-toe": {
+            "planted_transitions": 29,
+            "contact_frames": 31,
+            "mean_mm_per_frame": 0.7911,
+            "max_mm_per_frame": 3.625,
+            "total_mm": 22.9408
+          }
+        },
+        "considered_transitions": 109,
+        "possible_transitions": 156,
+        "posture": {
+          "hip_y_min_m": 0.7896,
+          "hip_y_max_m": 1.2447,
+          "hip_y_mean_m": 0.9664,
+          "head_y_mean_m": 1.6848,
+          "hand_y_min_m": 0.7633,
+          "hands_at_or_below_knee_frac": 0.0,
+          "hand_minus_knee_y_mean_m": 0.4699
+        },
+        "mean_mm_per_frame": 0.7696,
+        "max_mm_per_frame": 3.625,
+        "total_mm": 83.8881,
+        "contact_frames_per_channel": {
+          "L-heel": 29,
+          "L-toe": 31,
+          "R-heel": 26,
+          "R-toe": 31
+        },
+        "frames_with_no_contact": 9,
+        "root_displacement_m": 0.032261,
+        "root_path_m": 0.205656
+      }
+    },
+    {
+      "name": "walk",
+      "prompt": "A person walks forward.",
+      "prompt_hash": "e9cf8141cac79f35",
+      "seed": 0,
+      "fps": 20,
+      "frames": 80,
+      "duration_s": 4.0,
+      "postprocess": false,
+      "note": "baseline locomotion, and the alignment reference prompt",
+      "status": "generated",
+      "model": "ARDY-Core-RP-20FPS-Horizon40",
+      "backend": "mlx",
+      "history_frames": 160,
+      "diffusion_steps": 10,
+      "cfg_weight": [
+        2.0,
+        2.0
+      ],
+      "embedding": {
+        "path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e9cf8141cac79f35.npy",
+        "sha256": "655853990a9776ea2a57788eca260c7241c0031293efba6b986f4b05607b3489",
+        "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit"
+      },
+      "clip": {
+        "path": "artifacts/action-clips/raw/walk/ARDY-Core-RP-20FPS-Horizon40/e9cf8141cac79f35-0.npz",
+        "sha256": "b1fcbefbbebd44ec8719964c8f82191b802a6c232adb82148aa802cbfcc332c4",
+        "bytes": 134684
+      },
+      "sidecar": {
+        "path": "artifacts/action-clips/raw/walk/ARDY-Core-RP-20FPS-Horizon40/e9cf8141cac79f35-0.json",
+        "sha256": "db0ceb4a60b450801547ee68272aa5ef29e358497e2e3b2b6344f5d5115168d8",
+        "bytes": 1258
+      },
+      "derived_tensors": {
+        "foot_contacts": {
+          "shape": [
+            1,
+            80,
+            4
+          ],
+          "dtype": "bool"
+        },
+        "fps": {
+          "shape": [],
+          "dtype": "int32"
+        },
+        "frames": {
+          "shape": [
+            1,
+            80,
+            330
+          ],
+          "dtype": "float32"
+        },
+        "offsets": {
+          "shape": [
+            3
+          ],
+          "dtype": "int64"
+        },
+        "posed_joints": {
+          "shape": [
+            1,
+            80,
+            27,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "root_positions": {
+          "shape": [
+            1,
+            80,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "text": {
+          "shape": [],
+          "dtype": "<U23"
+        }
+      },
+      "generated_by": {
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e9cf8141cac79f35.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person walks forward. --out artifacts/action-clips/raw/walk --no-postprocess",
+        "exit_code": 0,
+        "elapsed_s": 3.554
+      },
+      "postprocess_attempt": {
+        "postprocess": true,
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e9cf8141cac79f35.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person walks forward. --out artifacts/action-clips/raw/walk",
+        "exit_code": 2,
+        "elapsed_s": 0.987,
+        "stdout": "",
+        "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
+        "produced": [
+          "e9cf8141cac79f35-0.json",
+          "e9cf8141cac79f35-0.npz"
+        ]
+      },
+      "skating": {
+        "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+        "per_channel": {
+          "L-heel": {
+            "planted_transitions": 43,
+            "contact_frames": 46,
+            "mean_mm_per_frame": 0.7286,
+            "max_mm_per_frame": 2.4562,
+            "total_mm": 31.3304
+          },
+          "L-toe": {
+            "planted_transitions": 49,
+            "contact_frames": 52,
+            "mean_mm_per_frame": 0.9538,
+            "max_mm_per_frame": 3.084,
+            "total_mm": 46.7373
+          },
+          "R-heel": {
+            "planted_transitions": 42,
+            "contact_frames": 46,
+            "mean_mm_per_frame": 0.8031,
+            "max_mm_per_frame": 3.45,
+            "total_mm": 33.7321
+          },
+          "R-toe": {
+            "planted_transitions": 47,
+            "contact_frames": 51,
+            "mean_mm_per_frame": 0.8556,
+            "max_mm_per_frame": 3.2448,
+            "total_mm": 40.2119
+          }
+        },
+        "considered_transitions": 181,
+        "possible_transitions": 316,
+        "posture": {
+          "hip_y_min_m": 0.8461,
+          "hip_y_max_m": 0.9657,
+          "hip_y_mean_m": 0.9312,
+          "head_y_mean_m": 1.6347,
+          "hand_y_min_m": 0.8994,
+          "hands_at_or_below_knee_frac": 0.0,
+          "hand_minus_knee_y_mean_m": 0.4812
+        },
+        "mean_mm_per_frame": 0.8398,
+        "max_mm_per_frame": 3.45,
+        "total_mm": 152.0117,
+        "contact_frames_per_channel": {
+          "L-heel": 46,
+          "L-toe": 52,
+          "R-heel": 46,
+          "R-toe": 51
+        },
+        "frames_with_no_contact": 8,
+        "root_displacement_m": 4.353967,
+        "root_path_m": 4.407139
+      }
+    },
+    {
+      "name": "stand_idle_zh",
+      "prompt": "\u7ad9\u7acb\u4e0d\u52a8",
+      "prompt_hash": "954d69ee631c7099",
+      "seed": 0,
+      "fps": 20,
+      "frames": 40,
+      "duration_s": 2.0,
+      "postprocess": false,
+      "note": "same pose, viewer's Chinese vocab",
+      "status": "generated",
+      "model": "ARDY-Core-RP-20FPS-Horizon40",
+      "backend": "mlx",
+      "history_frames": 160,
+      "diffusion_steps": 10,
+      "cfg_weight": [
+        2.0,
+        2.0
+      ],
+      "embedding": {
+        "path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/954d69ee631c7099.npy",
+        "sha256": "edd0a2d33cb6ee28f31d4b74da67658d983e363e7064f7960d77a92a535cb226",
+        "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit"
+      },
+      "clip": {
+        "path": "artifacts/action-clips/raw/stand_idle_zh/ARDY-Core-RP-20FPS-Horizon40/954d69ee631c7099-0.npz",
+        "sha256": "e5967136bf5a55a1dd6c9aa42f855e1d5f3e343315634e19986eb5bf89c4be6d",
+        "bytes": 68200
+      },
+      "sidecar": {
+        "path": "artifacts/action-clips/raw/stand_idle_zh/ARDY-Core-RP-20FPS-Horizon40/954d69ee631c7099-0.json",
+        "sha256": "f7e56d7fcaa2e2bf23b3079ef677b273e4e36afff05fc8dc6ae959ac637e5faa",
+        "bytes": 1258
+      },
+      "derived_tensors": {
+        "foot_contacts": {
+          "shape": [
+            1,
+            40,
+            4
+          ],
+          "dtype": "bool"
+        },
+        "fps": {
+          "shape": [],
+          "dtype": "int32"
+        },
+        "frames": {
+          "shape": [
+            1,
+            40,
+            330
+          ],
+          "dtype": "float32"
+        },
+        "offsets": {
+          "shape": [
+            2
+          ],
+          "dtype": "int64"
+        },
+        "posed_joints": {
+          "shape": [
+            1,
+            40,
+            27,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "root_positions": {
+          "shape": [
+            1,
+            40,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "text": {
+          "shape": [],
+          "dtype": "<U4"
+        }
+      },
+      "generated_by": {
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/954d69ee631c7099.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt \u7ad9\u7acb\u4e0d\u52a8 --out artifacts/action-clips/raw/stand_idle_zh --no-postprocess",
+        "exit_code": 0,
+        "elapsed_s": 2.098
+      },
+      "postprocess_attempt": {
+        "postprocess": true,
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/954d69ee631c7099.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt \u7ad9\u7acb\u4e0d\u52a8 --out artifacts/action-clips/raw/stand_idle_zh",
+        "exit_code": 2,
+        "elapsed_s": 0.903,
+        "stdout": "",
+        "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
+        "produced": [
+          "954d69ee631c7099-0.json",
+          "954d69ee631c7099-0.npz"
+        ]
+      },
+      "skating": {
+        "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+        "per_channel": {
+          "L-heel": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.2987,
+            "max_mm_per_frame": 0.7385,
+            "total_mm": 11.6506
+          },
+          "L-toe": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.3028,
+            "max_mm_per_frame": 0.7364,
+            "total_mm": 11.8091
+          },
+          "R-heel": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.3393,
+            "max_mm_per_frame": 0.6891,
+            "total_mm": 13.2331
+          },
+          "R-toe": {
+            "planted_transitions": 39,
+            "contact_frames": 40,
+            "mean_mm_per_frame": 0.3574,
+            "max_mm_per_frame": 0.7004,
+            "total_mm": 13.9388
+          }
+        },
+        "considered_transitions": 156,
+        "possible_transitions": 156,
+        "posture": {
+          "hip_y_min_m": 0.9699,
+          "hip_y_max_m": 0.9703,
+          "hip_y_mean_m": 0.97,
+          "head_y_mean_m": 1.6922,
+          "hand_y_min_m": 0.9321,
+          "hands_at_or_below_knee_frac": 0.0,
+          "hand_minus_knee_y_mean_m": 0.4097
+        },
+        "mean_mm_per_frame": 0.3246,
+        "max_mm_per_frame": 0.7385,
+        "total_mm": 50.6317,
+        "contact_frames_per_channel": {
+          "L-heel": 40,
+          "L-toe": 40,
+          "R-heel": 40,
+          "R-toe": 40
+        },
+        "frames_with_no_contact": 0,
+        "root_displacement_m": 0.009959,
+        "root_path_m": 0.013176
+      }
+    }
+  ],
+  "failures": []
+}

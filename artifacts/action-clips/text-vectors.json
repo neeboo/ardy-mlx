@@ -1,0 +1,65 @@
+{
+  "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit",
+  "quantization": "4-bit group 32, last-2 layers + embed_tokens at 8-bit",
+  "encoder_repo": "/Users/ghostcorn/dev/llm2vec-mlx",
+  "encode_script": "/Users/ghostcorn/dev/llm2vec-mlx/scripts/encode.py",
+  "texts_file": "artifacts/action-clips/prompts.txt",
+  "vectors": [
+    {
+      "name": "stand_idle",
+      "prompt": "A person stands still.",
+      "prompt_hash": "03b9d219e4c7b1df",
+      "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/03b9d219e4c7b1df.npy",
+      "vector_sha256": "da7eedb3893106f1d6158d022f96507ccb348bb86ceb6bb0abe522ea12069111",
+      "sidecar_sha256": "57789a8556d07e787c515c6dc1b4c8de071b6271c030bc6d233082efc9ad272e"
+    },
+    {
+      "name": "crouch_idle",
+      "prompt": "A person crouches down and stays crouched.",
+      "prompt_hash": "fb0572825914374f",
+      "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/fb0572825914374f.npy",
+      "vector_sha256": "c9e28a4ddc6962b0a29fc969fcdd0bb56b0dc35f9ee4ffa7c0d779a6ffb099ef",
+      "sidecar_sha256": "073f4cecfe24f70713ec8a2f5880e8d56fd0811e5755ba53c0858cf3765117bf"
+    },
+    {
+      "name": "crouch_forward",
+      "prompt": "A person crouches and walks forward slowly.",
+      "prompt_hash": "c8a0180793a995c0",
+      "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/c8a0180793a995c0.npy",
+      "vector_sha256": "bdb7857224bdcfc6b4af8022e51b7ffc09b94d710ded113b61e23fb2b6379e01",
+      "sidecar_sha256": "63aa23e0193532a4cbe8e741b2b7d42d8eeae9635285f9c0f53bfecce47fae71"
+    },
+    {
+      "name": "crawl_forward",
+      "prompt": "A person crawls forward on hands and knees.",
+      "prompt_hash": "e7a1d8e6bc02d0e7",
+      "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e7a1d8e6bc02d0e7.npy",
+      "vector_sha256": "650cc2097772d0e7897674f6f31fa980543fa6e74c03ef135721361ead119319",
+      "sidecar_sha256": "9fffe6157aa623ddd47994f8fc81d0abfb026fa29f5eaf20976c4c4ade7460f8"
+    },
+    {
+      "name": "jump",
+      "prompt": "A person jumps up in place and lands.",
+      "prompt_hash": "b0215aea5678220f",
+      "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/b0215aea5678220f.npy",
+      "vector_sha256": "f42e39d2ed86f1bfe49eb0c919752a42b8eb0c4f6f99bcfcf8723be94f5f9ead",
+      "sidecar_sha256": "883973aacf35a015a245e73ca51f1f70b141cce31845fd58516625aeaad32c4f"
+    },
+    {
+      "name": "walk",
+      "prompt": "A person walks forward.",
+      "prompt_hash": "e9cf8141cac79f35",
+      "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e9cf8141cac79f35.npy",
+      "vector_sha256": "655853990a9776ea2a57788eca260c7241c0031293efba6b986f4b05607b3489",
+      "sidecar_sha256": "94024ca6087c078c18a08cf392ddd8647354d47ba6d66fb5c41ae9df8321e230"
+    },
+    {
+      "name": "stand_idle_zh",
+      "prompt": "\u7ad9\u7acb\u4e0d\u52a8",
+      "prompt_hash": "954d69ee631c7099",
+      "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/954d69ee631c7099.npy",
+      "vector_sha256": "edd0a2d33cb6ee28f31d4b74da67658d983e363e7064f7960d77a92a535cb226",
+      "sidecar_sha256": "2a99ce6389eff869e8ce367d7bd599fc60135b2c8fa3bfd78e9d30fbe59f7d81"
+    }
+  ]
+}

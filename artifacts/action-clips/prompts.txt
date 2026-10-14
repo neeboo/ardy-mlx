@@ -1,0 +1,7 @@
+A person stands still.
+A person crouches down and stays crouched.
+A person crouches and walks forward slowly.
+A person crawls forward on hands and knees.
+A person jumps up in place and lands.
+A person walks forward.
+站立不动

@@ -29,3 +29,15 @@ out/
 artifacts/embeddings/*
 !artifacts/embeddings/.gitkeep
 
+# ---------------------------------------------------------------------------
+# Action clips: the motion itself is weight-derived, so it is never committed.
+#
+# `*.npz` above already covers the clip files; these two lines name the
+# directory explicitly so the intent survives a future edit to that blanket
+# rule, and so `git status` stays clean while `scripts/ardy_actions.py` runs.
+# Committed from this directory: manifest.json, foot-skating.json, preview.gif,
+# preview.json, text-vectors.json, prompts.txt, README.md.
+# ---------------------------------------------------------------------------
+artifacts/action-clips/raw/
+artifacts/action-clips/_gif-frames/
+
