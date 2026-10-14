@@ -2,9 +2,9 @@
   "schema": "ardy-action-clips/1",
   "generated_by": {
     "script": "scripts/ardy_actions.py",
-    "script_sha256": "10dfb6934628e8a41f0097a3fb148f49b73cb8f7d0109d811b2c9e610281de17",
-    "git_sha": "19c0ed3",
-    "generated_utc": "2026-10-14T13:41:54Z"
+    "script_sha256": "7380a203bf80bf40b6f5925692358631490f497f37eebe0fc5ae4c46cc95f20a",
+    "git_sha": "0ab772b",
+    "generated_utc": "2026-10-14T13:48:36Z"
   },
   "model": "ARDY-Core-RP-20FPS-Horizon40",
   "checkpoint_dir": "checkpoints/ARDY-Core-RP-20FPS-Horizon40",
@@ -65,8 +65,8 @@
       },
       "sidecar": {
         "path": "artifacts/action-clips/raw/stand_idle/ARDY-Core-RP-20FPS-Horizon40/03b9d219e4c7b1df-0.json",
-        "sha256": "2085798873a03085fee1a3dd7b262f28355209048a70bc995e76fe772184990c",
-        "bytes": 1258
+        "sha256": "e84f80faed3ca15825e748084de3d960edc957822bca630b313c6dac41ea09b7",
+        "bytes": 1261
       },
       "derived_tensors": {
         "foot_contacts": {
@@ -120,13 +120,13 @@
       "generated_by": {
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/03b9d219e4c7b1df.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person stands still. --out artifacts/action-clips/raw/stand_idle --no-postprocess",
         "exit_code": 0,
-        "elapsed_s": 2.092
+        "elapsed_s": 1.026
       },
       "postprocess_attempt": {
         "postprocess": true,
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/03b9d219e4c7b1df.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person stands still. --out artifacts/action-clips/raw/stand_idle",
         "exit_code": 2,
-        "elapsed_s": 0.482,
+        "elapsed_s": 0.315,
         "stdout": "",
         "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
         "produced": [
@@ -188,7 +188,23 @@
         },
         "frames_with_no_contact": 0,
         "root_displacement_m": 0.008323,
-        "root_path_m": 0.012056
+        "root_path_m": 0.012056,
+        "jump": {
+          "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+          "hip_joint": "Hips",
+          "fps": 20,
+          "leaves_ground": false,
+          "airborne_frames": 0,
+          "takeoff_frame": null,
+          "landing_frame": null,
+          "hip_y_start_m": 0.9729,
+          "hip_y_min_m": 0.9723,
+          "hip_y_peak_m": 0.9729,
+          "apex_above_start_m": 0.0,
+          "apex_above_crouch_m": 0.0006,
+          "touchdown_mps": 0.0,
+          "descent_peak_mps": 0.0
+        }
       }
     },
     {
@@ -222,8 +238,8 @@
       },
       "sidecar": {
         "path": "artifacts/action-clips/raw/crouch_idle/ARDY-Core-RP-20FPS-Horizon40/fb0572825914374f-0.json",
-        "sha256": "1dfda516d62d1931f355e22a55a05a200914e79a9e9f25b30195c961397b08fc",
-        "bytes": 1258
+        "sha256": "355dcdf3f424381de5cb85bff821beab7363d18e98392d71e5fe455cc0f73817",
+        "bytes": 1260
       },
       "derived_tensors": {
         "foot_contacts": {
@@ -277,13 +293,13 @@
       "generated_by": {
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/fb0572825914374f.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crouches down and stays crouched. --out artifacts/action-clips/raw/crouch_idle --no-postprocess",
         "exit_code": 0,
-        "elapsed_s": 3.864
+        "elapsed_s": 0.982
       },
       "postprocess_attempt": {
         "postprocess": true,
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/fb0572825914374f.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crouches down and stays crouched. --out artifacts/action-clips/raw/crouch_idle",
         "exit_code": 2,
-        "elapsed_s": 0.666,
+        "elapsed_s": 0.307,
         "stdout": "",
         "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
         "produced": [
@@ -345,7 +361,23 @@
         },
         "frames_with_no_contact": 0,
         "root_displacement_m": 0.014343,
-        "root_path_m": 0.030538
+        "root_path_m": 0.030538,
+        "jump": {
+          "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+          "hip_joint": "Hips",
+          "fps": 20,
+          "leaves_ground": false,
+          "airborne_frames": 0,
+          "takeoff_frame": null,
+          "landing_frame": null,
+          "hip_y_start_m": 0.5989,
+          "hip_y_min_m": 0.5895,
+          "hip_y_peak_m": 0.5993,
+          "apex_above_start_m": 0.0004,
+          "apex_above_crouch_m": 0.0098,
+          "touchdown_mps": 0.0,
+          "descent_peak_mps": 0.0
+        }
       }
     },
     {
@@ -379,8 +411,8 @@
       },
       "sidecar": {
         "path": "artifacts/action-clips/raw/crouch_forward/ARDY-Core-RP-20FPS-Horizon40/c8a0180793a995c0-0.json",
-        "sha256": "aeb5605fd5f96e53b3ca68b9644519b8892ca642939f83d394c07c542b62b86f",
-        "bytes": 1258
+        "sha256": "379b1d6e304464dc0d98e40a1d824a974b122578d214703af3de1e7c81089b94",
+        "bytes": 1261
       },
       "derived_tensors": {
         "foot_contacts": {
@@ -434,13 +466,13 @@
       "generated_by": {
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/c8a0180793a995c0.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crouches and walks forward slowly. --out artifacts/action-clips/raw/crouch_forward --no-postprocess",
         "exit_code": 0,
-        "elapsed_s": 3.086
+        "elapsed_s": 1.994
       },
       "postprocess_attempt": {
         "postprocess": true,
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/c8a0180793a995c0.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crouches and walks forward slowly. --out artifacts/action-clips/raw/crouch_forward",
         "exit_code": 2,
-        "elapsed_s": 0.521,
+        "elapsed_s": 2.346,
         "stdout": "",
         "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
         "produced": [
@@ -502,7 +534,23 @@
         },
         "frames_with_no_contact": 0,
         "root_displacement_m": 2.148294,
-        "root_path_m": 2.287923
+        "root_path_m": 2.287923,
+        "jump": {
+          "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+          "hip_joint": "Hips",
+          "fps": 20,
+          "leaves_ground": false,
+          "airborne_frames": 0,
+          "takeoff_frame": null,
+          "landing_frame": null,
+          "hip_y_start_m": 0.5097,
+          "hip_y_min_m": 0.4881,
+          "hip_y_peak_m": 0.6093,
+          "apex_above_start_m": 0.0996,
+          "apex_above_crouch_m": 0.1211,
+          "touchdown_mps": 0.0,
+          "descent_peak_mps": 0.0
+        }
       }
     },
     {
@@ -536,7 +584,7 @@
       },
       "sidecar": {
         "path": "artifacts/action-clips/raw/crawl_forward/ARDY-Core-RP-20FPS-Horizon40/e7a1d8e6bc02d0e7-0.json",
-        "sha256": "4287e62d085ad01aafe4fe1b6759804eb72e05c3a1de8ca2826be468c19ab109",
+        "sha256": "6473dd94fbbfc0dba90d8549183ae2e18f5814ea3f25ada2afe8ecc6b2039e23",
         "bytes": 1258
       },
       "derived_tensors": {
@@ -591,13 +639,13 @@
       "generated_by": {
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e7a1d8e6bc02d0e7.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crawls forward on hands and knees. --out artifacts/action-clips/raw/crawl_forward --no-postprocess",
         "exit_code": 0,
-        "elapsed_s": 3.317
+        "elapsed_s": 2.169
       },
       "postprocess_attempt": {
         "postprocess": true,
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e7a1d8e6bc02d0e7.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person crawls forward on hands and knees. --out artifacts/action-clips/raw/crawl_forward",
         "exit_code": 2,
-        "elapsed_s": 0.895,
+        "elapsed_s": 0.654,
         "stdout": "",
         "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
         "produced": [
@@ -659,7 +707,23 @@
         },
         "frames_with_no_contact": 0,
         "root_displacement_m": 1.257442,
-        "root_path_m": 1.301818
+        "root_path_m": 1.301818,
+        "jump": {
+          "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+          "hip_joint": "Hips",
+          "fps": 20,
+          "leaves_ground": false,
+          "airborne_frames": 0,
+          "takeoff_frame": null,
+          "landing_frame": null,
+          "hip_y_start_m": 0.4382,
+          "hip_y_min_m": 0.4196,
+          "hip_y_peak_m": 0.4539,
+          "apex_above_start_m": 0.0156,
+          "apex_above_crouch_m": 0.0342,
+          "touchdown_mps": 0.0,
+          "descent_peak_mps": 0.0
+        }
       }
     },
     {
@@ -693,8 +757,8 @@
       },
       "sidecar": {
         "path": "artifacts/action-clips/raw/jump/ARDY-Core-RP-20FPS-Horizon40/b0215aea5678220f-0.json",
-        "sha256": "21b0047efadac9d2d05fc4f1488da24203a70a82bbb72337f4b65fbd8fa7cfed",
-        "bytes": 1258
+        "sha256": "9e6682d08e001a10e56b5ab6b946c1a1da3c4ed43b84f3399a9c5f60e1cf63ad",
+        "bytes": 1260
       },
       "derived_tensors": {
         "foot_contacts": {
@@ -748,13 +812,13 @@
       "generated_by": {
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/b0215aea5678220f.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person jumps up in place and lands. --out artifacts/action-clips/raw/jump --no-postprocess",
         "exit_code": 0,
-        "elapsed_s": 2.319
+        "elapsed_s": 1.438
       },
       "postprocess_attempt": {
         "postprocess": true,
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/b0215aea5678220f.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person jumps up in place and lands. --out artifacts/action-clips/raw/jump",
         "exit_code": 2,
-        "elapsed_s": 0.836,
+        "elapsed_s": 0.575,
         "stdout": "",
         "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
         "produced": [
@@ -816,7 +880,23 @@
         },
         "frames_with_no_contact": 9,
         "root_displacement_m": 0.032261,
-        "root_path_m": 0.205656
+        "root_path_m": 0.205656,
+        "jump": {
+          "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+          "hip_joint": "Hips",
+          "fps": 20,
+          "leaves_ground": true,
+          "airborne_frames": 9,
+          "takeoff_frame": 17,
+          "landing_frame": 26,
+          "hip_y_start_m": 0.9625,
+          "hip_y_min_m": 0.7896,
+          "hip_y_peak_m": 1.2447,
+          "apex_above_start_m": 0.2821,
+          "apex_above_crouch_m": 0.4551,
+          "touchdown_mps": 1.9218,
+          "descent_peak_mps": 1.9884
+        }
       }
     },
     {
@@ -850,8 +930,8 @@
       },
       "sidecar": {
         "path": "artifacts/action-clips/raw/walk/ARDY-Core-RP-20FPS-Horizon40/e9cf8141cac79f35-0.json",
-        "sha256": "db0ceb4a60b450801547ee68272aa5ef29e358497e2e3b2b6344f5d5115168d8",
-        "bytes": 1258
+        "sha256": "b7b391e1c25b140814ae20da7f147fcdd9e1e6f0ed9c55c1110ad311bf613f63",
+        "bytes": 1259
       },
       "derived_tensors": {
         "foot_contacts": {
@@ -905,13 +985,13 @@
       "generated_by": {
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e9cf8141cac79f35.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person walks forward. --out artifacts/action-clips/raw/walk --no-postprocess",
         "exit_code": 0,
-        "elapsed_s": 3.554
+        "elapsed_s": 1.559
       },
       "postprocess_attempt": {
         "postprocess": true,
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e9cf8141cac79f35.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 4.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person walks forward. --out artifacts/action-clips/raw/walk",
         "exit_code": 2,
-        "elapsed_s": 0.987,
+        "elapsed_s": 0.499,
         "stdout": "",
         "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
         "produced": [
@@ -973,7 +1053,23 @@
         },
         "frames_with_no_contact": 8,
         "root_displacement_m": 4.353967,
-        "root_path_m": 4.407139
+        "root_path_m": 4.407139,
+        "jump": {
+          "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+          "hip_joint": "Hips",
+          "fps": 20,
+          "leaves_ground": true,
+          "airborne_frames": 8,
+          "takeoff_frame": 39,
+          "landing_frame": 77,
+          "hip_y_start_m": 0.9594,
+          "hip_y_min_m": 0.8461,
+          "hip_y_peak_m": 0.9657,
+          "apex_above_start_m": 0.0063,
+          "apex_above_crouch_m": 0.1196,
+          "touchdown_mps": 0.0,
+          "descent_peak_mps": 0.5271
+        }
       }
     },
     {
@@ -1007,8 +1103,8 @@
       },
       "sidecar": {
         "path": "artifacts/action-clips/raw/stand_idle_zh/ARDY-Core-RP-20FPS-Horizon40/954d69ee631c7099-0.json",
-        "sha256": "f7e56d7fcaa2e2bf23b3079ef677b273e4e36afff05fc8dc6ae959ac637e5faa",
-        "bytes": 1258
+        "sha256": "34b49d6daf47ffc4a42c1eb5b87a0da64b9d7ae4f508c0d92e12b92ea0ee5bd7",
+        "bytes": 1261
       },
       "derived_tensors": {
         "foot_contacts": {
@@ -1062,13 +1158,13 @@
       "generated_by": {
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/954d69ee631c7099.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt \u7ad9\u7acb\u4e0d\u52a8 --out artifacts/action-clips/raw/stand_idle_zh --no-postprocess",
         "exit_code": 0,
-        "elapsed_s": 2.098
+        "elapsed_s": 1.24
       },
       "postprocess_attempt": {
         "postprocess": true,
         "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/954d69ee631c7099.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt \u7ad9\u7acb\u4e0d\u52a8 --out artifacts/action-clips/raw/stand_idle_zh",
         "exit_code": 2,
-        "elapsed_s": 0.903,
+        "elapsed_s": 0.763,
         "stdout": "",
         "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
         "produced": [
@@ -1130,7 +1226,369 @@
         },
         "frames_with_no_contact": 0,
         "root_displacement_m": 0.009959,
-        "root_path_m": 0.013176
+        "root_path_m": 0.013176,
+        "jump": {
+          "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+          "hip_joint": "Hips",
+          "fps": 20,
+          "leaves_ground": false,
+          "airborne_frames": 0,
+          "takeoff_frame": null,
+          "landing_frame": null,
+          "hip_y_start_m": 0.9703,
+          "hip_y_min_m": 0.9699,
+          "hip_y_peak_m": 0.9703,
+          "apex_above_start_m": 0.0,
+          "apex_above_crouch_m": 0.0004,
+          "touchdown_mps": 0.0,
+          "descent_peak_mps": 0.0
+        }
+      }
+    },
+    {
+      "name": "jump_air",
+      "prompt": "A person jumps up in the air and lands on the spot.",
+      "prompt_hash": "02116edb58d5f553",
+      "seed": 0,
+      "fps": 20,
+      "frames": 40,
+      "duration_s": 2.0,
+      "postprocess": false,
+      "note": "the ask's verbatim prompt; displacement should stay near zero",
+      "status": "generated",
+      "model": "ARDY-Core-RP-20FPS-Horizon40",
+      "backend": "mlx",
+      "history_frames": 160,
+      "diffusion_steps": 10,
+      "cfg_weight": [
+        2.0,
+        2.0
+      ],
+      "embedding": {
+        "path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/02116edb58d5f553.npy",
+        "sha256": "d5c0231660376e3127f8b68f97909dfdae68fbcec81c813f8be19abf9c31f620",
+        "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit"
+      },
+      "clip": {
+        "path": "artifacts/action-clips/raw/jump_air/ARDY-Core-RP-20FPS-Horizon40/02116edb58d5f553-0.npz",
+        "sha256": "607d652d65665fb2e4a003678b48111fedf4ca4f0b723307832d6239caf5fb0b",
+        "bytes": 68388
+      },
+      "sidecar": {
+        "path": "artifacts/action-clips/raw/jump_air/ARDY-Core-RP-20FPS-Horizon40/02116edb58d5f553-0.json",
+        "sha256": "13b70f11ac37e93432c3d1b9444cbc647bd5ee8370a6ca3dc0b768931a01108f",
+        "bytes": 1260
+      },
+      "derived_tensors": {
+        "foot_contacts": {
+          "shape": [
+            1,
+            40,
+            4
+          ],
+          "dtype": "bool"
+        },
+        "fps": {
+          "shape": [],
+          "dtype": "int32"
+        },
+        "frames": {
+          "shape": [
+            1,
+            40,
+            330
+          ],
+          "dtype": "float32"
+        },
+        "offsets": {
+          "shape": [
+            2
+          ],
+          "dtype": "int64"
+        },
+        "posed_joints": {
+          "shape": [
+            1,
+            40,
+            27,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "root_positions": {
+          "shape": [
+            1,
+            40,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "text": {
+          "shape": [],
+          "dtype": "<U51"
+        }
+      },
+      "generated_by": {
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/02116edb58d5f553.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person jumps up in the air and lands on the spot. --out artifacts/action-clips/raw/jump_air --no-postprocess",
+        "exit_code": 0,
+        "elapsed_s": 1.591
+      },
+      "postprocess_attempt": {
+        "postprocess": true,
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/02116edb58d5f553.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person jumps up in the air and lands on the spot. --out artifacts/action-clips/raw/jump_air",
+        "exit_code": 2,
+        "elapsed_s": 0.429,
+        "stdout": "",
+        "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
+        "produced": [
+          "02116edb58d5f553-0.json",
+          "02116edb58d5f553-0.npz"
+        ]
+      },
+      "skating": {
+        "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+        "per_channel": {
+          "L-heel": {
+            "planted_transitions": 26,
+            "contact_frames": 28,
+            "mean_mm_per_frame": 0.8625,
+            "max_mm_per_frame": 2.5407,
+            "total_mm": 22.4263
+          },
+          "L-toe": {
+            "planted_transitions": 28,
+            "contact_frames": 30,
+            "mean_mm_per_frame": 0.7654,
+            "max_mm_per_frame": 2.3585,
+            "total_mm": 21.4321
+          },
+          "R-heel": {
+            "planted_transitions": 24,
+            "contact_frames": 26,
+            "mean_mm_per_frame": 0.7112,
+            "max_mm_per_frame": 2.2546,
+            "total_mm": 17.0692
+          },
+          "R-toe": {
+            "planted_transitions": 28,
+            "contact_frames": 30,
+            "mean_mm_per_frame": 0.776,
+            "max_mm_per_frame": 2.6993,
+            "total_mm": 21.7288
+          }
+        },
+        "considered_transitions": 106,
+        "possible_transitions": 156,
+        "posture": {
+          "hip_y_min_m": 0.7857,
+          "hip_y_max_m": 1.2604,
+          "hip_y_mean_m": 0.971,
+          "head_y_mean_m": 1.6843,
+          "hand_y_min_m": 0.7671,
+          "hands_at_or_below_knee_frac": 0.0,
+          "hand_minus_knee_y_mean_m": 0.4868
+        },
+        "mean_mm_per_frame": 0.7798,
+        "max_mm_per_frame": 2.6993,
+        "total_mm": 82.6563,
+        "contact_frames_per_channel": {
+          "L-heel": 28,
+          "L-toe": 30,
+          "R-heel": 26,
+          "R-toe": 30
+        },
+        "frames_with_no_contact": 10,
+        "root_displacement_m": 0.03062,
+        "root_path_m": 0.225703,
+        "jump": {
+          "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+          "hip_joint": "Hips",
+          "fps": 20,
+          "leaves_ground": true,
+          "airborne_frames": 10,
+          "takeoff_frame": 17,
+          "landing_frame": 27,
+          "hip_y_start_m": 0.9658,
+          "hip_y_min_m": 0.7857,
+          "hip_y_peak_m": 1.2604,
+          "apex_above_start_m": 0.2946,
+          "apex_above_crouch_m": 0.4747,
+          "touchdown_mps": 2.088,
+          "descent_peak_mps": 2.088
+        }
+      }
+    },
+    {
+      "name": "jump_forward",
+      "prompt": "A person jumps forward and lands.",
+      "prompt_hash": "2d5d422b272ed8a3",
+      "seed": 0,
+      "fps": 20,
+      "frames": 40,
+      "duration_s": 2.0,
+      "postprocess": false,
+      "note": "the forward variant: horizontal speed must survive the flight phase",
+      "status": "generated",
+      "model": "ARDY-Core-RP-20FPS-Horizon40",
+      "backend": "mlx",
+      "history_frames": 160,
+      "diffusion_steps": 10,
+      "cfg_weight": [
+        2.0,
+        2.0
+      ],
+      "embedding": {
+        "path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/2d5d422b272ed8a3.npy",
+        "sha256": "226b702247b16db88c67fb18e1733eac495dd1015607e6fb89a513f650825a5c",
+        "encoder_id": "mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit"
+      },
+      "clip": {
+        "path": "artifacts/action-clips/raw/jump_forward/ARDY-Core-RP-20FPS-Horizon40/2d5d422b272ed8a3-0.npz",
+        "sha256": "38396cf34867a57d7b6fcc60508fad2165535ae8089894d8afc2eb3fb743a7be",
+        "bytes": 68316
+      },
+      "sidecar": {
+        "path": "artifacts/action-clips/raw/jump_forward/ARDY-Core-RP-20FPS-Horizon40/2d5d422b272ed8a3-0.json",
+        "sha256": "f55bc56e6d9e204e955cf0eb26dd51f2d451a8d4c0b602b5bb315e0ebba2488c",
+        "bytes": 1256
+      },
+      "derived_tensors": {
+        "foot_contacts": {
+          "shape": [
+            1,
+            40,
+            4
+          ],
+          "dtype": "bool"
+        },
+        "fps": {
+          "shape": [],
+          "dtype": "int32"
+        },
+        "frames": {
+          "shape": [
+            1,
+            40,
+            330
+          ],
+          "dtype": "float32"
+        },
+        "offsets": {
+          "shape": [
+            2
+          ],
+          "dtype": "int64"
+        },
+        "posed_joints": {
+          "shape": [
+            1,
+            40,
+            27,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "root_positions": {
+          "shape": [
+            1,
+            40,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "text": {
+          "shape": [],
+          "dtype": "<U33"
+        }
+      },
+      "generated_by": {
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/2d5d422b272ed8a3.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person jumps forward and lands. --out artifacts/action-clips/raw/jump_forward --no-postprocess",
+        "exit_code": 0,
+        "elapsed_s": 19.459
+      },
+      "postprocess_attempt": {
+        "postprocess": true,
+        "command": "./.venv/bin/python scripts/ardy_generate.py --backend mlx --embedding artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/2d5d422b272ed8a3.npy --model ARDY-Core-RP-20FPS-Horizon40 --duration 2.0 --seed 0 --history-frames 160 --diffusion-steps 10 --cfg-weight 2.0 2.0 --prompt A person jumps forward and lands. --out artifacts/action-clips/raw/jump_forward",
+        "exit_code": 2,
+        "elapsed_s": 0.523,
+        "stdout": "",
+        "stderr": "error: Core models run MotionCorrection by default, but the C++ extension is not built here and contract S6.4 / decision 0002 ruling 2 pin v1 at 'both sides skip it'.\n       re-run with --no-postprocess (the sidecar will record postprocess: false).\n",
+        "produced": [
+          "2d5d422b272ed8a3-0.json",
+          "2d5d422b272ed8a3-0.npz"
+        ]
+      },
+      "skating": {
+        "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+        "per_channel": {
+          "L-heel": {
+            "planted_transitions": 23,
+            "contact_frames": 25,
+            "mean_mm_per_frame": 1.4327,
+            "max_mm_per_frame": 3.4725,
+            "total_mm": 32.9521
+          },
+          "L-toe": {
+            "planted_transitions": 29,
+            "contact_frames": 31,
+            "mean_mm_per_frame": 1.2174,
+            "max_mm_per_frame": 3.2136,
+            "total_mm": 35.306
+          },
+          "R-heel": {
+            "planted_transitions": 22,
+            "contact_frames": 25,
+            "mean_mm_per_frame": 1.2688,
+            "max_mm_per_frame": 3.752,
+            "total_mm": 27.9128
+          },
+          "R-toe": {
+            "planted_transitions": 25,
+            "contact_frames": 27,
+            "mean_mm_per_frame": 1.367,
+            "max_mm_per_frame": 3.8114,
+            "total_mm": 34.1753
+          }
+        },
+        "considered_transitions": 99,
+        "possible_transitions": 156,
+        "posture": {
+          "hip_y_min_m": 0.7913,
+          "hip_y_max_m": 0.9789,
+          "hip_y_mean_m": 0.9129,
+          "head_y_mean_m": 1.6044,
+          "hand_y_min_m": 0.7912,
+          "hands_at_or_below_knee_frac": 0.0,
+          "hand_minus_knee_y_mean_m": 0.4996
+        },
+        "mean_mm_per_frame": 1.3166,
+        "max_mm_per_frame": 3.8114,
+        "total_mm": 130.3462,
+        "contact_frames_per_channel": {
+          "L-heel": 25,
+          "L-toe": 31,
+          "R-heel": 25,
+          "R-toe": 27
+        },
+        "frames_with_no_contact": 5,
+        "root_displacement_m": 1.442284,
+        "root_path_m": 1.495403,
+        "jump": {
+          "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+          "hip_joint": "Hips",
+          "fps": 20,
+          "leaves_ground": true,
+          "airborne_frames": 5,
+          "takeoff_frame": 18,
+          "landing_frame": 23,
+          "hip_y_start_m": 0.9628,
+          "hip_y_min_m": 0.7913,
+          "hip_y_peak_m": 0.9789,
+          "apex_above_start_m": 0.0161,
+          "apex_above_crouch_m": 0.1876,
+          "touchdown_mps": 1.0591,
+          "descent_peak_mps": 1.0591
+        }
       }
     }
   ],

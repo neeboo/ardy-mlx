@@ -32,12 +32,19 @@ artifacts/embeddings/*
 # ---------------------------------------------------------------------------
 # Action clips: the motion itself is weight-derived, so it is never committed.
 #
-# `*.npz` above already covers the clip files; these two lines name the
-# directory explicitly so the intent survives a future edit to that blanket
+# `*.npz` above already covers the clip files; these lines name the
+# directories explicitly so the intent survives a future edit to that blanket
 # rule, and so `git status` stays clean while `scripts/ardy_actions.py` runs.
 # Committed from this directory: manifest.json, foot-skating.json, preview.gif,
-# preview.json, text-vectors.json, prompts.txt, README.md.
+# preview.json, preview_jump.gif, preview_jump.json, text-vectors.json,
+# prompts.txt, README.md.
 # ---------------------------------------------------------------------------
 artifacts/action-clips/raw/
 artifacts/action-clips/_gif-frames/
+# Per-run stdout/stderr capture (the raw evidence behind the README's numbers).
+# Kept on disk for inspection; deliberately not committed.
+artifacts/action-clips/logs/
 
+
+# 编码向量：按 encoder_id 归到被忽略的规范目录，本地中间产物不入库
+artifacts/action-clips/embeddings/

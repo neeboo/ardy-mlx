@@ -7,6 +7,7 @@
   "frames": 40,
   "fps": 10,
   "layout": "3x2",
+  "label": "the 3x2 action grid",
   "cells": [
     {
       "name": "stand_idle",
@@ -46,7 +47,7 @@
     }
   ],
   "renderer": "scripts/ardy_preview.py #3a889e3",
-  "composer": "scripts/ardy_actions.py #31e92da",
+  "composer": "scripts/ardy_actions.py #7380a20",
   "ffprobe": {
     "width": 900,
     "height": 640,

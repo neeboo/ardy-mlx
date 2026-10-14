@@ -5,3 +5,5 @@ A person crawls forward on hands and knees.
 A person jumps up in place and lands.
 A person walks forward.
 站立不动
+A person jumps up in the air and lands on the spot.
+A person jumps forward and lands.

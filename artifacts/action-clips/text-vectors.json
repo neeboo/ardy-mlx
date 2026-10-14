@@ -11,7 +11,7 @@
       "prompt_hash": "03b9d219e4c7b1df",
       "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/03b9d219e4c7b1df.npy",
       "vector_sha256": "da7eedb3893106f1d6158d022f96507ccb348bb86ceb6bb0abe522ea12069111",
-      "sidecar_sha256": "57789a8556d07e787c515c6dc1b4c8de071b6271c030bc6d233082efc9ad272e"
+      "sidecar_sha256": "4ba1f715479a4990cd4fc626e993352dbfaca57fb61ca2e851638c91b1e34d89"
     },
     {
       "name": "crouch_idle",
@@ -19,7 +19,7 @@
       "prompt_hash": "fb0572825914374f",
       "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/fb0572825914374f.npy",
       "vector_sha256": "c9e28a4ddc6962b0a29fc969fcdd0bb56b0dc35f9ee4ffa7c0d779a6ffb099ef",
-      "sidecar_sha256": "073f4cecfe24f70713ec8a2f5880e8d56fd0811e5755ba53c0858cf3765117bf"
+      "sidecar_sha256": "c8b5d70ee01270d0e6bfea291449b47acb2879381105138f37bdb02e4e032ce8"
     },
     {
       "name": "crouch_forward",
@@ -27,7 +27,7 @@
       "prompt_hash": "c8a0180793a995c0",
       "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/c8a0180793a995c0.npy",
       "vector_sha256": "bdb7857224bdcfc6b4af8022e51b7ffc09b94d710ded113b61e23fb2b6379e01",
-      "sidecar_sha256": "63aa23e0193532a4cbe8e741b2b7d42d8eeae9635285f9c0f53bfecce47fae71"
+      "sidecar_sha256": "fb33acd3ce5ae722859597c1f898840958ec91697181da8d9b947afa9286343f"
     },
     {
       "name": "crawl_forward",
@@ -35,7 +35,7 @@
       "prompt_hash": "e7a1d8e6bc02d0e7",
       "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e7a1d8e6bc02d0e7.npy",
       "vector_sha256": "650cc2097772d0e7897674f6f31fa980543fa6e74c03ef135721361ead119319",
-      "sidecar_sha256": "9fffe6157aa623ddd47994f8fc81d0abfb026fa29f5eaf20976c4c4ade7460f8"
+      "sidecar_sha256": "b720e09eba0f7c6d5bba2a583d319b32945d47eabeb30c75b44368e496b9652e"
     },
     {
       "name": "jump",
@@ -43,7 +43,7 @@
       "prompt_hash": "b0215aea5678220f",
       "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/b0215aea5678220f.npy",
       "vector_sha256": "f42e39d2ed86f1bfe49eb0c919752a42b8eb0c4f6f99bcfcf8723be94f5f9ead",
-      "sidecar_sha256": "883973aacf35a015a245e73ca51f1f70b141cce31845fd58516625aeaad32c4f"
+      "sidecar_sha256": "f816e607f0d8e484f1dacbd0b8bde9d03dd1ddcaeb9ca136fdac7ad8b20db801"
     },
     {
       "name": "walk",
@@ -51,7 +51,7 @@
       "prompt_hash": "e9cf8141cac79f35",
       "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/e9cf8141cac79f35.npy",
       "vector_sha256": "655853990a9776ea2a57788eca260c7241c0031293efba6b986f4b05607b3489",
-      "sidecar_sha256": "94024ca6087c078c18a08cf392ddd8647354d47ba6d66fb5c41ae9df8321e230"
+      "sidecar_sha256": "2ccb1a11a02b80971d24da689bf6ce1f7d6913292ffb64d9155e73faa6ee2c1a"
     },
     {
       "name": "stand_idle_zh",
@@ -59,7 +59,23 @@
       "prompt_hash": "954d69ee631c7099",
       "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/954d69ee631c7099.npy",
       "vector_sha256": "edd0a2d33cb6ee28f31d4b74da67658d983e363e7064f7960d77a92a535cb226",
-      "sidecar_sha256": "2a99ce6389eff869e8ce367d7bd599fc60135b2c8fa3bfd78e9d30fbe59f7d81"
+      "sidecar_sha256": "6f6bd5d5672f66af59e94316191eb78cd5933b2b61296d2f360ae62920804499"
+    },
+    {
+      "name": "jump_air",
+      "prompt": "A person jumps up in the air and lands on the spot.",
+      "prompt_hash": "02116edb58d5f553",
+      "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/02116edb58d5f553.npy",
+      "vector_sha256": "d5c0231660376e3127f8b68f97909dfdae68fbcec81c813f8be19abf9c31f620",
+      "sidecar_sha256": "81dea1fc2958b2bee94d492797fbd91fff01f8c7970ace2cd3c50e7b049593b7"
+    },
+    {
+      "name": "jump_forward",
+      "prompt": "A person jumps forward and lands.",
+      "prompt_hash": "2d5d422b272ed8a3",
+      "vector_path": "artifacts/embeddings/mlx-llm2vec-4-bit-group-32-last-2-layers-embed-tokens-at-8-bit/2d5d422b272ed8a3.npy",
+      "vector_sha256": "226b702247b16db88c67fb18e1733eac495dd1015607e6fb89a513f650825a5c",
+      "sidecar_sha256": "fc73335934a12506a2a2fe6f061fd6f05572f630cb0fe51047e3c17db5345e3f"
     }
   ]
 }

@@ -1,0 +1,41 @@
+{
+  "path": "artifacts/action-clips/preview_jump.gif",
+  "bytes": 507006,
+  "sha256": "11f4bc6d36e6ac68a8d529415c2022e53850f894e69d805c0633986e32bd8298",
+  "width": 900,
+  "height": 320,
+  "frames": 40,
+  "fps": 10,
+  "layout": "3x1",
+  "label": "the jump grid",
+  "cells": [
+    {
+      "name": "jump",
+      "prompt": "A person jumps up in place and lands.",
+      "status": "generated",
+      "prompt_hash": "b0215aea5678220f"
+    },
+    {
+      "name": "jump_air",
+      "prompt": "A person jumps up in the air and lands on the spot.",
+      "status": "generated",
+      "prompt_hash": "02116edb58d5f553"
+    },
+    {
+      "name": "jump_forward",
+      "prompt": "A person jumps forward and lands.",
+      "status": "generated",
+      "prompt_hash": "2d5d422b272ed8a3"
+    }
+  ],
+  "renderer": "scripts/ardy_preview.py #3a889e3",
+  "composer": "scripts/ardy_actions.py #7380a20",
+  "ffprobe": {
+    "width": 900,
+    "height": 320,
+    "frames": 40,
+    "fps": 10.0,
+    "duration_s": 4.0,
+    "bytes": 507006
+  }
+}

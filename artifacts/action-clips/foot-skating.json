@@ -53,7 +53,23 @@
     },
     "frames_with_no_contact": 0,
     "root_displacement_m": 0.008323,
-    "root_path_m": 0.012056
+    "root_path_m": 0.012056,
+    "jump": {
+      "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+      "hip_joint": "Hips",
+      "fps": 20,
+      "leaves_ground": false,
+      "airborne_frames": 0,
+      "takeoff_frame": null,
+      "landing_frame": null,
+      "hip_y_start_m": 0.9729,
+      "hip_y_min_m": 0.9723,
+      "hip_y_peak_m": 0.9729,
+      "apex_above_start_m": 0.0,
+      "apex_above_crouch_m": 0.0006,
+      "touchdown_mps": 0.0,
+      "descent_peak_mps": 0.0
+    }
   },
   "crouch_idle": {
     "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
@@ -109,7 +125,23 @@
     },
     "frames_with_no_contact": 0,
     "root_displacement_m": 0.014343,
-    "root_path_m": 0.030538
+    "root_path_m": 0.030538,
+    "jump": {
+      "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+      "hip_joint": "Hips",
+      "fps": 20,
+      "leaves_ground": false,
+      "airborne_frames": 0,
+      "takeoff_frame": null,
+      "landing_frame": null,
+      "hip_y_start_m": 0.5989,
+      "hip_y_min_m": 0.5895,
+      "hip_y_peak_m": 0.5993,
+      "apex_above_start_m": 0.0004,
+      "apex_above_crouch_m": 0.0098,
+      "touchdown_mps": 0.0,
+      "descent_peak_mps": 0.0
+    }
   },
   "crouch_forward": {
     "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
@@ -165,7 +197,23 @@
     },
     "frames_with_no_contact": 0,
     "root_displacement_m": 2.148294,
-    "root_path_m": 2.287923
+    "root_path_m": 2.287923,
+    "jump": {
+      "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+      "hip_joint": "Hips",
+      "fps": 20,
+      "leaves_ground": false,
+      "airborne_frames": 0,
+      "takeoff_frame": null,
+      "landing_frame": null,
+      "hip_y_start_m": 0.5097,
+      "hip_y_min_m": 0.4881,
+      "hip_y_peak_m": 0.6093,
+      "apex_above_start_m": 0.0996,
+      "apex_above_crouch_m": 0.1211,
+      "touchdown_mps": 0.0,
+      "descent_peak_mps": 0.0
+    }
   },
   "crawl_forward": {
     "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
@@ -221,7 +269,23 @@
     },
     "frames_with_no_contact": 0,
     "root_displacement_m": 1.257442,
-    "root_path_m": 1.301818
+    "root_path_m": 1.301818,
+    "jump": {
+      "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+      "hip_joint": "Hips",
+      "fps": 20,
+      "leaves_ground": false,
+      "airborne_frames": 0,
+      "takeoff_frame": null,
+      "landing_frame": null,
+      "hip_y_start_m": 0.4382,
+      "hip_y_min_m": 0.4196,
+      "hip_y_peak_m": 0.4539,
+      "apex_above_start_m": 0.0156,
+      "apex_above_crouch_m": 0.0342,
+      "touchdown_mps": 0.0,
+      "descent_peak_mps": 0.0
+    }
   },
   "jump": {
     "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
@@ -277,7 +341,23 @@
     },
     "frames_with_no_contact": 9,
     "root_displacement_m": 0.032261,
-    "root_path_m": 0.205656
+    "root_path_m": 0.205656,
+    "jump": {
+      "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+      "hip_joint": "Hips",
+      "fps": 20,
+      "leaves_ground": true,
+      "airborne_frames": 9,
+      "takeoff_frame": 17,
+      "landing_frame": 26,
+      "hip_y_start_m": 0.9625,
+      "hip_y_min_m": 0.7896,
+      "hip_y_peak_m": 1.2447,
+      "apex_above_start_m": 0.2821,
+      "apex_above_crouch_m": 0.4551,
+      "touchdown_mps": 1.9218,
+      "descent_peak_mps": 1.9884
+    }
   },
   "walk": {
     "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
@@ -333,7 +413,23 @@
     },
     "frames_with_no_contact": 8,
     "root_displacement_m": 4.353967,
-    "root_path_m": 4.407139
+    "root_path_m": 4.407139,
+    "jump": {
+      "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+      "hip_joint": "Hips",
+      "fps": 20,
+      "leaves_ground": true,
+      "airborne_frames": 8,
+      "takeoff_frame": 39,
+      "landing_frame": 77,
+      "hip_y_start_m": 0.9594,
+      "hip_y_min_m": 0.8461,
+      "hip_y_peak_m": 0.9657,
+      "apex_above_start_m": 0.0063,
+      "apex_above_crouch_m": 0.1196,
+      "touchdown_mps": 0.0,
+      "descent_peak_mps": 0.5271
+    }
   },
   "stand_idle_zh": {
     "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
@@ -389,6 +485,166 @@
     },
     "frames_with_no_contact": 0,
     "root_displacement_m": 0.009959,
-    "root_path_m": 0.013176
+    "root_path_m": 0.013176,
+    "jump": {
+      "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+      "hip_joint": "Hips",
+      "fps": 20,
+      "leaves_ground": false,
+      "airborne_frames": 0,
+      "takeoff_frame": null,
+      "landing_frame": null,
+      "hip_y_start_m": 0.9703,
+      "hip_y_min_m": 0.9699,
+      "hip_y_peak_m": 0.9703,
+      "apex_above_start_m": 0.0,
+      "apex_above_crouch_m": 0.0004,
+      "touchdown_mps": 0.0,
+      "descent_peak_mps": 0.0
+    }
+  },
+  "jump_air": {
+    "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+    "per_channel": {
+      "L-heel": {
+        "planted_transitions": 26,
+        "contact_frames": 28,
+        "mean_mm_per_frame": 0.8625,
+        "max_mm_per_frame": 2.5407,
+        "total_mm": 22.4263
+      },
+      "L-toe": {
+        "planted_transitions": 28,
+        "contact_frames": 30,
+        "mean_mm_per_frame": 0.7654,
+        "max_mm_per_frame": 2.3585,
+        "total_mm": 21.4321
+      },
+      "R-heel": {
+        "planted_transitions": 24,
+        "contact_frames": 26,
+        "mean_mm_per_frame": 0.7112,
+        "max_mm_per_frame": 2.2546,
+        "total_mm": 17.0692
+      },
+      "R-toe": {
+        "planted_transitions": 28,
+        "contact_frames": 30,
+        "mean_mm_per_frame": 0.776,
+        "max_mm_per_frame": 2.6993,
+        "total_mm": 21.7288
+      }
+    },
+    "considered_transitions": 106,
+    "possible_transitions": 156,
+    "posture": {
+      "hip_y_min_m": 0.7857,
+      "hip_y_max_m": 1.2604,
+      "hip_y_mean_m": 0.971,
+      "head_y_mean_m": 1.6843,
+      "hand_y_min_m": 0.7671,
+      "hands_at_or_below_knee_frac": 0.0,
+      "hand_minus_knee_y_mean_m": 0.4868
+    },
+    "mean_mm_per_frame": 0.7798,
+    "max_mm_per_frame": 2.6993,
+    "total_mm": 82.6563,
+    "contact_frames_per_channel": {
+      "L-heel": 28,
+      "L-toe": 30,
+      "R-heel": 26,
+      "R-toe": 30
+    },
+    "frames_with_no_contact": 10,
+    "root_displacement_m": 0.03062,
+    "root_path_m": 0.225703,
+    "jump": {
+      "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+      "hip_joint": "Hips",
+      "fps": 20,
+      "leaves_ground": true,
+      "airborne_frames": 10,
+      "takeoff_frame": 17,
+      "landing_frame": 27,
+      "hip_y_start_m": 0.9658,
+      "hip_y_min_m": 0.7857,
+      "hip_y_peak_m": 1.2604,
+      "apex_above_start_m": 0.2946,
+      "apex_above_crouch_m": 0.4747,
+      "touchdown_mps": 2.088,
+      "descent_peak_mps": 2.088
+    }
+  },
+  "jump_forward": {
+    "definition": "horizontal travel of a foot joint between two consecutive frames in which its own foot_contacts channel is true at both; y excluded",
+    "per_channel": {
+      "L-heel": {
+        "planted_transitions": 23,
+        "contact_frames": 25,
+        "mean_mm_per_frame": 1.4327,
+        "max_mm_per_frame": 3.4725,
+        "total_mm": 32.9521
+      },
+      "L-toe": {
+        "planted_transitions": 29,
+        "contact_frames": 31,
+        "mean_mm_per_frame": 1.2174,
+        "max_mm_per_frame": 3.2136,
+        "total_mm": 35.306
+      },
+      "R-heel": {
+        "planted_transitions": 22,
+        "contact_frames": 25,
+        "mean_mm_per_frame": 1.2688,
+        "max_mm_per_frame": 3.752,
+        "total_mm": 27.9128
+      },
+      "R-toe": {
+        "planted_transitions": 25,
+        "contact_frames": 27,
+        "mean_mm_per_frame": 1.367,
+        "max_mm_per_frame": 3.8114,
+        "total_mm": 34.1753
+      }
+    },
+    "considered_transitions": 99,
+    "possible_transitions": 156,
+    "posture": {
+      "hip_y_min_m": 0.7913,
+      "hip_y_max_m": 0.9789,
+      "hip_y_mean_m": 0.9129,
+      "head_y_mean_m": 1.6044,
+      "hand_y_min_m": 0.7912,
+      "hands_at_or_below_knee_frac": 0.0,
+      "hand_minus_knee_y_mean_m": 0.4996
+    },
+    "mean_mm_per_frame": 1.3166,
+    "max_mm_per_frame": 3.8114,
+    "total_mm": 130.3462,
+    "contact_frames_per_channel": {
+      "L-heel": 25,
+      "L-toe": 31,
+      "R-heel": 25,
+      "R-toe": 27
+    },
+    "frames_with_no_contact": 5,
+    "root_displacement_m": 1.442284,
+    "root_path_m": 1.495403,
+    "jump": {
+      "definition": "hip (pelvis) world height; 'airborne' = all four foot_contacts false; touchdown speed = -d(hip_y)/dt on the last airborne frame",
+      "hip_joint": "Hips",
+      "fps": 20,
+      "leaves_ground": true,
+      "airborne_frames": 5,
+      "takeoff_frame": 18,
+      "landing_frame": 23,
+      "hip_y_start_m": 0.9628,
+      "hip_y_min_m": 0.7913,
+      "hip_y_peak_m": 0.9789,
+      "apex_above_start_m": 0.0161,
+      "apex_above_crouch_m": 0.1876,
+      "touchdown_mps": 1.0591,
+      "descent_peak_mps": 1.0591
+    }
   }
 }
